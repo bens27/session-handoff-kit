@@ -85,6 +85,54 @@ def main():
     check("body-not-front-matter", "tricky-topic" in topics,
           "unfenced body absorbed into front matter suppressed an open handoff; listed=%r" % topics)
 
+    # 4. Dated handoffs sort newest-first, surface descriptions, derive missing
+    #    topic from filename, and supersede is idempotent.
+    tmp3 = tempfile.mkdtemp(prefix="ledger-verify3-")
+    hd3 = os.path.join(tmp3, ".handoffs")
+    os.makedirs(hd3)
+    alpha = os.path.join(hd3, "20260810-0900-alpha.md")
+    beta = os.path.join(hd3, "20260811-1500-beta.md")
+    with open(alpha, "w") as f:
+        f.write("---\nstatus: open\ndescription: older alpha work\n---\n# Session Handoff — alpha\n")
+    with open(beta, "w") as f:
+        f.write("---\ntopic: beta\nstatus: open\ndescription: newer beta work\n---\n# Session Handoff — beta\n")
+    p = run(["list", tmp3, "--json"], tmp3)
+    try:
+        handoffs = json.loads(p.stdout or "[]")
+    except Exception:
+        handoffs = []
+    check("dated-order-newest-first",
+          [h.get("topic") for h in handoffs] == ["beta", "alpha"],
+          "stdout=%r" % p.stdout[:500])
+    by_topic = dict((h.get("topic"), h) for h in handoffs)
+    check("dated-alpha-topic-derived", by_topic.get("alpha", {}).get("topic") == "alpha",
+          "handoffs=%r" % handoffs)
+    check("dated-ended-from-filename",
+          by_topic.get("alpha", {}).get("ended") == "2026-08-10T09:00"
+          and by_topic.get("beta", {}).get("ended") == "2026-08-11T15:00",
+          "handoffs=%r" % handoffs)
+    check("dated-descriptions-surfaced",
+          by_topic.get("alpha", {}).get("description") == "older alpha work"
+          and by_topic.get("beta", {}).get("description") == "newer beta work",
+          "handoffs=%r" % handoffs)
+
+    p = run(["supersede", alpha], tmp3)
+    check("supersede-exit0", p.returncode == 0,
+          "rc=%d stderr=%r" % (p.returncode, p.stderr[:200]))
+    alpha_text = open(alpha).read()
+    check("supersede-stamps", "status: superseded" in alpha_text and "superseded:" in alpha_text,
+          "content=%r" % alpha_text[:300])
+    p = run(["list", tmp3, "--json"], tmp3)
+    remaining = [h.get("topic") for h in json.loads(p.stdout or "[]")]
+    check("superseded-not-listed", "alpha" not in remaining and "beta" in remaining,
+          "listed=%r" % remaining)
+    run(["supersede", alpha], tmp3)
+    alpha_text2 = open(alpha).read()
+    status_lines = [l for l in alpha_text2.splitlines()
+                    if l.strip().lower().startswith("status:")]
+    check("supersede-idempotent", len(status_lines) == 1,
+          "content=%r" % alpha_text2[:300])
+
     print()
     if failures:
         print("FAILED: %d assertion(s): %s" % (len(failures), ", ".join(failures)))

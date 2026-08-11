@@ -18,14 +18,38 @@ metadata:
 
 Preserve working state across a context boundary. Produce a handoff document a
 fresh session can resume from with zero shared context, then stop. Handoffs
-carry an `open`/`resumed` status so session starts can announce untransferred
-work automatically and stay silent about work already picked up.
+carry an `open`/`resumed`/`superseded` status so session starts can announce
+untransferred work automatically and stay silent about work already picked up.
 
-## When the trigger fires mid-task
+## How this file is organized
+
+Each numbered section below is a self-contained policy, deliberately bounded
+so it can be customized on its own without touching the others:
+
+- **§1 Wind-down protocol** — what to do the moment the trigger fires.
+- **§2 Naming and location** — where handoff files live and how they are
+  named. Swap in your own naming convention here.
+- **§3 Document structure** — the handoff template. Replace the body outline
+  with your own preferred structure here.
+- **§4 Resuming** — how announced handoffs are retrieved and adopted.
+- **§5 After resuming** — the extension point for actions that should always
+  run right after retrieval (loading another skill, running a status
+  command, opening a tracker). Empty by default; add yours here.
+- **§6 Mechanics** — how the hooks and ledger work. Reference, not policy.
+
+**Invariants the hooks depend on — keep these through any customization:**
+handoff files end in `.md` and live under `./.handoffs/`; front matter is
+fenced by `---` lines; new handoffs carry `status: open` plus a one-line
+`description:`; state changes go through the ledger commands
+(`handoff_ledger.py resume|supersede <path>`), never by hand-editing status
+on a whim. Everything else — section names, body structure, naming pattern,
+post-resume actions — is yours to change.
+
+## §1 Wind-down protocol (when the trigger fires mid-task)
 
 1. Do not start new work. Complete only the single atomic action already in
    flight (finish the current file edit or the command that is running).
-2. Write the handoff document as specified below.
+2. Write the handoff document per §2 and §3.
 3. Tell the user the handoff is complete and give the exact resume path. If
    the trigger notice said autoresume is active, the resume path is one
    keystroke: tell the user to type `/clear` — the cleared session will
@@ -34,7 +58,7 @@ work automatically and stay silent about work already picked up.
    automatically (or `claude "resume"` / `codex "resume"`).
 4. Stop. Do not begin any of the "Next steps" in this session.
 
-## Writing the handoff
+## §2 Naming and location
 
 Write to `./.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`, where the timestamp
 is the handoff's ending date/time (now) and the slug is a short kebab-case
@@ -44,6 +68,14 @@ same thread again, write a new dated file and mark the previous one
 replaced: `python3 <hooks-dir>/handoff_ledger.py supersede <old-path>`.
 Legacy undated files and the single-file `./HANDOFF.md` (topic "default")
 remain supported.
+
+Customizing: any `.md` filename under `./.handoffs/` is scanned, so a
+project may impose its own convention (ticket ids, sprint prefixes). Keep
+the ending date/time recoverable — either in the filename prefix or a
+`created:` front-matter line — so announcements can order handoffs newest
+first.
+
+## §3 Document structure
 
 Start the file with this front matter — `status: open` is what marks it
 untransferred for the session-start announcer, and `description` is the
@@ -93,14 +125,20 @@ Rules:
   mistake-learning skill), append this session's new lessons there and
   reference it from Gotchas instead of duplicating its content.
 
-## Resuming
+Customizing: the body outline above is a default, not a contract — projects
+may substitute their own section set (e.g. add "Open questions", drop
+"Decisions"). Only the front-matter block is load-bearing; everything below
+the second `---` is free-form.
 
-At session start, a `[context-watch]` notice lists any open handoffs.
+## §4 Resuming
 
-- **One open handoff**: read the file in full before any other action, restate
-  the objective and the first next step in one or two sentences, confirm with
-  the user unless configuration or the user has said to proceed, then continue
-  from "Next steps".
+At session start, a `[context-watch]` notice lists any open handoffs, each
+with its description.
+
+- **One open handoff**: read the file in full before any other action,
+  restate the objective and the first next step in one or two sentences,
+  confirm with the user unless configuration or the user has said to
+  proceed, then continue from "Next steps".
 - **Multiple open handoffs**: before any other work, present the list and ask
   which one to resume — use an interactive question tool if available —
   including a "none of these" option. Then resume the chosen one as above.
@@ -112,14 +150,32 @@ Once a handoff is actually resumed, mark it transferred by running the exact
 `resume` command included in the notice (it invokes `handoff_ledger.py resume
 <path>`). This flips `status: open` to `status: resumed` so future sessions
 stop announcing it. Do not mark a handoff resumed merely because it was
-announced or listed. Read `LESSONS.md` as well if the handoff references it.
+announced or listed. Then perform the §5 post-resume actions.
 
-## Notes
+## §5 After resuming (extension point)
+
+Actions to run immediately after a handoff is retrieved and marked resumed,
+before continuing the work. Defaults:
+
+- Read `LESSONS.md` if the handoff references it.
+
+Projects and users add their own always-run actions here — the pattern is
+one imperative bullet each, for example:
+
+- Load the `<skill-name>` skill before touching the code.
+- Run `<status command>` and reconcile its output against "Current state".
+- Re-open the tracking issue named in the handoff.
+
+If this section lists no custom actions, continue straight into the
+handoff's "Next steps".
+
+## §6 Mechanics (reference)
 
 - The deterministic trigger is a lifecycle hook (`hooks/context_watch.py`)
   that reads the session's own transcript token usage and fires once per
   session; a `SessionStart` hook runs the announcer. `hooks/handoff_ledger.py`
-  tracks open vs resumed and can be run directly: `list` and `resume <path>`.
+  tracks open vs resumed vs superseded and can be run directly: `list`,
+  `resume <path>`, and `supersede <path>`.
 - Thresholds are absolute tokens per model (quality degrades at an absolute
   occupancy, not a percentage of the window): HANDOFF_AT (per-launch, highest
   precedence), then CONTEXT_WATCH_TOKENS_MAP, then ./.context-watch.json,

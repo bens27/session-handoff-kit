@@ -247,6 +247,10 @@ Body sections, in order: Objective; Current state; Decisions and rationale;
 Files touched; In flight; Next steps (ordered, concrete, with paths and
 commands); Gotchas (including approaches tried and abandoned). Target under
 1,500 words, facts a fresh session can verify, no conversational narration.
+The body outline is a default, not a contract: the skill is organized into
+independently customizable sections (naming convention, document structure,
+post-resume actions), and only the front-matter block is load-bearing for
+the hooks.
 If a `LESSONS.md` exists (e.g. maintained by a mistake-learning skill), new
 lessons append there and Gotchas references it rather than duplicating.
 

@@ -22,13 +22,14 @@ Occupancy measure (what the window holds heading into the NEXT call):
   entry, estimated at ~4 chars/token. Biases the trigger early, never late.
 
 Threshold resolution (first match wins; model id matched by longest substring):
-  1. CONTEXT_WATCH_TOKENS_MAP   e.g. "opus=120000,sonnet=140000,gpt-5.5=180000"
-  2. ./.context-watch.json      per-model keys (project-local)
-  3. ~/.context-watch/thresholds.json   per-model keys (user-global)
-  4. CONTEXT_WATCH_TOKENS       global absolute
-  5. "default" key in the config files
-  6. CONTEXT_WATCH_PERCENT x window     only if PERCENT is explicitly set
-  7. built-in default: 130,000 tokens
+  1. HANDOFF_AT                 global absolute, highest-precedence override
+  2. CONTEXT_WATCH_TOKENS_MAP   e.g. "opus=120000,sonnet=140000,gpt-5.5=180000"
+  3. ./.context-watch.json      per-model keys (project-local)
+  4. ~/.context-watch/thresholds.json   per-model keys (user-global)
+  5. CONTEXT_WATCH_TOKENS       global absolute
+  6. "default" key in the config files
+  7. CONTEXT_WATCH_PERCENT x window     only if PERCENT is explicitly set
+  8. built-in default: 130,000 tokens
 
 Config file format (flat; keys are case-insensitive substrings of model ids):
   {"claude-opus": 120000, "claude-sonnet": 140000, "gpt-5.5": 180000,
@@ -45,7 +46,9 @@ Other environment variables:
   CONTEXT_WATCH_LOG           analytics path (default ~/.context-watch/events.jsonl;
                               0 to disable)
   CONTEXT_WATCH_MAX_AGE_DAYS  announcer: ignore open handoffs older than this (14)
-  CONTEXT_WATCH_AUTORESUME    announcer: 1 resumes a single open handoff without asking
+  AUTORESUME                  announcer + trigger note: true resumes a single open
+                              handoff without asking after /clear
+  CONTEXT_WATCH_AUTORESUME    legacy alias for AUTORESUME
 
 CLI: `context_watch.py stats` summarizes the analytics log.
 
@@ -65,6 +68,11 @@ DEFAULT_TOKENS = 130_000  # built-in fallback; quality degradation commonly ~120
 
 def env(name, default=""):
     return os.environ.get(name, default)
+
+
+def autoresume_on():
+    return (env("AUTORESUME") or env("CONTEXT_WATCH_AUTORESUME")).strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 # ---------------------------------------------------------------- transcript
@@ -231,6 +239,10 @@ def _best_model_match(table, model):
 
 def resolve_threshold(model, window, cwd):
     """Return (limit, source_description). First match wins."""
+    handoff_at = env("HANDOFF_AT").strip()
+    if handoff_at.isdigit():
+        return int(handoff_at), "HANDOFF_AT"
+
     env_map = _parse_map(env("CONTEXT_WATCH_TOKENS_MAP"))
     key = _best_model_match(env_map, model)
     if key:
@@ -328,7 +340,8 @@ def handle_session_start(evt, agent):
         path = os.path.join(cwd, "HANDOFF.md")
         try:
             if os.path.isfile(path) and (time.time() - os.path.getmtime(path)) <= max_age * 86400:
-                open_handoffs = [{"path": path, "topic": "default", "age_days": 0.0}]
+                open_handoffs = [{"path": path, "topic": "default", "age_days": 0.0,
+                                  "description": ""}]
         except Exception:
             pass
 
@@ -342,16 +355,21 @@ def handle_session_start(evt, agent):
 
     if len(open_handoffs) == 1:
         h = open_handoffs[0]
-        if env("CONTEXT_WATCH_AUTORESUME") == "1":
+        desc = h.get("description") or ""
+        suffix = " — %s" % desc if desc else ""
+        if autoresume_on():
             action = "Read it in full and resume it immediately without asking. "
         else:
             action = ("Read it in full before doing anything else, then continue the "
                       "work it describes. ")
-        note = ("[context-watch] One open handoff awaiting resume: '%s' (%.0fd old) at %s. "
-                % (h["topic"], h["age_days"], h["path"]) + action + mark + " " + defer)
+        note = ("[context-watch] One open handoff awaiting resume: '%s' (%.0fd old) at %s%s. "
+                % (h["topic"], h["age_days"], h["path"], suffix)
+                + action + mark + " " + defer)
     else:
         listing = "; ".join(
-            "%d) %s (%.0fd old, %s)" % (i + 1, h["topic"], h["age_days"], h["path"])
+            "%d) %s (%.0fd old, %s)%s" % (
+                i + 1, h["topic"], h["age_days"], h["path"],
+                " — %s" % h.get("description") if h.get("description") else "")
             for i, h in enumerate(open_handoffs)
         )
         note = ("[context-watch] %d open handoffs awaiting resume: %s. Before any other "
@@ -379,7 +397,7 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill):
     detail = "cache-read %s of it (%.0f%%)" % (format(cache_read, ","), cache_share)
     if pending:
         detail += "; incl. ~%s pending" % format(pending, ",")
-    return (
+    message = (
         "[context-watch] Context occupancy ~%s tokens, over the %s-token threshold "
         "for %s [%s] (%s). Finish only the action currently in progress, then "
         "immediately invoke the `%s` skill: write the handoff document and stop. "
@@ -387,6 +405,11 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill):
         % (format(occupancy, ","), format(limit, ","), model or "unknown model",
            source, detail, skill)
     )
+    if autoresume_on():
+        message += (" Autoresume is active: after the handoff is written, tell the user "
+                    "to type /clear — the cleared session will announce the open handoff "
+                    "and resume it automatically.")
+    return message
 
 
 def emit(agent, event_name, message, mode):
