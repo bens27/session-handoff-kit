@@ -43,6 +43,12 @@ so compaction never races the handoff, or leave it on as a fallback.
 
 ### Claude Cowork
 
+Build the one-click artifact from a checkout:
+
+```
+bash scripts/package.sh
+```
+
 Open `session-handoff.plugin` in a Cowork conversation (or share it into one) —
 the file card offers a one-click install. The skill triggers on request
 ("hand off", "wrap up the session") and on any `[context-watch]` notice. The
@@ -71,6 +77,12 @@ older builds used `codex_hooks = true`). The hook reads the session rollout's
   handoff always wins the race against auto-compaction.
 
 ### Claude chat
+
+Build the chat skill artifact from a checkout:
+
+```
+bash scripts/package.sh
+```
 
 Save `session-handoff-chat.skill` to your profile. Chat has no hooks and no
 token counter, so the trigger is conversational: "hand off", "wrap up this
@@ -164,7 +176,10 @@ session-handoff-kit/
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart
 │   ├── hooks/context_watch.py           # the unified watcher (also used by Codex)
+│   ├── hooks/handoff_ledger.py          # tracks open and resumed handoffs
+│   ├── hooks/thresholds.example.json    # sample per-model threshold config
 │   └── skills/session-handoff/SKILL.md
+├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
 ├── codex/
 │   ├── install.sh                       # copies hook + skill, generates ~/.codex/hooks.json
 │   ├── hooks/context_watch.py           # same script

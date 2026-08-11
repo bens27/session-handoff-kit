@@ -10,5 +10,6 @@
     "handoff",
     "hooks",
     "session"
-  ]
+  ],
+  "hooks": "./hooks/hooks.json"
 }

@@ -93,19 +93,21 @@ Never claim a handoff was saved to a channel that was not actually available.
 When the user asks to resume, asks what's open, or their request matches an
 open topic:
 
-1. Read the ledger. **Multiple open handoffs and no topic named**: list them
+1. Check attached or pasted handoff content first.
+2. If there is no attached or pasted handoff content, read the ledger.
+   **Multiple open handoffs and no topic named**: list them
    in one line each (topic, age, first next step) and ask which to resume,
    with "none" as an option. **One open**: confirm in a sentence and proceed.
    **A topic named**: go straight to it.
-2. No ledger or no match: check attached or pasted content, then search past
-   chats for `SESSION HANDOFF <topic>`. If nothing surfaces, ask for the file
-   or a paste — do not reconstruct state from guesswork.
-3. Read the entire handoff before any other action, restate the objective and
+3. No ledger or no match: search past chats for `SESSION HANDOFF <topic>`. If
+   nothing surfaces, ask for the file or a paste — do not reconstruct state
+   from guesswork.
+4. Read the entire handoff before any other action, restate the objective and
    first next step, then continue from "Next steps".
-4. **Mark it transferred**: flip that section to `Status: resumed <date>` and
+5. **Mark it transferred**: flip that section to `Status: resumed <date>` and
    remove the topic from the file description. This is what stops future
    chats from re-announcing it. Do not mark resumed merely for listing it.
-5. If the user's opening request is unrelated to any open handoff, mention
+6. If the user's opening request is unrelated to any open handoff, mention
    open work in at most one sentence and do their task; the ledger stays as
    it is.
 

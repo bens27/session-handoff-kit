@@ -11,7 +11,7 @@ description: >
   open handoffs are announced, or whenever the user asks to resume or pick up
   parked work.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Session Handoff

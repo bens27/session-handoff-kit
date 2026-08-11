@@ -152,8 +152,6 @@ def codex_usage(entries):
                 w = info.get("model_context_window")
                 if isinstance(w, int) and w > 0:
                     window = w
-            if payload.get("model"):
-                model = payload.get("model")
         if e.get("type") == "turn_context" and isinstance(payload, dict) and payload.get("model"):
             model = payload["model"]
     if not last:
@@ -276,7 +274,11 @@ def log_event(record):
 
 
 def stats_cli():
-    path = env("CONTEXT_WATCH_LOG") or os.path.join(
+    raw = env("CONTEXT_WATCH_LOG")
+    if raw == "0":
+        print("analytics log disabled")
+        return 0
+    path = raw or os.path.join(
         os.path.expanduser("~"), ".context-watch", "events.jsonl")
     try:
         with open(path, encoding="utf-8") as f:
@@ -306,7 +308,7 @@ def stats_cli():
 
 def handle_session_start(evt, agent):
     """Announce open (untransferred) handoffs; enumerate and offer a choice when several exist."""
-    if (evt.get("source") or "") == "resume":
+    if (evt.get("source") or "") in ("resume", "compact", "fork"):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
     here = os.path.dirname(os.path.abspath(__file__))
@@ -372,7 +374,9 @@ def handle_session_start(evt, agent):
 # ---------------------------------------------------------------- emit
 
 def build_message(occupancy, pending, breakdown, limit, source, model, skill):
-    detail = "cache-read %s of it" % format(breakdown.get("cache_read", 0), ",")
+    cache_read = breakdown.get("cache_read", 0)
+    cache_share = (cache_read / occupancy * 100.0) if occupancy else 0.0
+    detail = "cache-read %s of it (%.0f%%)" % (format(cache_read, ","), cache_share)
     if pending:
         detail += "; incl. ~%s pending" % format(pending, ",")
     return (
@@ -459,8 +463,11 @@ def main():
         sys.exit(0)
 
     try:
-        with open(latch, "w") as f:
+        fd = os.open(latch, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
             f.write("%d/%d\n" % (occupancy, limit))
+    except FileExistsError:
+        sys.exit(0)
     except Exception:
         pass
 

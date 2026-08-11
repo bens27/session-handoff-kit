@@ -29,7 +29,11 @@ def parse_front_matter(text):
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return fm
-    for line in lines[1:]:
+    try:
+        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+    except StopIteration:
+        return {}
+    for line in lines[1:end]:
         if line.strip() == "---":
             break
         if ":" in line:
@@ -90,7 +94,11 @@ def mark_resumed(path):
             lines = ["---"] + block + lines[end:]
             new_text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
         else:
-            new_text = text
+            topic = os.path.splitext(os.path.basename(path))[0]
+            if os.path.basename(path) == "HANDOFF.md":
+                topic = "default"
+            header = "---\ntopic: %s\nstatus: resumed\nresumed: %s\n---\n" % (topic, stamp)
+            new_text = header + text
     else:
         topic = os.path.splitext(os.path.basename(path))[0]
         if os.path.basename(path) == "HANDOFF.md":

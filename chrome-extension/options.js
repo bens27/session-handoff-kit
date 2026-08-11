@@ -7,23 +7,47 @@ const DEFAULTS = {
   autoSend: false,
 };
 
-chrome.storage.sync.get(DEFAULTS, (items) => {
+function setStatus(text) {
+  const s = document.getElementById("status");
+  s.textContent = text;
+  setTimeout(() => (s.textContent = ""), 1500);
+}
+
+function applySettings(items) {
   document.getElementById("template").value = items.template;
   document.getElementById("alwaysOn").checked = items.alwaysOn;
   document.getElementById("autoSend").checked = items.autoSend;
-});
+}
+
+try {
+  chrome.storage.sync.get(DEFAULTS, (items) => {
+    if (chrome.runtime.lastError) {
+      applySettings(DEFAULTS);
+      return;
+    }
+    applySettings(items || DEFAULTS);
+  });
+} catch (e) {
+  applySettings(DEFAULTS);
+}
 
 document.getElementById("save").addEventListener("click", () => {
-  chrome.storage.sync.set(
-    {
-      template: document.getElementById("template").value,
-      alwaysOn: document.getElementById("alwaysOn").checked,
-      autoSend: document.getElementById("autoSend").checked,
-    },
-    () => {
-      const s = document.getElementById("status");
-      s.textContent = "Saved";
-      setTimeout(() => (s.textContent = ""), 1500);
-    }
-  );
+  try {
+    chrome.storage.sync.set(
+      {
+        template: document.getElementById("template").value,
+        alwaysOn: document.getElementById("alwaysOn").checked,
+        autoSend: document.getElementById("autoSend").checked,
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          setStatus("Save failed");
+          return;
+        }
+        setStatus("Saved");
+      }
+    );
+  } catch (e) {
+    setStatus("Save failed");
+  }
 });

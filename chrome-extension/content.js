@@ -44,10 +44,14 @@ function findComposer() {
   );
 }
 
-function findSendButton() {
+function findSendButton(composer) {
+  const queryRoot =
+    composer && (composer.closest("form") || composer.closest('[role="main"]'));
+  if (!queryRoot) return null;
+
   return (
-    document.querySelector('button[aria-label*="send" i]') ||
-    document.querySelector('button[type="submit"]')
+    queryRoot.querySelector('button[aria-label*="send" i]') ||
+    queryRoot.querySelector('button[type="submit"]')
   );
 }
 
@@ -101,7 +105,7 @@ async function maybeInject() {
 
   if (settings.autoSend) {
     setTimeout(() => {
-      const btn = findSendButton();
+      const btn = findSendButton(composer);
       if (btn && !btn.disabled) btn.click();
     }, 400);
   }
