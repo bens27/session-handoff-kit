@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.3.0 · `session-handoff-chat` skill 0.3.0 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.4.0 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
 
 ---
 
@@ -181,20 +181,26 @@ in that session exit silently.
 The injected message names the occupancy, the threshold and which rule
 selected it, the model, the cache-read share, any pending estimate, and the
 exact skill to invoke, ending with: finish only the action in progress,
-invoke the skill, write the handoff, stop, begin no new work.
+invoke the skill, write the handoff, stop, begin no new work. When
+autoresume is active (§7.3), the message additionally instructs the agent
+to tell the user to type `/clear` after the handoff is written — the
+cleared session's announcer then resumes the handoff automatically,
+closing the loop with a single user keystroke.
 
 ## 6. Threshold resolution
 
 First match wins; model ids are matched by longest case-insensitive
 substring key ("claude-opus" beats "claude"):
 
-1. `CONTEXT_WATCH_TOKENS_MAP` — env, e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
-2. `./.context-watch.json` — project-local per-model config
-3. `~/.context-watch/thresholds.json` — user-global per-model config
-4. `CONTEXT_WATCH_TOKENS` — global absolute, env
-5. `"default"` key in the config files
-6. `CONTEXT_WATCH_PERCENT` × window — only when PERCENT is explicitly set
-7. Built-in default: **130,000 tokens**
+1. `HANDOFF_AT` — env, global absolute; the ergonomic per-launch knob
+   (`HANDOFF_AT=20000 claude`), so it beats every map and config file
+2. `CONTEXT_WATCH_TOKENS_MAP` — env, e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
+3. `./.context-watch.json` — project-local per-model config
+4. `~/.context-watch/thresholds.json` — user-global per-model config
+5. `CONTEXT_WATCH_TOKENS` — global absolute, env
+6. `"default"` key in the config files
+7. `CONTEXT_WATCH_PERCENT` × window — only when PERCENT is explicitly set
+8. Built-in default: **130,000 tokens**
 
 Config files are flat JSON; user-global loads first and project-local
 overrides on key collision:
@@ -216,15 +222,23 @@ or disable Claude Code auto-compact in `/config`).
 
 ### 7.1 File format (agent surfaces)
 
-Handoffs live at `./.handoffs/<topic-slug>.md`, one file per thread of work,
-overwritten on re-handoff of the same thread. Legacy `./HANDOFF.md` remains
-supported as topic `default`. Front matter carries the state:
+Handoffs live at `./.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`, named by the
+handoff's **ending date/time** so a directory listing is a chronology
+(`20260811-1430-auth-refactor.md`). Re-handoff of the same thread writes a
+new dated file and marks the previous one `superseded`
+(`handoff_ledger.py supersede <old-path>`). Legacy undated
+`./.handoffs/<topic-slug>.md` files and `./HANDOFF.md` (topic `default`)
+remain supported; their ending time falls back to front-matter `created`,
+then file mtime. Front matter carries the state plus a one-line
+`description` of what is parked — the announcer surfaces it so handoffs can
+be told apart without opening them:
 
 ```markdown
 ---
 topic: auth-refactor
 created: 2026-08-11T14:30
 status: open
+description: JWT refresh rotation half-built; middleware done, tests failing on expiry edge.
 ---
 # Session Handoff — auth-refactor — 2026-08-11
 ```
@@ -242,13 +256,16 @@ lessons append there and Gotchas references it rather than duplicating.
 | --- | --- | --- |
 | `open` | Written, not yet transferred; announced every session start | Skill writes the file |
 | `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path>` flips status and stamps `resumed:` |
+| `superseded` | Replaced by a newer handoff of the same thread; silent forever | `handoff_ledger.py supersede <path>`, run by the skill on re-handoff |
 | aged out | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); not announced | Time |
 
 Announced ≠ transferred; listed ≠ transferred. Only an explicit `resume` — run
 after the session has actually read and adopted the handoff — changes state.
-`resume` is idempotent and prepends front matter to a legacy file that lacks
-it. CLI: `handoff_ledger.py list [dir] [--json] [--max-age-days N]` prints
-open handoffs oldest-first; `resume <path>` marks transfer.
+`resume` and `supersede` are idempotent and prepend front matter to a legacy
+file that lacks it. CLI: `handoff_ledger.py list [dir] [--json]
+[--max-age-days N]` prints open handoffs newest-first (ended, topic, path,
+description); `resume <path>` marks transfer; `supersede <path>` marks
+replacement.
 
 ### 7.3 Session-start announcer
 
@@ -259,11 +276,18 @@ Scans `.handoffs/*.md` plus legacy
 `HANDOFF.md` for open entries within the age window, then:
 
 - **0 open** — silent.
-- **1 open** — announce with "read it in full and continue", or resume
-  immediately without asking when `CONTEXT_WATCH_AUTORESUME=1`.
-- **N open** — enumerate (topic, age, path) with an instruction to present
-  the list and ask which to resume before any other work, using an
-  interactive question tool where available, with "none" as an option.
+- **1 open** — announce (topic, age, path, description) with "read it in
+  full and continue", or resume immediately without asking when autoresume
+  is active (`AUTORESUME=1`, or the legacy `CONTEXT_WATCH_AUTORESUME=1`).
+- **N open** — enumerate newest-first (topic, age, path, description) with
+  an instruction to present the list and ask which to resume before any
+  other work, using an interactive question tool where available, with
+  "none" as an option. Autoresume never guesses among several.
+
+Because `clear` is not a skipped source, autoresume closes a one-keystroke
+cycle: `HANDOFF_AT=<n> AUTORESUME=1 claude` triggers the handoff at the
+threshold, the skill tells the user to type `/clear`, and the cleared
+session announces and resumes the open handoff automatically.
 
 Every announcement includes the exact mark-transferred command and the defer
 clause: if the user's opening request is an unrelated explicit task, mention
@@ -291,8 +315,8 @@ announcement — the chat equivalent of the SessionStart hook.
 update; (2) always print the handoff block in-conversation, headed by the
 literal line `SESSION HANDOFF — <topic-slug> — <date>` so past-chat search
 can find it; (3) downloadable `HANDOFF.md` as the portable cross-surface
-copy (saved into a project folder as `.handoffs/<topic>.md` with
-`status: open`, the plugin's announcer counts it); (4) a connected
+copy (saved into a project folder as `.handoffs/<YYYYMMDD-HHMM>-<topic>.md`
+with `status: open`, the plugin's announcer counts it); (4) a connected
 note-capture tool, if any. The skill never claims a save to an unavailable
 channel.
 
@@ -373,6 +397,8 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `HANDOFF_AT` | — | Global absolute threshold; highest precedence, meant for per-launch use (`HANDOFF_AT=20000 claude`) |
+| `AUTORESUME` | — | `1` = resume a single open handoff at start without asking; with `HANDOFF_AT` forms the one-keystroke `/clear` cycle (§7.3) |
 | `CONTEXT_WATCH_TOKENS_MAP` | — | Per-model absolute thresholds, `key=tokens` comma list |
 | `CONTEXT_WATCH_TOKENS` | — | Global absolute threshold |
 | `CONTEXT_WATCH_PERCENT` | unset | Percent-of-window trigger, only when explicitly set |
@@ -384,7 +410,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Analytics path; `0` disables |
 | `CONTEXT_WATCH_DISABLE` | — | `1` = no-op without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
-| `CONTEXT_WATCH_AUTORESUME` | — | `1` = resume a single open handoff at start without asking |
+| `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
 
 ## 12. Surface compatibility
 
@@ -421,8 +447,9 @@ Rule convention:
 Before starting any task, run: python3 scripts/handoff_ledger.py list
 If open handoffs print, mention them in one line and ask which to resume, or none.
 After actually resuming one: python3 scripts/handoff_ledger.py resume <path>
-When wrapping up or parking work, write .handoffs/<topic-slug>.md with
-front matter (topic, created, status: open) using the session-handoff template.
+When wrapping up or parking work, write .handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md
+with front matter (topic, created, status: open, description) using the
+session-handoff template.
 ```
 
 Oz / cloud harnesses: commit the repo-local form of everything (project

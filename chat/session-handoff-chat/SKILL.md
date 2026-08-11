@@ -12,7 +12,7 @@ description: >
   HANDOFF.md — and whenever a memory file listing open handoffs exists and the
   user's request plausibly relates to one of them.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # Session Handoff (chat)
@@ -80,9 +80,10 @@ Then persist through every channel available, in this order:
    off.
 3. **A downloadable file (portable copy).** If file creation is available,
    also write `HANDOFF.md` — the copy that crosses surfaces. In a Claude Code
-   or Cowork project folder, save it as `.handoffs/<topic-slug>.md` with
-   `status: open` front matter so the plugin's session-start announcer counts
-   it.
+   or Cowork project folder, save it as `.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`
+   (the timestamp is the handoff's ending date/time) with `status: open` and a
+   one-line `description:` in the front matter so the plugin's session-start
+   announcer counts it and can summarize it.
 4. **A note-capture tool, if connected** (for example an Open Brain capture
    tool): store a three-to-five sentence summary.
 

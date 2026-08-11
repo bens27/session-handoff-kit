@@ -11,7 +11,7 @@ description: >
   open handoffs are announced, or whenever the user asks to resume or pick up
   parked work.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # Session Handoff
@@ -26,27 +26,36 @@ work automatically and stay silent about work already picked up.
 1. Do not start new work. Complete only the single atomic action already in
    flight (finish the current file edit or the command that is running).
 2. Write the handoff document as specified below.
-3. Tell the user the handoff is complete and give the exact resume path: start
-   a new session in this directory and the open handoff will be announced
+3. Tell the user the handoff is complete and give the exact resume path. If
+   the trigger notice said autoresume is active, the resume path is one
+   keystroke: tell the user to type `/clear` — the cleared session will
+   announce this handoff and resume it automatically. Otherwise: start a new
+   session in this directory and the open handoff will be announced
    automatically (or `claude "resume"` / `codex "resume"`).
 4. Stop. Do not begin any of the "Next steps" in this session.
 
 ## Writing the handoff
 
-Write to `./.handoffs/<topic-slug>.md`, where the slug is a short kebab-case
-name for the thread of work (`auth-refactor`, `pantry-import`). One file per
-thread; overwrite the same file when handing off the same thread again. The
-legacy single-file location `./HANDOFF.md` remains supported and is treated as
-topic "default".
+Write to `./.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`, where the timestamp
+is the handoff's ending date/time (now) and the slug is a short kebab-case
+name for the thread of work (`20260811-1430-auth-refactor`). One dated file
+per handoff, so the directory reads as a chronology. When handing off the
+same thread again, write a new dated file and mark the previous one
+replaced: `python3 <hooks-dir>/handoff_ledger.py supersede <old-path>`.
+Legacy undated files and the single-file `./HANDOFF.md` (topic "default")
+remain supported.
 
-Start the file with this front matter — the `status: open` line is what marks
-it untransferred for the session-start announcer:
+Start the file with this front matter — `status: open` is what marks it
+untransferred for the session-start announcer, and `description` is the
+one-line summary the announcer shows so handoffs can be told apart without
+opening them (make it specific: what is parked and where it stands):
 
 ```markdown
 ---
 topic: <topic-slug>
 created: <ISO date-time>
 status: open
+description: <one line: what is parked here and where it stands>
 ---
 # Session Handoff — <topic> — <date>
 
@@ -112,13 +121,15 @@ announced or listed. Read `LESSONS.md` as well if the handoff references it.
   session; a `SessionStart` hook runs the announcer. `hooks/handoff_ledger.py`
   tracks open vs resumed and can be run directly: `list` and `resume <path>`.
 - Thresholds are absolute tokens per model (quality degrades at an absolute
-  occupancy, not a percentage of the window): CONTEXT_WATCH_TOKENS_MAP, then
-  ./.context-watch.json, then ~/.context-watch/thresholds.json, then a global
-  CONTEXT_WATCH_TOKENS, with 130,000 as the built-in default. Other knobs:
-  _PENDING, _LOG (analytics; `context_watch.py stats`), _WINDOW, _SKILL,
-  _MODE, _AGENT, _DISABLE, _MAX_AGE_DAYS, _AUTORESUME — see the plugin
-  README. With CONTEXT_WATCH_AUTORESUME=1 a single open handoff is resumed at
-  session start without asking.
+  occupancy, not a percentage of the window): HANDOFF_AT (per-launch, highest
+  precedence), then CONTEXT_WATCH_TOKENS_MAP, then ./.context-watch.json,
+  then ~/.context-watch/thresholds.json, then a global CONTEXT_WATCH_TOKENS,
+  with 130,000 as the built-in default. Other knobs: _PENDING, _LOG
+  (analytics; `context_watch.py stats`), _WINDOW, _SKILL, _MODE, _AGENT,
+  _DISABLE, _MAX_AGE_DAYS — see the plugin README. With AUTORESUME=1 (legacy
+  CONTEXT_WATCH_AUTORESUME=1) a single open handoff is resumed at session
+  start without asking; `HANDOFF_AT=<n> AUTORESUME=1 claude` makes the whole
+  hand-off-and-continue cycle cost the user one `/clear`.
 - In environments without hooks, this skill still works: check `./.handoffs/`
   and `./HANDOFF.md` for `status: open` entries whenever beginning work in a
   folder, announce them in one sentence, and follow the same resume procedure.

@@ -41,6 +41,21 @@ cache_read_input_tokens`), and injects the handoff instruction once per session
 when the threshold is crossed. Consider turning auto-compact off in `/config`
 so compaction never races the handoff, or leave it on as a fallback.
 
+The one-keystroke cycle:
+
+```
+HANDOFF_AT=120000 AUTORESUME=1 claude
+```
+
+`HANDOFF_AT` sets the trigger threshold for this launch (highest precedence).
+With `AUTORESUME=1`, crossing it writes the handoff and tells you to type
+`/clear`; the cleared session announces the open handoff and resumes it
+immediately without asking — the full wind-down/pick-up cycle costs one
+keystroke. Handoff files are named by ending date/time
+(`.handoffs/20260811-1430-auth-refactor.md`) and carry a one-line
+`description:` in front matter, so announcements and directory listings stay
+tellable-apart as they accumulate.
+
 ### Claude Cowork
 
 Build the one-click artifact from a checkout:
