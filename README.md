@@ -16,7 +16,7 @@ job on request.
 | **Claude Code** (CLI, VS Code, JetBrains) | Add this repo as a plugin marketplace, install the `session-handoff` plugin | Deterministic — hook fires at the token threshold |
 | **Claude Cowork** (desktop) | Open `session-handoff.plugin` and click install | Skill on request; hooks are in-schema but rarely exercised in Cowork — treat the threshold trigger as best-effort there |
 | **Codex CLI** (terminal, IDE extension) | Run `codex/install.sh` | Deterministic — same hook, behind Codex's experimental hooks feature flag |
-| **Claude chat** (claude.ai, mobile/desktop apps) | Open `session-handoff-chat.skill` and click **Save skill** (or upload in Settings → Capabilities) | Conversational — no token feed exists in chat |
+| **Claude chat** (claude.ai web, **Claude Desktop**, mobile apps) | Open `session-handoff-chat.skill` and click **Save skill** (or upload in Settings → Capabilities) | Conversational — no token feed exists in chat |
 | **Claude chat, before your first message** | Load `chrome-extension/` unpacked in Chrome/Edge (see its README) | Pre-fills — optionally auto-sends — the handoff-check prompt into every new chat |
 
 ### Claude Code
@@ -91,7 +91,7 @@ older builds used `codex_hooks = true`). The hook reads the session rollout's
 - Keep `model_auto_compact_token_limit` above the watcher threshold so the
   handoff always wins the race against auto-compaction.
 
-### Claude chat
+### Claude chat (including Claude Desktop)
 
 Build the chat skill artifact from a checkout:
 
@@ -99,7 +99,12 @@ Build the chat skill artifact from a checkout:
 bash scripts/package.sh
 ```
 
-Save `session-handoff-chat.skill` to your profile. Chat has no hooks and no
+Save `session-handoff-chat.skill` to your profile. This covers **Claude
+Desktop** too: the desktop app is a chat surface, so the same `.skill` applies
+(skills sync with your account across web, desktop, and mobile). The one
+Desktop-specific fork: if you're in a **Cowork** session inside the desktop
+app, use the `session-handoff.plugin` route from the Cowork section instead —
+Cowork accepts the full plugin, chat mode takes the skill. Chat has no hooks and no
 token counter, so the trigger is conversational: "hand off", "wrap up this
 chat", "continue this in a new chat". Chat → chat needs no file shuttle: the
 skill saves the full handoff to persistent memory when available and always
