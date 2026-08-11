@@ -195,8 +195,22 @@ def main():
     p_desc = run_hook(ev_desc, {"TMPDIR": latchdir})
     check("announcer-description-no-autoresume",
           p_desc.returncode == 0 and "descdemo" in p_desc.stdout
-          and "without asking" not in p_desc.stdout,
+          and "without asking" not in p_desc.stdout
+          and "First load exactly these skills" not in p_desc.stdout,
           "rc=%d stdout=%r" % (p_desc.returncode, p_desc.stdout[:500]))
+
+    # 10. Announcer surfaces skills instructions for a single handoff when provided.
+    proj_skills = os.path.join(tmp, "proj-skills")
+    os.makedirs(os.path.join(proj_skills, ".handoffs"))
+    with open(os.path.join(proj_skills, ".handoffs", "20260811-1300-skillsdemo.md"), "w") as f:
+        f.write("---\ntopic: skillsdemo\nstatus: open\nskills: tdd, dataviz\n---\n# Session Handoff — skillsdemo\n")
+    ev_skills = {"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_skills,
+                 "session_id": "verify-skills"}
+    p_skills = run_hook(ev_skills, {"TMPDIR": latchdir})
+    check("announcer-skills-single",
+          p_skills.returncode == 0 and "First load exactly these skills" in p_skills.stdout
+          and "tdd, dataviz" in p_skills.stdout,
+          "rc=%d stdout=%r" % (p_skills.returncode, p_skills.stdout[:500]))
 
     print()
     if failures:

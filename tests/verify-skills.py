@@ -24,8 +24,8 @@ def main():
     chat = open(CHAT).read()
 
     check("agent-copies-identical", a == c)
-    check("agent-version-0.4.0", re.search(r"version:\s*\"?0\.4\.0", a) is not None,
-          "agent SKILL.md must declare version 0.4.0 (SPEC header)")
+    check("agent-version-0.4.1", re.search(r"version:\s*\"?0\.4\.1", a) is not None,
+          "agent SKILL.md must declare version 0.4.1 (SPEC header)")
 
     # Chat resume-resolution order (SPEC section 8): attached/pasted content FIRST,
     # then memory ledger, then past-chat search, then ask. Find the resume section

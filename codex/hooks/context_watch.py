@@ -341,7 +341,7 @@ def handle_session_start(evt, agent):
         try:
             if os.path.isfile(path) and (time.time() - os.path.getmtime(path)) <= max_age * 86400:
                 open_handoffs = [{"path": path, "topic": "default", "age_days": 0.0,
-                                  "description": ""}]
+                                  "description": "", "skills": ""}]
         except Exception:
             pass
 
@@ -362,14 +362,20 @@ def handle_session_start(evt, agent):
         else:
             action = ("Read it in full before doing anything else, then continue the "
                       "work it describes. ")
+        skills = h.get("skills") or ""
+        skills_note = ""
+        if skills:
+            skills_note = ("First load exactly these skills via the Skill tool, in "
+                           "order, before resuming: %s. " % skills)
         note = ("[context-watch] One open handoff awaiting resume: '%s' (%.0fd old) at %s%s. "
                 % (h["topic"], h["age_days"], h["path"], suffix)
-                + action + mark + " " + defer)
+                + action + skills_note + mark + " " + defer)
     else:
         listing = "; ".join(
-            "%d) %s (%.0fd old, %s)%s" % (
+            "%d) %s (%.0fd old, %s)%s%s" % (
                 i + 1, h["topic"], h["age_days"], h["path"],
-                " — %s" % h.get("description") if h.get("description") else "")
+                " — %s" % h.get("description") if h.get("description") else "",
+                " [skills: %s]" % h.get("skills") if h.get("skills") else "")
             for i, h in enumerate(open_handoffs)
         )
         note = ("[context-watch] %d open handoffs awaiting resume: %s. Before any other "

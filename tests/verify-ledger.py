@@ -93,7 +93,7 @@ def main():
     alpha = os.path.join(hd3, "20260810-0900-alpha.md")
     beta = os.path.join(hd3, "20260811-1500-beta.md")
     with open(alpha, "w") as f:
-        f.write("---\nstatus: open\ndescription: older alpha work\n---\n# Session Handoff — alpha\n")
+        f.write("---\nstatus: open\ndescription: older alpha work\nskills: alpha-skill, beta-skill\n---\n# Session Handoff — alpha\n")
     with open(beta, "w") as f:
         f.write("---\ntopic: beta\nstatus: open\ndescription: newer beta work\n---\n# Session Handoff — beta\n")
     p = run(["list", tmp3, "--json"], tmp3)
@@ -114,6 +114,10 @@ def main():
     check("dated-descriptions-surfaced",
           by_topic.get("alpha", {}).get("description") == "older alpha work"
           and by_topic.get("beta", {}).get("description") == "newer beta work",
+          "handoffs=%r" % handoffs)
+    check("dated-skills-surfaced",
+          by_topic.get("alpha", {}).get("skills") == "alpha-skill, beta-skill"
+          and by_topic.get("beta", {}).get("skills") == "",
           "handoffs=%r" % handoffs)
 
     p = run(["supersede", alpha], tmp3)

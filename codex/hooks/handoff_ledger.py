@@ -5,7 +5,8 @@ Layout:
   ./.handoffs/<YYYYMMDD-HHMM>-<topic>.md   handoff files, named by ending
                                            date/time, with front matter
                                            (status: open|resumed|superseded,
-                                           description: one-line summary)
+                                           description: one-line summary,
+                                           skills: comma-separated skill names)
   ./.handoffs/<topic>.md                   legacy undated naming, still scanned
   ./HANDOFF.md                             legacy single file, topic "default"
 
@@ -68,7 +69,7 @@ def _name_parts(path):
 
 def scan(root, max_age_days=14):
     """Return open handoffs under root as [{path, topic, ended, description,
-    age_days}], newest (most recently ended) first."""
+    skills, age_days}], newest (most recently ended) first."""
     now = time.time()
     paths = []
     hdir = os.path.join(root, ".handoffs")
@@ -103,6 +104,7 @@ def scan(root, max_age_days=14):
                 "topic": topic,
                 "ended": ended,
                 "description": fm.get("description") or "",
+                "skills": fm.get("skills") or "",
                 "age_days": round(age_days, 1),
             })
         except Exception:
