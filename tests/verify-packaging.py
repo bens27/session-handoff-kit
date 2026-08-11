@@ -36,7 +36,10 @@ def main():
                      for e in entries for h in e.get("hooks", []))
             check("hooks-event-%s" % evt, ok, "missing or wrong command wiring for %s" % evt)
 
-    # 2. plugin.json must point at the hooks file (not auto-discovered).
+    # 2. plugin.json must NOT reference hooks/hooks.json: Claude Code loads the
+    #    standard hooks/hooks.json automatically, and an explicit manifest entry
+    #    for the same file fails install with a duplicate-hooks error (observed
+    #    live 2026-08-11). manifest "hooks" is only for ADDITIONAL hook files.
     pj_path = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
     try:
         pj = json.load(open(pj_path))
@@ -45,9 +48,9 @@ def main():
         pj = {}
         check("plugin-json-valid", False, str(e))
     hooks_field = pj.get("hooks")
-    ok = hooks_field == "./hooks/hooks.json" or isinstance(hooks_field, dict)
-    check("plugin-json-hooks-field", ok,
-          "plugin.json needs \"hooks\": \"./hooks/hooks.json\" (or inline config); got %r" % (hooks_field,))
+    check("plugin-json-no-duplicate-hooks-ref", hooks_field is None,
+          "plugin.json must omit \"hooks\" — hooks/hooks.json is auto-loaded and "
+          "re-referencing it fails install; got %r" % (hooks_field,))
 
     # 3. Build step for the .plugin (Cowork) and .skill (chat) artifacts (SPEC 3/13).
     pkg = os.path.join(REPO, "scripts/package.sh")

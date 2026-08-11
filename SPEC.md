@@ -474,7 +474,9 @@ session-handoff-kit/
 ├── scripts/package.sh                   builds dist/session-handoff.plugin
 │                                        and dist/session-handoff-chat.skill
 ├── plugins/session-handoff/             Claude Code + Cowork plugin
-│   ├── .claude-plugin/plugin.json       manifest; "hooks" points at hooks.json
+│   ├── .claude-plugin/plugin.json       manifest; no "hooks" field (hooks.json
+│   │                                    is auto-loaded; re-referencing it is a
+│   │                                    duplicate-hooks install error)
 │   ├── README.md                        plugin-level install notes
 │   ├── hooks/hooks.json                 PostToolUse, UserPromptSubmit, SessionStart
 │   ├── hooks/context_watch.py           watcher + announcer + analytics (shared)
