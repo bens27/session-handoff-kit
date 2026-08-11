@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to ~/.context-watch/thresholds.json (user-global) or ./.context-watch.json (project-local). Keys are case-insensitive substrings of the model id; longest match wins. Values are absolute window-occupancy tokens — set them where YOUR observed reasoning quality drops, per model.",
+  "claude-opus": 120000,
+  "claude-sonnet": 140000,
+  "gpt-5.5": 160000,
+  "default": 130000
+}

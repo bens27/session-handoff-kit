@@ -1,0 +1,13 @@
+{
+  "name": "session-handoff-kit",
+  "owner": {
+    "name": "Ben (Clear Method)"
+  },
+  "plugins": [
+    {
+      "name": "session-handoff",
+      "source": "./plugins/session-handoff",
+      "description": "Deterministic context-usage watcher that triggers a structured session-handoff skill at a configurable token threshold, plus automatic handoff pickup at session start."
+    }
+  ]
+}

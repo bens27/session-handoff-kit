@@ -1,0 +1,485 @@
+# Session Handoff Suite — Technical Specification
+
+Spec version 1.0 — 2026-08-11
+Component versions: `session-handoff` plugin 0.3.0 · `session-handoff-chat` skill 0.3.0 · browser extension 0.1.0
+
+---
+
+## 1. Purpose
+
+The suite preserves reasoning quality across context boundaries. Its primary
+objective is quality preservation, not cost containment: reasoning quality
+degrades and reasoning cost rises as the context window fills — observed in
+practice around 120,000–140,000 tokens of occupancy — regardless of how
+cheaply those tokens were served. Cache reads are billed at a discount but
+occupy the window at full size, so they count in full. Any cost savings are a
+logged byproduct (Section 9), never the driver of a design decision.
+
+The mechanism: a deterministic watcher measures window occupancy from the
+agent's own transcript and, past a per-model absolute threshold, injects a
+one-time instruction to invoke a handoff skill. The skill writes a structured,
+status-carrying handoff document and stops. The next session's initialization
+scans for untransferred handoffs, announces them, offers a choice when several
+exist, and marks the chosen one transferred on actual resume — so resuming
+never requires the user to remember or ask.
+
+## 2. Design principles
+
+**Deterministic over self-reported.** The model cannot see its own token
+count: usage figures are computed by serving infrastructure and returned in
+API response metadata the model never receives. A model instructed to state
+its input tokens will produce a confident, plausible, wrong number. All
+measurement in this suite is therefore out-of-band — a subprocess reading
+files — and no component ever asks the model to report or estimate its own
+context usage.
+
+**Occupancy, not billing.** The unit of measure is what the next API call
+will carry: fresh input, cache writes, cache reads at full size, and the
+previous call's output. Cumulative session totals are a billing concept and
+are never used — summing usage across calls double-counts every re-send of
+the history.
+
+**Absolute per-model thresholds.** Quality degradation is a property of a
+model at an absolute occupancy, not a percentage of its window. A 400k-window
+model does not degrade at proportionally higher occupancy just because the
+window is larger. Percent-of-window triggering exists only as an explicit
+opt-in (Section 6).
+
+**Inform, don't hijack.** Session initialization announces open handoffs and
+offers a choice; it does not seize the session. If the user opens with an
+unrelated explicit task, open handoffs get one sentence and the user's task
+proceeds. Auto-resume without asking is available but off by default.
+
+**Fail open.** The watcher and announcer exit 0 on any internal error. A
+broken hook must never block a session. Memory- and search-based channels in
+chat degrade honestly: the skill never claims a handoff was saved to a
+channel that was not available.
+
+**Fire once.** The threshold trigger fires at most once per session,
+enforced by a latch file keyed on session id.
+
+## 3. Architecture
+
+Every deterministic deployment assembles the same three primitives:
+
+1. A **token feed** the host writes as a side effect of operating — the
+   Claude Code session transcript or the Codex rollout file. Reading it costs
+   zero tokens.
+2. A **lifecycle hook** that runs a subprocess at the right moments —
+   `PostToolUse` and `UserPromptSubmit` for the threshold watch,
+   `SessionStart` for the announcer.
+3. An **instruction-injection channel** back into the model's context. Hooks
+   cannot invoke tools or skills directly; the hook injects an imperative and
+   the model performs the skill invocation.
+
+Where hooks do not exist (chat, Cowork native tasks, Warp Agent Mode), the
+skill layer and the file/memory ledger still operate, triggered
+conversationally or by standing convention.
+
+### Components
+
+| Component | Role |
+| --- | --- |
+| `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, shared verbatim between Claude Code and Codex. |
+| `hooks/handoff_ledger.py` | Open/resumed state tracking over handoff files. Importable module + CLI (`list`, `resume`). |
+| `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. |
+| `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
+| `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
+| Packaging | `.claude-plugin/marketplace.json` (kit root), plugin manifest, `.plugin` (Cowork), `.skill` (chat), `codex/install.sh`. |
+
+## 4. Measurement specification
+
+### 4.1 Claude Code / Cowork
+
+Source: the session transcript JSONL (path supplied in every hook's stdin
+payload). The watcher reads only the final 2,000,000 bytes of the file,
+discards the partial first line, and parses line-wise, skipping unparseable
+lines. From the parsed tail it takes the **last main-chain entry** carrying
+`message.usage` — entries with `isSidechain: true` (subagents, which occupy
+their own windows) are excluded.
+
+```
+occupancy = input_tokens
+          + cache_creation_input_tokens
+          + cache_read_input_tokens
+          + output_tokens
+```
+
+The first three terms are the input-only formula Claude Code itself uses for
+its used-percentage figure; `output_tokens` is added because the next call's
+input includes the previous output. Model id is read from the same entry's
+`message.model`.
+
+### 4.2 Codex
+
+Source: the session rollout JSONL. The watcher takes the **last
+`token_count` event** (`payload.type == "token_count"`) and reads
+`payload.info.last_token_usage`:
+
+```
+occupancy = total_tokens          (fallback: input_tokens + output_tokens)
+```
+
+`total_tokens` includes input (with cached as a subset), output, and
+reasoning tokens. The context window is read from
+`payload.info.model_context_window` when present, overriding
+`CONTEXT_WATCH_WINDOW`. Model id comes from the hook stdin `model` field,
+falling back to the last `turn_context` event's `payload.model`. Cumulative
+totals in the rollout are never used.
+
+### 4.3 Pending-content estimate (lag closure)
+
+The last usage entry is at most one call stale. The missing content is
+precisely what the hook is already holding on stdin: the just-produced tool
+result (`PostToolUse`) or the new prompt (`UserPromptSubmit`). The watcher
+estimates its weight at ~4 characters per token from the first present key
+among `tool_response`, `tool_output`, `tool_result`, `prompt`, and adds it to
+occupancy before the comparison. The estimate deliberately biases the trigger
+early — the correct direction for a quality guard. Disable with
+`CONTEXT_WATCH_PENDING=0`. Exact pre-flight counting via a token-counting API
+is rejected by design: a hook cannot reconstruct the request payload, and the
+early-biased estimate achieves the same protection with no network call.
+
+### 4.4 Cross-agent semantics
+
+The two measures are not identical: Claude Code counts input-side plus last
+output; Codex counts total including reasoning. A shared absolute number
+therefore means slightly different things per agent. Per-model threshold
+entries (Section 6) are the normalization mechanism — tune each model's entry
+against its own agent's measure.
+
+### 4.5 Retrieval cost
+
+Zero tokens. Every check is local file I/O in a subprocess; nothing enters
+model context and nothing is billed. Compute cost is milliseconds and bounded
+by the 2 MB tail read regardless of session length. The suite's entire token
+expenditure is its speech: the injected trigger instruction (~80 tokens, once
+per session) and the session-start announcement (zero when nothing is open,
+roughly a line per open handoff). On Codex's `PostToolUse` channel the
+message *replaces* a tool result, making that path token-neutral or better.
+
+## 5. Trigger and injection
+
+### 5.1 Watch events and latch
+
+The watcher runs on `PostToolUse` (covers long agentic turns, where context
+actually burns) and `UserPromptSubmit` (per-turn check). On first threshold
+crossing it writes a latch file
+(`$TMPDIR/context-watch-<sanitized session_id>.fired`, containing
+`occupancy/limit`) and emits; while the latch exists, all subsequent checks
+in that session exit silently.
+
+### 5.2 Injection channels
+
+| Agent | Event | Channel |
+| --- | --- | --- |
+| Claude Code / Cowork | any watch event, `warn` mode | JSON `hookSpecificOutput.additionalContext`, exit 0 |
+| Claude Code / Cowork | `PostToolUse`, `block` mode | JSON `{"decision": "block", "reason": …}`, exit 0 |
+| Codex | `UserPromptSubmit` | plain stdout, exit 0 (becomes turn context) |
+| Codex | `PostToolUse` | message on stderr, exit 2 — the documented channel; it replaces that one tool result, acceptable since the instruction is to stop and hand off |
+
+The injected message names the occupancy, the threshold and which rule
+selected it, the model, the cache-read share, any pending estimate, and the
+exact skill to invoke, ending with: finish only the action in progress,
+invoke the skill, write the handoff, stop, begin no new work.
+
+## 6. Threshold resolution
+
+First match wins; model ids are matched by longest case-insensitive
+substring key ("claude-opus" beats "claude"):
+
+1. `CONTEXT_WATCH_TOKENS_MAP` — env, e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
+2. `./.context-watch.json` — project-local per-model config
+3. `~/.context-watch/thresholds.json` — user-global per-model config
+4. `CONTEXT_WATCH_TOKENS` — global absolute, env
+5. `"default"` key in the config files
+6. `CONTEXT_WATCH_PERCENT` × window — only when PERCENT is explicitly set
+7. Built-in default: **130,000 tokens**
+
+Config files are flat JSON; user-global loads first and project-local
+overrides on key collision:
+
+```json
+{ "claude-opus": 120000, "claude-sonnet": 140000, "gpt-5.5": 160000, "default": 130000 }
+```
+
+The active model is re-detected on every check, so a mid-session model
+switch re-resolves the threshold on the next tool call. Every trigger records
+its resolution source (`TOKENS_MAP:claude-opus`, `config:default`,
+`builtin-default`) in both the injected message and the analytics record.
+Sizing guidance: set each entry where that model's observed reasoning quality
+drops; leave headroom below auto-compaction (Codex defaults to ~80% of the
+window; raise `model_auto_compact_token_limit` if a threshold approaches it,
+or disable Claude Code auto-compact in `/config`).
+
+## 7. Handoff documents and ledger
+
+### 7.1 File format (agent surfaces)
+
+Handoffs live at `./.handoffs/<topic-slug>.md`, one file per thread of work,
+overwritten on re-handoff of the same thread. Legacy `./HANDOFF.md` remains
+supported as topic `default`. Front matter carries the state:
+
+```markdown
+---
+topic: auth-refactor
+created: 2026-08-11T14:30
+status: open
+---
+# Session Handoff — auth-refactor — 2026-08-11
+```
+
+Body sections, in order: Objective; Current state; Decisions and rationale;
+Files touched; In flight; Next steps (ordered, concrete, with paths and
+commands); Gotchas (including approaches tried and abandoned). Target under
+1,500 words, facts a fresh session can verify, no conversational narration.
+If a `LESSONS.md` exists (e.g. maintained by a mistake-learning skill), new
+lessons append there and Gotchas references it rather than duplicating.
+
+### 7.2 States
+
+| State | Meaning | Transition |
+| --- | --- | --- |
+| `open` | Written, not yet transferred; announced every session start | Skill writes the file |
+| `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path>` flips status and stamps `resumed:` |
+| aged out | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); not announced | Time |
+
+Announced ≠ transferred; listed ≠ transferred. Only an explicit `resume` — run
+after the session has actually read and adopted the handoff — changes state.
+`resume` is idempotent and prepends front matter to a legacy file that lacks
+it. CLI: `handoff_ledger.py list [dir] [--json] [--max-age-days N]` prints
+open handoffs oldest-first; `resume <path>` marks transfer.
+
+### 7.3 Session-start announcer
+
+Runs on `SessionStart`; skips sessions started with `source: resume` (a
+continuation already has its context). Scans `.handoffs/*.md` plus legacy
+`HANDOFF.md` for open entries within the age window, then:
+
+- **0 open** — silent.
+- **1 open** — announce with "read it in full and continue", or resume
+  immediately without asking when `CONTEXT_WATCH_AUTORESUME=1`.
+- **N open** — enumerate (topic, age, path) with an instruction to present
+  the list and ask which to resume before any other work, using an
+  interactive question tool where available, with "none" as an option.
+
+Every announcement includes the exact mark-transferred command and the defer
+clause: if the user's opening request is an unrelated explicit task, mention
+the open handoff(s) in one sentence and proceed with their task; the ledger
+is untouched.
+
+## 8. Chat surface
+
+Chat has no hooks and no token feed; the trigger is conversational and the
+persistence substrate is memory plus the conversation itself.
+
+**Memory ledger.** All chat handoffs live in one memory file (suggested name
+`open-handoffs`). Each handoff is a section headed
+`## <topic-slug> — Status: open — <date>`; resumed entries flip to
+`Status: resumed <date>` and remain until the user clears them. The file's
+one-line description is the announcement channel: it must always enumerate
+the open topics ("Open handoffs awaiting resume: pantry-import, kit-v2 …")
+because memory descriptions surface at the start of every new conversation.
+An optional user-preference line ("at the start of each conversation, if my
+open-handoffs file lists open handoffs, mention them in one line before
+answering") upgrades the passive listing to an unconditional first-reply
+announcement — the chat equivalent of the SessionStart hook.
+
+**Persistence order on handoff.** (1) memory ledger upsert + description
+update; (2) always print the handoff block in-conversation, headed by the
+literal line `SESSION HANDOFF — <topic-slug> — <date>` so past-chat search
+can find it; (3) downloadable `HANDOFF.md` as the portable cross-surface
+copy (saved into a project folder as `.handoffs/<topic>.md` with
+`status: open`, the plugin's announcer counts it); (4) a connected
+note-capture tool, if any. The skill never claims a save to an unavailable
+channel.
+
+**Resume resolution order.** Attached/pasted content → memory ledger →
+past-chat search for `SESSION HANDOFF <topic>` → ask for the file. Multiple
+open with no topic named: list one line each and ask. After actual resume:
+flip the entry's status and remove the topic from the description.
+
+**Settings caveats.** Past-chat retrieval requires the "Search and reference
+past chats" setting; chats inside a Project search only that Project. Memory
+and files cross that boundary.
+
+**Honesty rules.** No invented context-usage numbers; no automatic threshold
+claims in chat.
+
+## 9. Analytics
+
+Each trigger appends one JSON line to `~/.context-watch/events.jsonl`
+(override path via `CONTEXT_WATCH_LOG`; `0` disables):
+
+```json
+{"ts": "2026-08-10T23:44:27", "agent": "codex", "model": "gpt-5.5",
+ "occupancy": 160000, "pending_estimate": 0, "threshold": 150000,
+ "threshold_source": "TOKENS_MAP:gpt-5.5",
+ "breakdown": {"input": 155000, "cache_read": 120000, "output": 4000,
+               "reasoning": 1000, "occupancy": 160000},
+ "session_id": "c1", "cwd": "/repo"}
+```
+
+`context_watch.py stats` summarizes: trigger count, per-model average
+trigger occupancy, per-model cache-read share of occupancy, last event. The
+cache-read share is the quality-relevant figure: how much of the window was
+"cheap" context still doing full-weight damage.
+
+## 10. Browser extension (chat initialization)
+
+MV3, identical in Chrome and Edge (load unpacked). Scope:
+`https://claude.ai/*`; permissions: `storage` only.
+
+**Behavior.** A content script polls the URL (~400 ms) to catch SPA soft
+navigations. On a new-chat page (`/` or `/new`) — or any page carrying the
+`#handoff-check` hash, which the toolbar button appends when it opens
+`claude.ai/new#handoff-check` — it waits for the composer (MutationObserver,
+8 s timeout), and injects the template only into an **empty** composer, once
+per new-chat visit, never on existing chats. Insertion uses
+`execCommand("insertText")` (fires the app's input handlers) with a
+textContent + InputEvent fallback. With auto-send enabled, it clicks the send
+button 400 ms later.
+
+**Settings** (options page, `chrome.storage.sync`): template text (default
+asks Claude to check the open-handoffs ledger, list open items one line each
+and ask which to resume, or reply only "No open handoffs"); always-on vs
+button-only; auto-send (default **off** — pre-fill preserves the human veto
+and stays on the typing-assistance side of automating the site; on is the
+zero-keystroke mode).
+
+**Failure posture.** Selectors (`findComposer`, `findSendButton`) are
+defensive and fail silently; a claude.ai DOM change disables injection
+rather than corrupting input.
+
+**Zero-install alternatives.** The desktop app's supported deep link
+`claude://claude.ai/new?q=<encoded prompt>` prefills for review (bindable to
+an OS hotkey). The web `?q=` parameter has come and gone historically — test
+before relying on it; the extension does not depend on it.
+
+**Optional estimator mode (specified, not shipped).** The browser
+transiently holds the conversation JSON, files, project knowledge, and the
+SSE stream; internal payloads expose exact quota data but not exact context
+occupancy, so a chat-side gauge is an estimator: page-world `fetch`/XHR
+wrapper (MV3 `webRequest` cannot read response bodies), local tokenization
+(~4 chars/token; no public Claude tokenizer), producing a **floor** estimate
+blind to server-side assembly (system scaffolding, web search results,
+Research, memory injections). Undercount biases late, so estimator
+thresholds must be compensated downward — roughly 90–110k estimated for a
+120–140k true band. All data stays local and in memory.
+
+## 11. Environment variable reference
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CONTEXT_WATCH_TOKENS_MAP` | — | Per-model absolute thresholds, `key=tokens` comma list |
+| `CONTEXT_WATCH_TOKENS` | — | Global absolute threshold |
+| `CONTEXT_WATCH_PERCENT` | unset | Percent-of-window trigger, only when explicitly set |
+| `CONTEXT_WATCH_WINDOW` | `200000` | Window for the PERCENT path; Codex reports its own |
+| `CONTEXT_WATCH_SKILL` | `session-handoff` | Skill named in the injected instruction |
+| `CONTEXT_WATCH_MODE` | `warn` | `warn` = additionalContext; `block` = blocking channel on PostToolUse |
+| `CONTEXT_WATCH_AGENT` | auto | Force `claude` or `codex` |
+| `CONTEXT_WATCH_PENDING` | on | `0` disables the pending-content estimate |
+| `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Analytics path; `0` disables |
+| `CONTEXT_WATCH_DISABLE` | — | `1` = no-op without uninstalling |
+| `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
+| `CONTEXT_WATCH_AUTORESUME` | — | `1` = resume a single open handoff at start without asking |
+
+## 12. Surface compatibility
+
+| Feature | Claude Code | Codex | Cowork | Chat | Chat + extension |
+| --- | --- | --- | --- | --- | --- |
+| Token-threshold trigger | ✅ | ✅ ¹ | ⚠️ ² | ❌ | ❌ (⚠️ with estimator mode) |
+| Per-model absolute thresholds | ✅ | ✅ ¹ | ⚠️ ² | ❌ | ❌ |
+| Lag closure (output + pending) | ✅ | ✅ ¹ | ⚠️ ² | ❌ | ❌ |
+| Trigger analytics | ✅ | ✅ ¹ | ⚠️ ² | ❌ | ❌ |
+| Structured handoff skill | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Open/resumed ledger state | ✅ | ✅ | ✅ | ✅ ³ | ✅ ³ |
+| Session-start announcement | ✅ | ✅ ¹ | ⚠️ ² | ⚠️ ⁴ | ✅ ⁵ |
+| Choice menu on multiple | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Mark-transferred on resume | ✅ | ✅ | ✅ | ✅ ³ | ✅ ³ |
+| Auto-resume without asking | ✅ | ✅ | ⚠️ ² | ❌ | ⚠️ ⁶ |
+| Runs before first message | ✅ | ✅ ¹ | ⚠️ ² | ❌ | ✅ ⁷ |
+| HANDOFF.md portability | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+¹ Behind Codex's experimental hooks flag; historically unavailable on
+Windows. ² Hooks in-schema but rarely exercised in Cowork; the skill layer
+is the reliable one. ³ Via the memory ledger. ⁴ Passive (ledger description)
+by default; preference line makes it unconditional. ⁵ Injected as the
+literal first message. ⁶ By editing the template to instruct immediate
+resume. ⁷ With auto-send; pre-fill leaves one Enter.
+
+**Host environments.** Warp: CLIs in Warp tabs inherit the full Claude
+Code/Codex columns verbatim (hooks are process-level); Warp's notification
+plugin surfaces the choice menu; per-worktree `.handoffs/` ledgers are the
+default. Warp Agent Mode inherits the Cowork column via an AGENTS.md/Warp
+Rule convention:
+
+```markdown
+## Session handoffs
+Before starting any task, run: python3 scripts/handoff_ledger.py list
+If open handoffs print, mention them in one line and ask which to resume, or none.
+After actually resuming one: python3 scripts/handoff_ledger.py resume <path>
+When wrapping up or parking work, write .handoffs/<topic-slug>.md with
+front matter (topic, created, status: open) using the session-handoff template.
+```
+
+Oz / cloud harnesses: commit the repo-local form of everything (project
+`.claude/` hooks config, the two scripts, `.context-watch.json`,
+`.handoffs/`) — a fresh managed environment has no user-level config; verify
+hooks fire before trusting the threshold there.
+
+## 13. Installation summary
+
+**Claude Code:** `/plugin marketplace add <repo-or-path>` →
+`/plugin install session-handoff@session-handoff-kit`. Plugin ships hooks
+(`PostToolUse`, `UserPromptSubmit`, `SessionStart` via
+`${CLAUDE_PLUGIN_ROOT}`), both scripts, and the skill.
+**Cowork:** open `session-handoff.plugin`, one-click install (shared plugin
+schema).
+**Codex:** `bash codex/install.sh` — copies both scripts to
+`~/.codex/hooks/`, the skill to `~/.codex/skills/session-handoff/`,
+generates `~/.codex/hooks.json` with absolute paths (wrapped shape; some
+builds expect event names at top level — remove the wrapper if hooks don't
+register), then enable `[features] hooks = true` (older builds:
+`codex_hooks = true`).
+**Chat:** save `session-handoff-chat.skill` (or upload in Settings →
+Capabilities).
+**Extension:** load `chrome-extension/` unpacked at `chrome://extensions` /
+`edge://extensions`.
+
+## 14. Known limitations
+
+Codex hooks are experimental: the feature flag name and the accepted
+`hooks.json` shape have varied across versions, and Windows support has
+lagged. Cowork hook execution is best-effort. The extension and any future
+estimator mode couple to claude.ai's DOM and internal API shapes, which
+change without notice; both are built to fail silently rather than
+interfere. Token estimation (pending content, chat estimator) is ±20%-class
+and deliberately early-biased. Claude Code and Codex occupancy measures
+differ slightly in composition, so identical numeric thresholds are not
+identical semantics — normalize via per-model entries. Codex `PostToolUse`
+injection sacrifices one tool result by design. The model-self-report
+approach to token counting is rejected permanently, not pending improvement:
+the information is structurally unavailable to the model.
+
+## 15. Kit layout
+
+```
+session-handoff-kit/
+├── SPEC.md                              this document
+├── README.md                            install matrix + configuration
+├── .claude-plugin/marketplace.json      kit as a Claude Code marketplace
+├── plugins/session-handoff/             Claude Code + Cowork plugin
+│   ├── .claude-plugin/plugin.json
+│   ├── hooks/hooks.json                 PostToolUse, UserPromptSubmit, SessionStart
+│   ├── hooks/context_watch.py           watcher + announcer + analytics (shared)
+│   ├── hooks/handoff_ledger.py          open/resumed state (shared)
+│   ├── hooks/thresholds.example.json    per-model starting values
+│   └── skills/session-handoff/SKILL.md
+├── codex/
+│   ├── install.sh
+│   ├── hooks/                           same two scripts
+│   └── skills/session-handoff/          same skill
+├── chat/session-handoff-chat/SKILL.md   chat-surface skill
+└── chrome-extension/                    new-chat initialization prefill
+```
