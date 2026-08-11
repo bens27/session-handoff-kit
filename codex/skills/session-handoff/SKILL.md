@@ -11,7 +11,7 @@ description: >
   open handoffs are announced, or whenever the user asks to resume or pick up
   parked work.
 metadata:
-  version: "0.4.0"
+  version: "0.4.1"
 ---
 
 # Session Handoff
@@ -88,6 +88,7 @@ topic: <topic-slug>
 created: <ISO date-time>
 status: open
 description: <one line: what is parked here and where it stands>
+skills: <optional comma-separated skill names the resuming session must load first>
 ---
 # Session Handoff — <topic> — <date>
 
@@ -157,6 +158,11 @@ announced or listed. Then perform the §5 post-resume actions.
 Actions to run immediately after a handoff is retrieved and marked resumed,
 before continuing the work. Defaults:
 
+- Load every skill named in the handoff's `skills:` front-matter line (via
+  the Skill tool), in order, before touching the work. When writing a
+  handoff, populate `skills:` with the skills this session had loaded that
+  the work depends on — that is what makes a `/clear` cycle come back with
+  the right skills and only those.
 - Read `LESSONS.md` if the handoff references it.
 
 Projects and users add their own always-run actions here — the pattern is

@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.4.0 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.4.1 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
 
 ---
 
@@ -231,7 +231,12 @@ new dated file and marks the previous one `superseded`
 remain supported; their ending time falls back to front-matter `created`,
 then file mtime. Front matter carries the state plus a one-line
 `description` of what is parked — the announcer surfaces it so handoffs can
-be told apart without opening them:
+be told apart without opening them — and an optional `skills` list (comma
+separated): the skills the parked work depends on. Skills cannot be added
+to or removed from a session's roster at runtime (the roster is fixed at
+session start), but skill *content* only enters context on invocation, so
+a fresh or cleared session that loads exactly the listed skills first
+restores the working context deliberately rather than by accident:
 
 ```markdown
 ---
@@ -239,6 +244,7 @@ topic: auth-refactor
 created: 2026-08-11T14:30
 status: open
 description: JWT refresh rotation half-built; middleware done, tests failing on expiry edge.
+skills: tdd, diagnosing-bugs
 ---
 # Session Handoff — auth-refactor — 2026-08-11
 ```
@@ -283,6 +289,9 @@ Scans `.handoffs/*.md` plus legacy
 - **1 open** — announce (topic, age, path, description) with "read it in
   full and continue", or resume immediately without asking when autoresume
   is active (`AUTORESUME=1`, or the legacy `CONTEXT_WATCH_AUTORESUME=1`).
+  When the handoff's front matter names `skills`, the announcement also
+  instructs loading exactly those skills (via the Skill tool) before
+  resuming, so a `/clear` cycle comes back with the right skills loaded.
 - **N open** — enumerate newest-first (topic, age, path, description) with
   an instruction to present the list and ask which to resume before any
   other work, using an interactive question tool where available, with
