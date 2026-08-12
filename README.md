@@ -4,10 +4,10 @@ When an AI Agent reaches a certain amount of cumulative context usage in a sessi
 
 This kit is my attempt to simplify this. Here are its components:
 1. A context monitor - watches your session's context usage, and allows you to set a limit
-2. Context-limit hooks - when you get to your limit, automatically create a handoff document for a new session to retrieve. Also nudge you to clear your current session context usage (Anthropic - if you're reading this - please allow for programmatic context clearing)
+2. Context-limit hooks - when you get to your limit, automatically create a handoff document for a new session to retrieve. With `AUTORESUME=1`, also nudge you to clear your current session context usage (Anthropic - if you're reading this - please allow for programmatic context clearing)
 3. Session-start actions - when you start or clear a session, automatically check for open handoff documents in the current repo and list them for a user to select (if desired)
 4. Handoff customizations - specify skills to be loaded when a handoff is retrieved 
-5. Basic state management on handoff documents - open/resumed
+5. Basic state management on handoff documents - open/resumed/superseded
 
 One handoff system, packaged for every surface it can run on. A deterministic
 hook watches the session's own token usage and — at a configurable threshold —
@@ -138,13 +138,14 @@ property, not a percentage of the window.
 Threshold resolution — first match wins; model ids matched by longest
 case-insensitive substring:
 
-1. `CONTEXT_WATCH_TOKENS_MAP` — e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
-2. `./.context-watch.json` — project-local per-model config
-3. `~/.context-watch/thresholds.json` — user-global per-model config
-4. `CONTEXT_WATCH_TOKENS` — global absolute
-5. `"default"` key in the config files
-6. `CONTEXT_WATCH_PERCENT` x window — only if PERCENT is explicitly set
-7. Built-in default: 130,000 tokens
+1. `HANDOFF_AT` — per-launch global absolute, highest precedence (`HANDOFF_AT=20000 claude`)
+2. `CONTEXT_WATCH_TOKENS_MAP` — e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
+3. `./.context-watch.json` — project-local per-model config
+4. `~/.context-watch/thresholds.json` — user-global per-model config
+5. `CONTEXT_WATCH_TOKENS` — global absolute
+6. `"default"` key in the config files
+7. `CONTEXT_WATCH_PERCENT` x window — only if PERCENT is explicitly set
+8. Built-in default: 130,000 tokens
 
 Config file format (see `hooks/thresholds.example.json`):
 
