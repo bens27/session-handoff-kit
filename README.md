@@ -1,5 +1,14 @@
 # Session Handoff Kit
 
+When an AI Agent reaches a certain amount of cumulative context usage in a session, you'll notice the quality of their reasoning degrades, and you may even notice a cost increase compared to the same questions with less context usage. This is lovingly referred to as 'the dumb zone'. 
+
+This kit is my attempt to simplify this. Here are its components:
+1. A context monitor - watches your session's context usage, and allows you to set a limit
+2. Context-limit hooks - when you get to your limit, automatically create a handoff document for a new session to retrieve. Also nudge you to clear your current session context usage (Anthropic - if you're reading this - please allow for programmatic context clearing)
+3. Session-start actions - when you start or clear a session, automatically check for open handoff documents in the current repo and list them for a user to select (if desired)
+4. Handoff customizations - specify skills to be loaded when a handoff is retrieved 
+5. Basic state management on handoff documents - open/resumed
+
 One handoff system, packaged for every surface it can run on. A deterministic
 hook watches the session's own token usage and — at a configurable threshold —
 injects a one-time instruction to invoke the `session-handoff` skill, which
