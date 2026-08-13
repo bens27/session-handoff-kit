@@ -89,14 +89,33 @@ bash codex/install.sh
 Then enable hooks in `~/.codex/config.toml` (`[features]` → `hooks = true`;
 older builds used `codex_hooks = true`). The hook reads the session rollout's
 `token_count` events (`last_token_usage`, with the window taken from
-`model_context_window` when reported). Two Codex-specific notes:
+`model_context_window` when reported). Codex-specific notes (verified against
+0.145.0):
 
 - Hooks are experimental and have been unavailable on Windows; the accepted
   `hooks.json` shape has varied across versions (see the installer's note).
+- **Codex only executes the FIRST hook group per event.** If `hooks.json`
+  already has an entry for an event you care about (e.g. installed
+  alongside another tool), `install.sh` merges into that first group via a
+  stdin fan-out (`merge_hooks.py`) rather than appending a second group —
+  appending silently never runs.
+- **Hooks are trusted by command hash, not just installed.** Codex stores a
+  `trusted_hash` per hook in `config.toml`'s `[hooks.state]`, keyed by
+  `hooks.json path : event : group index : hook index`. Editing the command
+  text (including via `merge_hooks.py`) invalidates that hash — the hook is
+  then silently skipped, not errored, until re-approved: either launch
+  `codex` interactively once, or pass `--dangerously-bypass-hook-trust` to
+  `codex exec` for headless/automated invocations.
 - On `PostToolUse`, the only documented injection channel is exit code 2 with
   the message on stderr — which replaces that one tool's result. Acceptable,
   since the instruction is to stop and hand off anyway. `UserPromptSubmit`
   uses plain stdout and is non-destructive.
+- The watcher only runs on `PostToolUse`, so it can only act *after* a tool
+  call completes. A model that does a large chunk of work in one big tool
+  call (e.g. a single `apply_patch` touching many files) can cross the
+  threshold and finish the work in the same step — the hook still fires and
+  a handoff still gets written, just after the work is already done rather
+  than interrupting mid-task.
 - Keep `model_auto_compact_token_limit` above the watcher threshold so the
   handoff always wins the race against auto-compaction.
 
