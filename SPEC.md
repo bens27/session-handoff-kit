@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.4.1 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.5.0 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
 
 ---
 
@@ -81,7 +81,7 @@ conversationally or by standing convention.
 | Component | Role |
 | --- | --- |
 | `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, shared verbatim between Claude Code and Codex. |
-| `hooks/handoff_ledger.py` | Open/resumed state tracking over handoff files. Importable module + CLI (`list`, `resume`). |
+| `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `resume`, `supersede`, `save-path`). |
 | `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. |
 | `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
 | `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
@@ -231,12 +231,14 @@ new dated file and marks the previous one `superseded`
 remain supported; their ending time falls back to front-matter `created`,
 then file mtime. Front matter carries the state plus a one-line
 `description` of what is parked — the announcer surfaces it so handoffs can
-be told apart without opening them — and an optional `skills` list (comma
-separated): the skills the parked work depends on. Skills cannot be added
-to or removed from a session's roster at runtime (the roster is fixed at
-session start), but skill *content* only enters context on invocation, so
-a fresh or cleared session that loads exactly the listed skills first
-restores the working context deliberately rather than by accident:
+be told apart without opening them — plus optional comma-separated `skills`
+and `references` lists. `skills` names the skills the parked work depends
+on; `references` names other paths the next session must also read when
+resolving the thread. Skills cannot be added to or removed from a session's
+roster at runtime (the roster is fixed at session start), but skill
+*content* only enters context on invocation, so a fresh or cleared session
+that loads exactly the listed skills first restores the working context
+deliberately rather than by accident:
 
 ```markdown
 ---
@@ -245,6 +247,7 @@ created: 2026-08-11T14:30
 status: open
 description: JWT refresh rotation half-built; middleware done, tests failing on expiry edge.
 skills: tdd, diagnosing-bugs
+references: docs/auth-notes.md, tests/auth_refresh_test.py
 ---
 # Session Handoff — auth-refactor — 2026-08-11
 ```
@@ -274,8 +277,14 @@ after the session has actually read and adopted the handoff — changes state.
 `resume` and `supersede` are idempotent and prepend front matter to a legacy
 file that lacks it. CLI: `handoff_ledger.py list [dir] [--json]
 [--max-age-days N]` prints open handoffs newest-first (ended, topic, path,
-description); `resume <path>` marks transfer; `supersede <path>` marks
-replacement.
+description); `resolve <topic-or-path> [dir] [--json]` prints the full
+oldest-first chain for that topic across all statuses, with the most recent
+entry as `authoritative` and a deduplicated `must_also_read` list from each
+entry's `references:` front matter; `resume <path>` marks transfer;
+`supersede <path> [--by <new-path>]` marks replacement and, with `--by`,
+records the newer handoff as a forward link; `save-path [dir]` prints where
+new handoffs should be written: `<dir>/.handoffs` when it exists, otherwise
+the per-project fallback `~/.claude/handoffs/<project-basename>/`.
 
 ### 7.3 Session-start announcer
 
@@ -336,7 +345,10 @@ channel.
 **Resume resolution order.** Attached/pasted content → memory ledger →
 past-chat search for `SESSION HANDOFF <topic>` → ask for the file. Multiple
 open with no topic named: list one line each and ask. After actual resume:
-flip the entry's status and remove the topic from the description.
+flip the entry's status and remove the topic from the description. This is
+coarser than the agent-surface ledger's `resolve` command, which returns a
+full oldest-first chain plus a `must_also_read` reference list; the chat
+surface has no equivalent chain/reference concept today.
 
 **Settings caveats.** Past-chat retrieval requires the "Search and reference
 past chats" setting; chats inside a Project search only that Project. Memory
@@ -520,7 +532,7 @@ session-handoff-kit/
 │   ├── README.md                        plugin-level install notes
 │   ├── hooks/hooks.json                 PostToolUse, UserPromptSubmit, SessionStart
 │   ├── hooks/context_watch.py           watcher + announcer + analytics (shared)
-│   ├── hooks/handoff_ledger.py          open/resumed state (shared)
+│   ├── hooks/handoff_ledger.py          state and chain tracking (shared)
 │   ├── hooks/thresholds.example.json    per-model starting values
 │   └── skills/session-handoff/SKILL.md
 ├── codex/

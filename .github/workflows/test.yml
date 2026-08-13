@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Prepare extension verifier Python path
+        run: |
+          sudo mkdir -p /opt/homebrew/bin
+          sudo ln -sf "$(command -v python3)" /opt/homebrew/bin/python3.14
+
+      - name: Verify packaging
+        run: python3 tests/verify-packaging.py
+
+      - name: Verify ledger
+        run: python3 tests/verify-ledger.py
+
+      - name: Verify watcher
+        run: python3 tests/verify-watcher.py
+
+      - name: Verify skills
+        run: python3 tests/verify-skills.py
+
+      - name: Verify extension
+        run: bash tests/verify-extension.sh

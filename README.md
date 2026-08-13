@@ -203,6 +203,15 @@ re-announce what was already picked up:
 - **Several open** — enumerated, with an instruction to ask the user which one
   to resume before any other work.
 
+The ledger CLI also supports thread-oriented resolution: `handoff_ledger.py
+resolve <topic-or-path> [dir] [--json]` returns the full oldest-first chain
+for a topic, the authoritative latest handoff, and any must-also-read
+references from `references:` front matter. `handoff_ledger.py supersede
+<path> [--by <new-path>]` can record the newer handoff as a forward link, and
+`handoff_ledger.py save-path [dir]` prints where new handoffs should be
+written, using `<dir>/.handoffs` when present and otherwise the per-project
+fallback under `~/.claude/handoffs/<project-basename>/`.
+
 Deliberate ceiling: the announcer informs and offers, it does not hijack — if
 the session opens with an unrelated explicit task, open handoffs get one
 sentence and the user's task proceeds. In chat, the same ledger lives in one
@@ -225,7 +234,7 @@ session-handoff-kit/
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart
 │   ├── hooks/context_watch.py           # the unified watcher (also used by Codex)
-│   ├── hooks/handoff_ledger.py          # tracks open and resumed handoffs
+│   ├── hooks/handoff_ledger.py          # tracks handoff state and chains
 │   ├── hooks/thresholds.example.json    # sample per-model threshold config
 │   └── skills/session-handoff/SKILL.md
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts

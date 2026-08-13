@@ -11,7 +11,7 @@ description: >
   open handoffs are announced, or whenever the user asks to resume or pick up
   parked work.
 metadata:
-  version: "0.4.1"
+  version: "0.5.0"
 ---
 
 # Session Handoff
@@ -60,20 +60,22 @@ post-resume actions — is yours to change.
 
 ## §2 Naming and location
 
-Write to `./.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`, where the timestamp
-is the handoff's ending date/time (now) and the slug is a short kebab-case
-name for the thread of work (`20260811-1430-auth-refactor`). One dated file
-per handoff, so the directory reads as a chronology. When handing off the
-same thread again, write a new dated file and mark the previous one
-replaced: `python3 <hooks-dir>/handoff_ledger.py supersede <old-path>`.
+Run `python3 <hooks-dir>/handoff_ledger.py save-path [dir]` first and write
+to the directory it prints, using `<YYYYMMDD-HHMM>-<topic-slug>.md`, where
+the timestamp is the handoff's ending date/time (now) and the slug is a
+short kebab-case name for the thread of work
+(`20260811-1430-auth-refactor`). One dated file per handoff, so the
+directory reads as a chronology. When handing off the same thread again,
+write a new dated file and mark the previous one replaced:
+`python3 <hooks-dir>/handoff_ledger.py supersede <old-path> --by <new-path>`.
 Legacy undated files and the single-file `./HANDOFF.md` (topic "default")
 remain supported.
 
-Customizing: any `.md` filename under `./.handoffs/` is scanned, so a
-project may impose its own convention (ticket ids, sprint prefixes). Keep
-the ending date/time recoverable — either in the filename prefix or a
-`created:` front-matter line — so announcements can order handoffs newest
-first.
+Customizing: any `.md` filename under the directory printed by
+`handoff_ledger.py save-path [dir]` is scanned, so a project may impose its
+own convention (ticket ids, sprint prefixes). Keep the ending date/time
+recoverable — either in the filename prefix or a `created:` front-matter
+line — so announcements can order handoffs newest first.
 
 ## §3 Document structure
 
@@ -81,6 +83,10 @@ Start the file with this front matter — `status: open` is what marks it
 untransferred for the session-start announcer, and `description` is the
 one-line summary the announcer shows so handoffs can be told apart without
 opening them (make it specific: what is parked and where it stands):
+Use `references:` when this thread depends on another file or an earlier
+handoff: name it there so `resolve` surfaces it automatically to whoever
+resumes, instead of relying on the resuming session to notice it needs that
+file.
 
 ```markdown
 ---
@@ -89,6 +95,7 @@ created: <ISO date-time>
 status: open
 description: <one line: what is parked here and where it stands>
 skills: <optional comma-separated skill names the resuming session must load first>
+references: <optional comma-separated paths another resuming session must also read (feeds resolve's must_also_read list)>
 ---
 # Session Handoff — <topic> — <date>
 
@@ -136,10 +143,13 @@ the second `---` is free-form.
 At session start, a `[context-watch]` notice lists any open handoffs, each
 with its description.
 
-- **One open handoff**: read the file in full before any other action,
-  restate the objective and the first next step in one or two sentences,
-  confirm with the user unless configuration or the user has said to
-  proceed, then continue from "Next steps".
+- **One open handoff**: run
+  `python3 <hooks-dir>/handoff_ledger.py resolve <topic> [dir]` using the
+  topic from the announcement, then read the `authoritative` file and every
+  path listed in `must_also_read` before any other action, restate the
+  objective and the first next step in one or two sentences, confirm with the
+  user unless configuration or the user has said to proceed, then continue
+  from "Next steps".
 - **Multiple open handoffs**: before any other work, present the list and ask
   which one to resume — use an interactive question tool if available —
   including a "none of these" option. Then resume the chosen one as above.
@@ -181,7 +191,8 @@ handoff's "Next steps".
   that reads the session's own transcript token usage and fires once per
   session; a `SessionStart` hook runs the announcer. `hooks/handoff_ledger.py`
   tracks open vs resumed vs superseded and can be run directly: `list`,
-  `resume <path>`, and `supersede <path>`.
+  `resolve <topic-or-path>`, `resume <path>`,
+  `supersede <path> [--by <new-path>]`, and `save-path [dir]`.
 - Thresholds are absolute tokens per model (quality degrades at an absolute
   occupancy, not a percentage of the window): HANDOFF_AT (per-launch, highest
   precedence), then CONTEXT_WATCH_TOKENS_MAP, then ./.context-watch.json,

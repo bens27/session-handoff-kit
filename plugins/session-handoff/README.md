@@ -14,9 +14,12 @@ handoff ledger.
   `source: resume`/`compact`/`fork` are skipped, and unrelated opening
   requests are deferred to, so the announcer informs without hijacking.
 - **Ledger** (`hooks/handoff_ledger.py`): `list` prints open handoffs
-  newest-first; `resume <path>` marks a handoff transferred and `supersede
-  <path>` marks it replaced by a newer one, so future sessions stop
-  announcing it. The skill runs these after resuming / re-handing-off.
+  newest-first; `resolve <topic>` returns the full chain for a topic plus
+  must-also-read references; `resume <path>` marks a handoff transferred;
+  `supersede <path> [--by <new-path>]` marks it replaced by a newer one
+  and can record the forward link, so future sessions stop announcing it;
+  `save-path` prints where to write new handoffs. The skill runs the state
+  transitions after resuming / re-handing-off.
 - **Skill** (`skills/session-handoff/SKILL.md`): writes
   `./.handoffs/<YYYYMMDD-HHMM>-<topic>.md` — named by ending date/time, with
   `status: open` and a one-line `description:` in front matter (objective,
