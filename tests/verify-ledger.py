@@ -137,6 +137,92 @@ def main():
     check("supersede-idempotent", len(status_lines) == 1,
           "content=%r" % alpha_text2[:300])
 
+    # 5. resolve: reproduces the pdf-mcp-mvp-build retrospective's exact
+    #    scenario — a NEWER handoff declares `references:` pointing at an
+    #    OLDER, already-superseded handoff that holds the real specs.
+    #    resolve must surface both, oldest-first, and name the newer one
+    #    authoritative.
+    tmp4 = tempfile.mkdtemp(prefix="ledger-verify4-")
+    hd4 = os.path.join(tmp4, ".handoffs")
+    os.makedirs(hd4)
+    older = os.path.join(hd4, "20260812-1530-pdf-mcp-mvp-build.md")
+    newer = os.path.join(hd4, "20260813-0002-pdf-mcp-mvp-build.md")
+    with open(older, "w") as f:
+        f.write("---\ntopic: pdf-mcp-mvp-build\nstatus: superseded\n"
+                 "description: original wave 2-5 specs\n---\n# older\n")
+    with open(newer, "w") as f:
+        f.write("---\ntopic: pdf-mcp-mvp-build\nstatus: open\n"
+                 "description: current handoff\n"
+                 "references: .handoffs/20260812-1530-pdf-mcp-mvp-build.md\n---\n# newer\n")
+    p = run(["resolve", "pdf-mcp-mvp-build", tmp4, "--json"], tmp4)
+    check("resolve-exit0", p.returncode == 0, "rc=%d stderr=%r" % (p.returncode, p.stderr[:300]))
+    try:
+        result = json.loads(p.stdout)
+    except Exception as e:
+        result = {}
+        check("resolve-json-parses", False, "%s; stdout=%r" % (e, p.stdout[:300]))
+    else:
+        check("resolve-json-parses", True)
+    chain_paths = [os.path.basename(h.get("path", "")) for h in result.get("chain", [])]
+    check("resolve-chain-oldest-first",
+          chain_paths == ["20260812-1530-pdf-mcp-mvp-build.md", "20260813-0002-pdf-mcp-mvp-build.md"],
+          "chain=%r" % chain_paths)
+    check("resolve-authoritative-is-newest",
+          os.path.basename(result.get("authoritative", "")) == "20260813-0002-pdf-mcp-mvp-build.md",
+          "authoritative=%r" % result.get("authoritative"))
+    must_read = [os.path.basename(p2) for p2 in result.get("must_also_read", [])]
+    check("resolve-surfaces-references",
+          "20260812-1530-pdf-mcp-mvp-build.md" in must_read,
+          "must_also_read=%r" % must_read)
+    p = run(["resolve", "no-such-topic", tmp4], tmp4)
+    check("resolve-unknown-topic-fails", p.returncode != 0,
+          "rc=%d (expected nonzero)" % p.returncode)
+
+    # 6. save-path: deterministic write-location lookup — an existing
+    #    .handoffs/ (even empty) wins; otherwise fall back to the generic
+    #    ~/.claude/handoffs/<project-name>/ path.
+    tmp5 = tempfile.mkdtemp(prefix="ledger-verify5-with-")
+    os.makedirs(os.path.join(tmp5, ".handoffs"))
+    with open(os.path.join(tmp5, ".handoffs", "20260101-0000-x.md"), "w") as f:
+        f.write("---\nstatus: open\n---\n# x\n")
+    p = run(["save-path", tmp5], tmp5)
+    check("save-path-with-convention-returns-local",
+          p.returncode == 0 and p.stdout.strip() == os.path.join(tmp5, ".handoffs"),
+          "rc=%d stdout=%r" % (p.returncode, p.stdout.strip()))
+
+    tmp6 = tempfile.mkdtemp(prefix="ledger-verify6-without-myproj-")
+    p = run(["save-path", tmp6], tmp6)
+    expected_fallback = os.path.expanduser(
+        os.path.join("~/.claude/handoffs", os.path.basename(tmp6)))
+    check("save-path-without-convention-falls-back",
+          p.returncode == 0 and p.stdout.strip() == expected_fallback,
+          "rc=%d stdout=%r want=%r" % (p.returncode, p.stdout.strip(), expected_fallback))
+
+    tmp7 = tempfile.mkdtemp(prefix="ledger-verify7-empty-")
+    os.makedirs(os.path.join(tmp7, ".handoffs"))
+    p = run(["save-path", tmp7], tmp7)
+    check("save-path-empty-handoffs-dir-still-wins",
+          p.stdout.strip() == os.path.join(tmp7, ".handoffs"),
+          "stdout=%r" % p.stdout.strip())
+
+    # 7. supersede --by: bidirectional link, backward compatible with plain
+    #    supersede (already covered above).
+    tmp8 = tempfile.mkdtemp(prefix="ledger-verify8-supersede-by-")
+    hd8 = os.path.join(tmp8, ".handoffs")
+    os.makedirs(hd8)
+    old2 = os.path.join(hd8, "20260810-0900-topic.md")
+    new2 = os.path.join(hd8, "20260811-0900-topic.md")
+    with open(old2, "w") as f:
+        f.write("---\ntopic: topic\nstatus: open\n---\n# old\n")
+    with open(new2, "w") as f:
+        f.write("---\ntopic: topic\nstatus: open\n---\n# new\n")
+    p = run(["supersede", old2, "--by", new2], tmp8)
+    check("supersede-by-exit0", p.returncode == 0, "stderr=%r" % p.stderr[:300])
+    old2_text = open(old2).read()
+    check("supersede-by-writes-link", ("superseded_by: " + new2) in old2_text,
+          "content=%r" % old2_text[:400])
+    check("supersede-by-still-marks-status", "status: superseded" in old2_text)
+
     print()
     if failures:
         print("FAILED: %d assertion(s): %s" % (len(failures), ", ".join(failures)))
