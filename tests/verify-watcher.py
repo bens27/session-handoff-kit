@@ -6,9 +6,11 @@ asserts the fixed behaviors. Run from the repo root (worktree)."""
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 REPO = os.getcwd()
@@ -179,6 +181,49 @@ def main():
         announced = "demo-topic" in p5.stdout
         check("announcer-source-%s" % src, p5.returncode == 0 and announced == expect_announce,
               "rc=%d stdout=%r" % (p5.returncode, p5.stdout[:200]))
+    p_single_ended = run_hook({"hook_event_name": "SessionStart", "source": "startup",
+                               "cwd": proj, "session_id": "verify-ss-ended"},
+                              {"TMPDIR": latchdir})
+    check("announcer-ended-single",
+          p_single_ended.returncode == 0 and "2026-08-11T09:00" in p_single_ended.stdout
+          and "d old" in p_single_ended.stdout,
+          "rc=%d stdout=%r" % (p_single_ended.returncode, p_single_ended.stdout[:500]))
+
+    proj_multi = os.path.join(tmp, "proj-multi")
+    os.makedirs(os.path.join(proj_multi, ".handoffs"))
+    with open(os.path.join(proj_multi, ".handoffs", "first.md"), "w") as f:
+        f.write("---\ntopic: first\ncreated: 2026-08-10T08:30\nstatus: open\n---\n# Session Handoff — first\n")
+    with open(os.path.join(proj_multi, ".handoffs", "second.md"), "w") as f:
+        f.write("---\ntopic: second\ncreated: 2026-08-11T14:45\nstatus: open\n---\n# Session Handoff — second\n")
+    p_multi_ended = run_hook({"hook_event_name": "SessionStart", "source": "startup",
+                              "cwd": proj_multi, "session_id": "verify-multi-ended"},
+                             {"TMPDIR": latchdir})
+    check("announcer-ended-multi",
+          p_multi_ended.returncode == 0 and "2026-08-10T08:30" in p_multi_ended.stdout
+          and "2026-08-11T14:45" in p_multi_ended.stdout and "d old" in p_multi_ended.stdout,
+          "rc=%d stdout=%r" % (p_multi_ended.returncode, p_multi_ended.stdout[:700]))
+
+    fallback_hook_dir = os.path.join(tmp, "fallback-hook")
+    os.makedirs(fallback_hook_dir)
+    fallback_hook = os.path.join(fallback_hook_dir, "context_watch.py")
+    shutil.copyfile(PLUGIN, fallback_hook)
+    fallback_proj = os.path.join(tmp, "fallback-proj")
+    os.makedirs(fallback_proj)
+    fallback_path = os.path.join(fallback_proj, "HANDOFF.md")
+    with open(fallback_path, "w") as f:
+        f.write("# Legacy handoff\n")
+    old_mtime = time.time() - 13 * 86400.0
+    os.utime(fallback_path, (old_mtime, old_mtime))
+    expected_ended = time.strftime("%Y-%m-%dT%H:%M", time.localtime(old_mtime))
+    p_fallback = run_hook({"hook_event_name": "SessionStart", "source": "startup",
+                           "cwd": fallback_proj, "session_id": "verify-fallback"},
+                          {"TMPDIR": latchdir}, script=fallback_hook)
+    check("announcer-fallback-age-from-mtime",
+          p_fallback.returncode == 0 and "default" in p_fallback.stdout
+          and "13d old" in p_fallback.stdout and "0d old" not in p_fallback.stdout
+          and expected_ended in p_fallback.stdout,
+          "rc=%d expected_ended=%s stdout=%r" % (p_fallback.returncode, expected_ended,
+                                                p_fallback.stdout[:700]))
 
     # 9. Announcer includes descriptions and autoresume language only when enabled
     proj_desc = os.path.join(tmp, "proj-desc")

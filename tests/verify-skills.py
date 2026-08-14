@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Executed verification for the skills fix lane. Run from repo root (worktree)."""
+import json
 import os
 import re
 import sys
@@ -8,6 +9,7 @@ REPO = os.getcwd()
 AGENT = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/SKILL.md")
 CODEX = os.path.join(REPO, "codex/skills/session-handoff/SKILL.md")
 CHAT = os.path.join(REPO, "chat/session-handoff-chat/SKILL.md")
+PLUGIN_JSON = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
 
 failures = []
 
@@ -22,10 +24,12 @@ def main():
     a = open(AGENT).read()
     c = open(CODEX).read()
     chat = open(CHAT).read()
+    plugin_version = json.load(open(PLUGIN_JSON))["version"]
 
     check("agent-copies-identical", a == c)
-    check("agent-version-0.5.0", re.search(r"version:\s*\"?0\.5\.0", a) is not None,
-          "agent SKILL.md must declare version 0.5.0 (SPEC header)")
+    check("agent-version-matches-plugin-json",
+          re.search(r'version:\s*"?%s\b' % re.escape(plugin_version), a) is not None,
+          "agent SKILL.md must declare version %s (from plugin.json, the single source of truth)" % plugin_version)
 
     # Chat resume-resolution order (SPEC section 8): attached/pasted content FIRST,
     # then memory ledger, then past-chat search, then ask. Find the resume section

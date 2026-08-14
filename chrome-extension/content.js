@@ -8,7 +8,7 @@
 const DEFAULTS = {
   template:
     "Session start: check my open-handoffs ledger. If any handoffs are open, " +
-    "list each in one line (topic, age, first next step) and ask which to " +
+    "list each in one line (topic, stored date, first next step) and ask which to " +
     "resume. If none are open, reply only: No open handoffs.",
   alwaysOn: true,   // inject on every new chat; false = only via toolbar button (#handoff-check)
   autoSend: false,  // pre-fill only by default — keep the human veto
@@ -101,7 +101,11 @@ async function maybeInject() {
   if (!composer || !composerIsEmpty(composer)) return;
 
   lastInjectedUrl = urlKey;
-  insertText(composer, settings.template);
+  const sessionStartTimestamp = new Date().toISOString();
+  insertText(
+    composer,
+    `Session start timestamp: ${sessionStartTimestamp}. ${settings.template}`
+  );
 
   if (settings.autoSend) {
     setTimeout(() => {

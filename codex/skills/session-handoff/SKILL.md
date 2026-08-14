@@ -11,7 +11,7 @@ description: >
   open handoffs are announced, or whenever the user asks to resume or pick up
   parked work.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
 ---
 
 # Session Handoff
@@ -60,11 +60,11 @@ post-resume actions — is yours to change.
 
 ## §2 Naming and location
 
-Run `python3 <hooks-dir>/handoff_ledger.py save-path [dir]` first and write
-to the directory it prints, using `<YYYYMMDD-HHMM>-<topic-slug>.md`, where
-the timestamp is the handoff's ending date/time (now) and the slug is a
-short kebab-case name for the thread of work
-(`20260811-1430-auth-refactor`). One dated file per handoff, so the
+Choose a short kebab-case `<topic-slug>` for the thread of work, then run
+`python3 <hooks-dir>/handoff_ledger.py new-path <topic-slug> [dir] --json`.
+Write to the `path` field verbatim, and use the `created` field verbatim for
+the front-matter `created:` value (§3) and the title date (§3); never compute
+or guess either value independently. One dated file per handoff, so the
 directory reads as a chronology. When handing off the same thread again,
 write a new dated file and mark the previous one replaced:
 `python3 <hooks-dir>/handoff_ledger.py supersede <old-path> --by <new-path>`.
@@ -79,7 +79,8 @@ line — so announcements can order handoffs newest first.
 
 ## §3 Document structure
 
-Start the file with this front matter — `status: open` is what marks it
+Start the file with this front matter — `created:` comes verbatim from
+`new-path`'s `created` field (§2), `status: open` is what marks it
 untransferred for the session-start announcer, and `description` is the
 one-line summary the announcer shows so handoffs can be told apart without
 opening them (make it specific: what is parked and where it stands):
@@ -87,6 +88,8 @@ Use `references:` when this thread depends on another file or an earlier
 handoff: name it there so `resolve` surfaces it automatically to whoever
 resumes, instead of relying on the resuming session to notice it needs that
 file.
+For the title line, `<date>` is the same `created` value from `new-path`
+(a short date form is fine), not a separately computed or recalled date.
 
 ```markdown
 ---
@@ -192,7 +195,8 @@ handoff's "Next steps".
   session; a `SessionStart` hook runs the announcer. `hooks/handoff_ledger.py`
   tracks open vs resumed vs superseded and can be run directly: `list`,
   `resolve <topic-or-path>`, `resume <path>`,
-  `supersede <path> [--by <new-path>]`, and `save-path [dir]`.
+  `supersede <path> [--by <new-path>]`, `save-path [dir]`, and
+  `new-path <topic> [dir] [--json]`.
 - Thresholds are absolute tokens per model (quality degrades at an absolute
   occupancy, not a percentage of the window): HANDOFF_AT (per-launch, highest
   precedence), then CONTEXT_WATCH_TOKENS_MAP, then ./.context-watch.json,
@@ -203,6 +207,8 @@ handoff's "Next steps".
   CONTEXT_WATCH_AUTORESUME=1) a single open handoff is resumed at session
   start without asking; `HANDOFF_AT=<n> AUTORESUME=1 claude` makes the whole
   hand-off-and-continue cycle cost the user one `/clear`.
-- In environments without hooks, this skill still works: check `./.handoffs/`
-  and `./HANDOFF.md` for `status: open` entries whenever beginning work in a
-  folder, announce them in one sentence, and follow the same resume procedure.
+- In environments without hooks, this skill still works: run
+  `python3 <hooks-dir>/handoff_ledger.py list [dir] --json --max-age-days <N>`
+  whenever beginning work in a folder, using the same 14-day default as
+  `CONTEXT_WATCH_MAX_AGE_DAYS`; announce the JSON entries it returns exactly
+  like the hooked announcer does, and follow the same resume procedure.

@@ -205,7 +205,63 @@ def main():
           p.stdout.strip() == os.path.join(tmp7, ".handoffs"),
           "stdout=%r" % p.stdout.strip())
 
-    # 7. supersede --by: bidirectional link, backward compatible with plain
+    # 7. new-path: deterministic path metadata for a new handoff, using one
+    #    timestamp for both filename and created front matter.
+    tmp9 = tempfile.mkdtemp(prefix="ledger-verify9-new-path-")
+    os.makedirs(os.path.join(tmp9, ".handoffs"))
+    p = run(["new-path", "fresh-topic", tmp9], tmp9)
+    p_save = run(["save-path", tmp9], tmp9)
+    fields = {}
+    lines = p.stdout.strip().splitlines()
+    for line in lines:
+        key, sep, value = line.partition(": ")
+        if sep:
+            fields[key] = value
+    expected_directory = p_save.stdout.strip()
+    expected_filename = fields.get("filename", "")
+    expected_path = os.path.join(expected_directory, expected_filename)
+    check("new-path-default-exit0", p.returncode == 0,
+          "rc=%d stderr=%r" % (p.returncode, p.stderr[:200]))
+    check("new-path-default-fields-present",
+          set(fields.keys()) == set(["directory", "filename", "path", "created"]),
+          "stdout=%r" % p.stdout[:500])
+    check("new-path-default-line-order",
+          [line.partition(": ")[0] for line in lines] == ["directory", "filename", "path", "created"],
+          "stdout=%r" % p.stdout[:500])
+    check("new-path-directory-matches-save-path",
+          fields.get("directory") == expected_directory,
+          "directory=%r want=%r" % (fields.get("directory"), expected_directory))
+    check("new-path-path-joins-directory-and-filename",
+          fields.get("path") == expected_path,
+          "path=%r want=%r" % (fields.get("path"), expected_path))
+    check("new-path-topic-used-verbatim",
+          expected_filename.endswith("-fresh-topic.md"),
+          "filename=%r" % expected_filename)
+    filename_minute = expected_filename[:13]
+    created_minute = (fields.get("created", "")[:4] + fields.get("created", "")[5:7]
+                      + fields.get("created", "")[8:10] + "-"
+                      + fields.get("created", "")[11:13]
+                      + fields.get("created", "")[14:16])
+    check("new-path-filename-and-created-share-minute",
+          filename_minute == created_minute,
+          "filename=%r created=%r" % (expected_filename, fields.get("created")))
+
+    p = run(["new-path", "json-topic", tmp9, "--json"], tmp9)
+    try:
+        generated = json.loads(p.stdout)
+    except Exception as e:
+        generated = {}
+        check("new-path-json-parses", False, "%s; stdout=%r" % (e, p.stdout[:300]))
+    else:
+        check("new-path-json-parses", True)
+    check("new-path-json-exact-keys",
+          set(generated.keys()) == set(["directory", "filename", "path", "created"]),
+          "keys=%r" % sorted(generated.keys()))
+    check("new-path-json-directory-matches-save-path",
+          generated.get("directory") == expected_directory,
+          "directory=%r want=%r" % (generated.get("directory"), expected_directory))
+
+    # 8. supersede --by: bidirectional link, backward compatible with plain
     #    supersede (already covered above).
     tmp8 = tempfile.mkdtemp(prefix="ledger-verify8-supersede-by-")
     hd8 = os.path.join(tmp8, ".handoffs")

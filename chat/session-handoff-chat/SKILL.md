@@ -97,7 +97,7 @@ open topic:
 1. Check attached or pasted handoff content first.
 2. If there is no attached or pasted handoff content, read the ledger.
    **Multiple open handoffs and no topic named**: list them
-   in one line each (topic, age, first next step) and ask which to resume,
+   in one line each (topic, stored date, first next step) and ask which to resume,
    with "none" as an option. **One open**: confirm in a sentence and proceed.
    **A topic named**: go straight to it.
 3. No ledger or no match: search past chats for `SESSION HANDOFF <topic>`. If

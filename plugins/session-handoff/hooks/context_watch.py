@@ -339,9 +339,14 @@ def handle_session_start(evt, agent):
     except Exception:
         path = os.path.join(cwd, "HANDOFF.md")
         try:
-            if os.path.isfile(path) and (time.time() - os.path.getmtime(path)) <= max_age * 86400:
-                open_handoffs = [{"path": path, "topic": "default", "age_days": 0.0,
-                                  "description": "", "skills": ""}]
+            if os.path.isfile(path):
+                mtime = os.path.getmtime(path)
+                age_days = (time.time() - mtime) / 86400.0
+                if age_days <= max_age:
+                    open_handoffs = [{"path": path, "topic": "default",
+                                      "ended": time.strftime("%Y-%m-%dT%H:%M", time.localtime(mtime)),
+                                      "age_days": round(age_days, 1),
+                                      "description": "", "skills": ""}]
         except Exception:
             pass
 
@@ -367,13 +372,13 @@ def handle_session_start(evt, agent):
         if skills:
             skills_note = ("First load exactly these skills via the Skill tool, in "
                            "order, before resuming: %s. " % skills)
-        note = ("[context-watch] One open handoff awaiting resume: '%s' (%.0fd old) at %s%s. "
-                % (h["topic"], h["age_days"], h["path"], suffix)
+        note = ("[context-watch] One open handoff awaiting resume: '%s' (%.0fd old, ended %s) at %s%s. "
+                % (h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"], suffix)
                 + action + skills_note + mark + " " + defer)
     else:
         listing = "; ".join(
-            "%d) %s (%.0fd old, %s)%s%s" % (
-                i + 1, h["topic"], h["age_days"], h["path"],
+            "%d) %s (%.0fd old, ended %s, %s)%s%s" % (
+                i + 1, h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"],
                 " — %s" % h.get("description") if h.get("description") else "",
                 " [skills: %s]" % h.get("skills") if h.get("skills") else "")
             for i, h in enumerate(open_handoffs)

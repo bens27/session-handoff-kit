@@ -20,6 +20,7 @@ Subcommands:
   list [dir] [--json] [--max-age-days N]   print open handoffs (default dir: .)
   resolve <topic-or-path> [dir] [--json]   print every handoff for a topic
                                             oldest first, across all statuses
+  new-path <topic> [dir] [--json]          print deterministic path data for a new handoff
   resume <path>                            mark a handoff resumed (transferred)
   supersede <path> [--by <new-path>]       mark a handoff replaced by a newer one
   save-path [dir]                          print where new handoffs should be saved
@@ -194,6 +195,18 @@ def save_path(root):
                                            os.path.basename(abs_root)))
 
 
+def new_path(topic, root):
+    now = datetime.now()
+    directory = save_path(root)
+    filename = "%s-%s.md" % (now.strftime("%Y%m%d-%H%M"), topic)
+    return {
+        "directory": directory,
+        "filename": filename,
+        "path": os.path.join(directory, filename),
+        "created": now.strftime("%Y-%m-%dT%H:%M"),
+    }
+
+
 def _mark(path, status, superseded_by=None):
     """Flip a handoff's status and stamp the time. Idempotent."""
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -293,6 +306,23 @@ def _cli(argv):
     if cmd == "save-path":
         root = args[0] if args else "."
         print(save_path(root))
+        return 0
+    if cmd == "new-path":
+        as_json = "--json" in args
+        args = [a for a in args if a != "--json"]
+        if not args:
+            print("usage: handoff_ledger.py new-path <topic> [dir] [--json]",
+                  file=sys.stderr)
+            return 1
+        root = args[1] if len(args) > 1 else "."
+        result = new_path(args[0], root)
+        if as_json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("directory: %s" % result["directory"])
+            print("filename: %s" % result["filename"])
+            print("path: %s" % result["path"])
+            print("created: %s" % result["created"])
         return 0
     if cmd in ("resume", "supersede"):
         if not args:

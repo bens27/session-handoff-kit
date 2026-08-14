@@ -18,8 +18,11 @@ handoff ledger.
   must-also-read references; `resume <path>` marks a handoff transferred;
   `supersede <path> [--by <new-path>]` marks it replaced by a newer one
   and can record the forward link, so future sessions stop announcing it;
-  `save-path` prints where to write new handoffs. The skill runs the state
-  transitions after resuming / re-handing-off.
+  `save-path` prints where to write new handoffs; `new-path <topic> [dir]
+  [--json]` uses one clock read to return the directory, filename, path, and
+  `created` value, so a new handoff's timestamp is never independently
+  guessed. The skill runs the state transitions after resuming /
+  re-handing-off.
 - **Skill** (`skills/session-handoff/SKILL.md`): writes
   `./.handoffs/<YYYYMMDD-HHMM>-<topic>.md` — named by ending date/time, with
   `status: open` and a one-line `description:` in front matter (objective,

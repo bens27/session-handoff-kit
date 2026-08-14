@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.5.0 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.6.0 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
 
 ---
 
@@ -74,14 +74,15 @@ Every deterministic deployment assembles the same three primitives:
 
 Where hooks do not exist (chat, Cowork native tasks, Warp Agent Mode), the
 skill layer and the file/memory ledger still operate, triggered
-conversationally or by standing convention.
+conversationally or by standing convention; file-ledger fallback checks run
+`handoff_ledger.py list --json` rather than manually inspecting files.
 
 ### Components
 
 | Component | Role |
 | --- | --- |
 | `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, shared verbatim between Claude Code and Codex. |
-| `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `resume`, `supersede`, `save-path`). |
+| `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `resume`, `supersede`, `save-path`, `new-path`). |
 | `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. |
 | `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
 | `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
@@ -224,8 +225,10 @@ or disable Claude Code auto-compact in `/config`).
 
 Handoffs live at `./.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`, named by the
 handoff's **ending date/time** so a directory listing is a chronology
-(`20260811-1430-auth-refactor.md`). Re-handoff of the same thread writes a
-new dated file and marks the previous one `superseded`
+(`20260811-1430-auth-refactor.md`). The filename stamp and `created:` front
+matter come from one `handoff_ledger.py new-path <topic> [dir] [--json]`
+call, not independent timestamp computation. Re-handoff of the same thread
+writes a new dated file and marks the previous one `superseded`
 (`handoff_ledger.py supersede <old-path>`). Legacy undated
 `./.handoffs/<topic-slug>.md` files and `./HANDOFF.md` (topic `default`)
 remain supported; their ending time falls back to front-matter `created`,
@@ -284,7 +287,11 @@ entry's `references:` front matter; `resume <path>` marks transfer;
 `supersede <path> [--by <new-path>]` marks replacement and, with `--by`,
 records the newer handoff as a forward link; `save-path [dir]` prints where
 new handoffs should be written: `<dir>/.handoffs` when it exists, otherwise
-the per-project fallback `~/.claude/handoffs/<project-basename>/`.
+the per-project fallback `~/.claude/handoffs/<project-basename>/`;
+`new-path <topic> [dir] [--json]` takes one clock read and returns
+`directory`, `filename`, `path`, and `created` for a new handoff, using the
+same directory as `save-path`, a filename of
+`<YYYYMMDD-HHMM>-<topic>.md`, and `created` formatted `%Y-%m-%dT%H:%M`.
 
 ### 7.3 Session-start announcer
 
@@ -295,16 +302,18 @@ Scans `.handoffs/*.md` plus legacy
 `HANDOFF.md` for open entries within the age window, then:
 
 - **0 open** — silent.
-- **1 open** — announce (topic, age, path, description) with "read it in
-  full and continue", or resume immediately without asking when autoresume
+- **1 open** — announce (topic, stored `ended` date/time, age, path,
+  description) with "read it in full and continue", or resume immediately
+  without asking when autoresume
   is active (`AUTORESUME=1`, or the legacy `CONTEXT_WATCH_AUTORESUME=1`).
   When the handoff's front matter names `skills`, the announcement also
   instructs loading exactly those skills (via the Skill tool) before
   resuming, so a `/clear` cycle comes back with the right skills loaded.
-- **N open** — enumerate newest-first (topic, age, path, description) with
-  an instruction to present the list and ask which to resume before any
-  other work, using an interactive question tool where available, with
-  "none" as an option. Autoresume never guesses among several.
+- **N open** — enumerate newest-first (topic, stored `ended` date/time, age,
+  path, description) with an instruction to present the list and ask which
+  to resume before any other work, using an interactive question tool where
+  available, with "none" as an option. Autoresume never guesses among
+  several.
 
 Because `clear` is not a skipped source, autoresume closes a one-keystroke
 cycle: `HANDOFF_AT=<n> AUTORESUME=1 claude` triggers the handoff at the
@@ -344,8 +353,9 @@ channel.
 
 **Resume resolution order.** Attached/pasted content → memory ledger →
 past-chat search for `SESSION HANDOFF <topic>` → ask for the file. Multiple
-open with no topic named: list one line each and ask. After actual resume:
-flip the entry's status and remove the topic from the description. This is
+open with no topic named: list one line each with topic, stored date, and
+description, then ask. After actual resume: flip the entry's status and
+remove the topic from the description. This is
 coarser than the agent-surface ledger's `resolve` command, which returns a
 full oldest-first chain plus a `must_also_read` reference list; the chat
 surface has no equivalent chain/reference concept today.
@@ -393,8 +403,10 @@ button 400 ms later.
 
 **Settings** (options page, `chrome.storage.sync`): template text (default
 asks Claude to check the open-handoffs ledger, list open items one line each
-and ask which to resume, or reply only "No open handoffs"); always-on vs
-button-only; auto-send (default **off** — pre-fill preserves the human veto
+with stored dates and ask which to resume, or reply only "No open handoffs");
+the extension injects a real computed timestamp into that default prompt
+before insertion; always-on vs button-only; auto-send (default **off** —
+pre-fill preserves the human veto
 and stays on the typing-assistance side of automating the site; on is the
 zero-keystroke mode).
 
@@ -469,12 +481,12 @@ Rule convention:
 
 ```markdown
 ## Session handoffs
-Before starting any task, run: python3 scripts/handoff_ledger.py list
+Before starting any task, run: python3 scripts/handoff_ledger.py list --json
 If open handoffs print, mention them in one line and ask which to resume, or none.
 After actually resuming one: python3 scripts/handoff_ledger.py resume <path>
-When wrapping up or parking work, write .handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md
-with front matter (topic, created, status: open, description) using the
-session-handoff template.
+When wrapping up or parking work, run: python3 scripts/handoff_ledger.py new-path <topic-slug> --json
+Then write the returned path with front matter (topic, created, status: open,
+description) using the session-handoff template.
 ```
 
 Oz / cloud harnesses: commit the repo-local form of everything (project

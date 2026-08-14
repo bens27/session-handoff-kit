@@ -1,7 +1,7 @@
 const DEFAULTS = {
   template:
     "Session start: check my open-handoffs ledger. If any handoffs are open, " +
-    "list each in one line (topic, age, first next step) and ask which to " +
+    "list each in one line (topic, stored date, first next step) and ask which to " +
     "resume. If none are open, reply only: No open handoffs.",
   alwaysOn: true,
   autoSend: false,

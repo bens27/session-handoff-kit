@@ -16,7 +16,8 @@ writes a structured `HANDOFF.md` and stops. A `SessionStart` hook announces an
 existing `HANDOFF.md` to the next session, closing the loop.
 
 Where hooks don't exist (chat), a behavioral variant of the skill does the same
-job on request.
+job on request; file-ledger fallback conventions use
+`handoff_ledger.py list --json` rather than manual file inspection.
 
 ## Install matrix
 
@@ -63,7 +64,9 @@ immediately without asking — the full wind-down/pick-up cycle costs one
 keystroke. Handoff files are named by ending date/time
 (`.handoffs/20260811-1430-auth-refactor.md`) and carry a one-line
 `description:` in front matter, so announcements and directory listings stay
-tellable-apart as they accumulate.
+tellable-apart as they accumulate. The filename timestamp and `created:`
+front matter are produced together by `handoff_ledger.py new-path`, so the
+agent never guesses them independently.
 
 ### Claude Cowork
 
@@ -143,7 +146,10 @@ downloadable `HANDOFF.md` remains the portable copy for crossing surfaces:
 drop it in a project folder and the plugin's `SessionStart` hook announces it
 in Claude Code or Cowork. (Past-chat retrieval requires the "Search and
 reference past chats" setting, and Project chats only search within the same
-Project.)
+Project.) When several chat handoffs are open, the skill lists topic, stored
+date, and description rather than asking the model to invent an age. The
+Chrome/Edge extension also injects a real computed timestamp into its default
+new-chat prompt before insertion.
 
 ## Configuration (hook environments)
 
@@ -211,6 +217,10 @@ references from `references:` front matter. `handoff_ledger.py supersede
 `handoff_ledger.py save-path [dir]` prints where new handoffs should be
 written, using `<dir>/.handoffs` when present and otherwise the per-project
 fallback under `~/.claude/handoffs/<project-basename>/`.
+`handoff_ledger.py new-path <topic> [dir] [--json]` uses one clock read and
+returns the `directory`, `filename`, `path`, and `created` values for a new
+handoff, with the same directory choice as `save-path`, filename format
+`<YYYYMMDD-HHMM>-<topic>.md`, and `created` format `%Y-%m-%dT%H:%M`.
 
 Deliberate ceiling: the announcer informs and offers, it does not hijack — if
 the session opens with an unrelated explicit task, open handoffs get one
