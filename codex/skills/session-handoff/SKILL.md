@@ -51,13 +51,19 @@ post-resume actions — is yours to change.
 1. Do not start new work. Complete only the single atomic action already in
    flight (finish the current file edit or the command that is running).
 2. Write the handoff document per §2 and §3.
-3. Tell the user the handoff is complete and give the exact resume path. If
+3. Verify before reporting: run
+   `python3 <hooks-dir>/handoff_ledger.py resolve <topic-slug> [dir]` and
+   confirm its `authoritative:` line is the path you just wrote. If it is
+   not (front matter malformed, wrong directory, older file still winning),
+   fix the file or supersede the older one and re-run — a handoff the
+   announcer cannot find is not complete.
+4. Tell the user the handoff is complete and give the exact resume path. If
    the trigger notice said autoresume is active, the resume path is one
    keystroke: tell the user to type `/clear` — the cleared session will
    announce this handoff and resume it automatically. Otherwise: start a new
    session in this directory and the open handoff will be announced
    automatically (or `claude "resume"` / `codex "resume"`).
-4. Stop. Do not begin any of the "Next steps" in this session.
+5. Stop. Do not begin any of the "Next steps" in this session.
 
 ## §2 Naming and location
 

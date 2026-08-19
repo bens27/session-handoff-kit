@@ -48,6 +48,25 @@ def main():
         check("chat-attached-before-ledger", ok,
               "resume section must check attached/pasted content before the memory ledger (SPEC 8 resolution order)")
 
+    # Wind-down must prove the handoff is discoverable before reporting done:
+    # the §1 protocol runs `resolve` and checks `authoritative:` is the new
+    # file. A handoff the announcer cannot find is the failure mode the
+    # both-locations ledger fix (0.6.1) existed to close.
+    wind = re.search(r"^## §1 .*?(?=^## §2)", a, re.DOTALL | re.MULTILINE)
+    check("agent-wind-down-section-present", wind is not None)
+    if wind:
+        sect = wind.group(0)
+        verify = re.search(r"resolve", sect)
+        report = re.search(r"Tell the user the handoff is complete", sect)
+        stop = re.search(r"\bStop\b", sect)
+        check("agent-wind-down-verifies-with-resolve",
+              verify is not None and "authoritative" in sect,
+              "§1 must run handoff_ledger.py resolve and check the authoritative: line")
+        check("agent-wind-down-verify-precedes-report",
+              verify is not None and report is not None and stop is not None
+              and verify.start() < report.start() < stop.start(),
+              "§1 order must be: write -> verify (resolve) -> tell user -> stop")
+
     # The four-step order should all be present in the resume flow
     for needle, name in (("SESSION HANDOFF", "chat-past-chat-search-marker",),):
         check(name, needle in chat, "chat skill must search past chats for the literal marker")

@@ -265,6 +265,11 @@ post-resume actions), and only the front-matter block is load-bearing for
 the hooks.
 If a `LESSONS.md` exists (e.g. maintained by a mistake-learning skill), new
 lessons append there and Gotchas references it rather than duplicating.
+Before reporting completion the skill runs `handoff_ledger.py resolve
+<topic>` and confirms the `authoritative:` line is the file it just wrote;
+a handoff the announcer cannot find is not complete, so a malformed front
+matter or a wrong directory is caught by the session that wrote it, not
+by the next one.
 
 ### 7.2 States
 
