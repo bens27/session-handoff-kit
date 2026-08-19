@@ -1,0 +1,792 @@
+<title>Session Handoff Kit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --paper: #fbfaf8;
+    --paper-2: #f4f2ed;
+    --ink: #171614;
+    --ink-2: #52504a;
+    --ink-3: #86837b;
+    --rule: #e2dfd7;
+    --rule-2: #cfcbc0;
+    --accent: #a8451a;
+    --accent-soft: #f5e9e2;
+    --ok: #2f6d46;
+    --warn: #9a6a10;
+    --no: #a0392a;
+    --btn-hi: #ffffff;
+    --btn-lo: #eeebe3;
+    --emb-hi: rgba(255, 255, 255, 0.9);
+    --emb-lo: rgba(0, 0, 0, 0.06);
+    --emb-drop: rgba(60, 50, 35, 0.16);
+    --emb-press: rgba(0, 0, 0, 0.17);
+    --accent-hi: #bd5323;
+    --accent-lo: #953c14;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Helvetica Neue", Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #131211;
+      --paper-2: #1c1b19;
+      --ink: #efece6;
+      --ink-2: #b0aca3;
+      --ink-3: #817d74;
+      --rule: #2e2c28;
+      --rule-2: #43403a;
+      --accent: #e08a55;
+      --accent-soft: #2c211a;
+      --ok: #6fae82;
+      --warn: #d0a441;
+      --no: #dd8272;
+      --btn-hi: #292620;
+      --btn-lo: #1b1a17;
+      --emb-hi: rgba(255, 255, 255, 0.08);
+      --emb-lo: rgba(0, 0, 0, 0.38);
+      --emb-drop: rgba(0, 0, 0, 0.5);
+      --emb-press: rgba(0, 0, 0, 0.55);
+      --accent-hi: #ea9663;
+      --accent-lo: #cd7742;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #131211;
+    --paper-2: #1c1b19;
+    --ink: #efece6;
+    --ink-2: #b0aca3;
+    --ink-3: #817d74;
+    --rule: #2e2c28;
+    --rule-2: #43403a;
+    --accent: #e08a55;
+    --accent-soft: #2c211a;
+    --ok: #6fae82;
+    --warn: #d0a441;
+    --no: #dd8272;
+    --btn-hi: #292620;
+    --btn-lo: #1b1a17;
+    --emb-hi: rgba(255, 255, 255, 0.08);
+    --emb-lo: rgba(0, 0, 0, 0.38);
+    --emb-drop: rgba(0, 0, 0, 0.5);
+    --emb-press: rgba(0, 0, 0, 0.55);
+    --accent-hi: #ea9663;
+    --accent-lo: #cd7742;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: 96px;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid currentColor; }
+  a:hover { background: var(--accent-soft); }
+
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    padding: 22px 0 20px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .wordmark {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+  }
+  .masthead .spacer { flex: 1 1 auto; }
+  .masthead nav { display: flex; gap: 18px; font-size: 13.5px; }
+  .masthead nav a { color: var(--ink-2); border-bottom: none; }
+  .masthead nav a:hover { color: var(--accent); background: none; }
+
+  .pricetag {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 2px 7px;
+  }
+
+  /* ---------- hero ---------- */
+
+  .hero { padding: 68px 0 56px; border-bottom: 1px solid var(--rule); }
+
+  h1 {
+    font-size: clamp(34px, 6.2vw, 54px);
+    line-height: 1.06;
+    letter-spacing: -0.028em;
+    font-weight: 600;
+    margin: 0 0 22px;
+    max-width: 20ch;
+  }
+  h1 em { font-style: normal; color: var(--accent); }
+
+  .lede {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    max-width: 62ch;
+    margin: 0 0 14px;
+  }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .lede-lead {
+    font-size: 22px;
+    line-height: 1.42;
+    letter-spacing: -0.014em;
+    color: var(--ink);
+    max-width: 30ch;
+    margin-bottom: 26px;
+  }
+
+  .hero-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 34px;
+  }
+  .hero-cta .btn { padding: 10px 16px; font-size: 13.5px; }
+  .btn-ext { opacity: 0.6; margin-left: 1px; }
+
+  .hero-note {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-3);
+    margin-top: 18px;
+  }
+  .hero-note a { color: var(--ink-2); border-bottom-color: var(--rule-2); }
+  .hero-note a:hover { color: var(--accent); background: none; border-bottom-color: var(--accent); }
+
+  /* ---------- sections ---------- */
+
+  section { padding: 56px 0; border-bottom: 1px solid var(--rule); }
+
+  h2 {
+    font-size: 13px;
+    font-family: var(--mono);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 28px;
+  }
+
+  h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.012em; margin: 0 0 8px; }
+
+  p { margin: 0 0 16px; max-width: 66ch; }
+  p:last-child { margin-bottom: 0; }
+
+  /* ---------- steps ---------- */
+
+  .steps { display: grid; gap: 0; }
+  .step {
+    display: grid;
+    grid-template-columns: 46px 1fr;
+    gap: 20px;
+    padding: 22px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .step:first-child { border-top: none; padding-top: 0; }
+  .step-n {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    padding-top: 5px;
+    letter-spacing: 0.06em;
+  }
+  .step p { color: var(--ink-2); margin: 0; }
+
+  /* ---------- platform cards ---------- */
+
+  .platforms { display: grid; gap: 0; margin-top: 4px; }
+
+  .plat {
+    border-top: 1px solid var(--rule);
+    padding: 26px 0;
+    display: grid;
+    grid-template-columns: 30px 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  .plat:first-child { border-top: 1px solid var(--rule-2); }
+  .plat:last-child { border-bottom: 1px solid var(--rule-2); }
+
+  .plat.is-picked { background: var(--accent-soft); }
+
+  .plat-check { padding-top: 3px; }
+  .plat-check input {
+    width: 17px; height: 17px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .plat-body { min-width: 0; }
+
+  .plat-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+  }
+  .plat-head label { font-size: 19px; font-weight: 600; letter-spacing: -0.012em; cursor: pointer; }
+  .plat-kind {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .plat-desc { color: var(--ink-2); font-size: 15.5px; margin: 0 0 14px; max-width: 60ch; }
+
+  .plat-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    padding: 8px 15px;
+    border: 1px solid var(--rule-2);
+    color: var(--accent);
+    background: linear-gradient(180deg, var(--btn-hi) 0%, var(--btn-lo) 100%);
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: none;
+    box-shadow:
+      inset 0 1px 0 var(--emb-hi),
+      inset 0 -1px 0 var(--emb-lo),
+      0 1px 2px var(--emb-drop);
+    transition: box-shadow 90ms ease, transform 90ms ease, filter 90ms ease;
+  }
+  .btn:hover { border-color: var(--accent); filter: brightness(1.02); background: linear-gradient(180deg, var(--btn-hi) 0%, var(--btn-lo) 100%); }
+  .btn:active {
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 3px var(--emb-press), inset 0 -1px 0 var(--emb-hi);
+  }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .btn .pz { flex: 0 0 auto; width: 14px; height: 14px; opacity: 0.92; }
+
+  /* puzzle-piece marker for plugin-format packages */
+  .pz { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; }
+  .plat-kind .pz { margin-right: 5px; color: var(--accent); }
+  .tray-item h4 .pz { width: 14px; height: 14px; margin-right: 7px; color: var(--accent); }
+
+  .cmd {
+    display: block;
+    font-family: var(--mono);
+    font-size: 12.8px;
+    line-height: 1.75;
+    color: var(--ink-2);
+    background: var(--paper-2);
+    border-left: 2px solid var(--rule-2);
+    padding: 9px 13px;
+    margin-top: 13px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* ---------- table ---------- */
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule); }
+  table { border-collapse: collapse; width: 100%; min-width: 660px; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--paper-2);
+  }
+  tbody th { font-weight: 400; color: var(--ink); white-space: normal; min-width: 200px; }
+  tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
+  td { text-align: center; font-family: var(--mono); font-size: 13px; }
+  .y { color: var(--ok); }
+  .m { color: var(--warn); }
+  .n { color: var(--no); }
+  .fn { font-size: 13px; color: var(--ink-3); margin-top: 14px; max-width: 72ch; }
+  .fn sup { color: var(--ink-2); }
+
+  /* ---------- principles ---------- */
+
+  .principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 28px 36px; }
+  .principle p { font-size: 15.5px; color: var(--ink-2); margin: 0; }
+
+  .limits { font-size: 15.5px; color: var(--ink-2); }
+  .limits li { margin-bottom: 9px; max-width: 66ch; }
+  .limits ul { padding-left: 20px; margin: 0; }
+
+  /* ---------- sticky bar ---------- */
+
+  .bar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    background: var(--paper);
+    border-top: 1px solid var(--rule-2);
+    transform: translateY(105%);
+    transition: transform 160ms ease-out;
+    z-index: 40;
+  }
+  .bar.on { transform: translateY(0); }
+  .bar-inner {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 13px 28px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .bar-count { font-family: var(--mono); font-size: 13px; color: var(--ink-2); flex: 1 1 auto; }
+  .bar-count b { color: var(--ink); font-weight: 600; }
+  .btn-solid {
+    background: linear-gradient(180deg, var(--accent-hi) 0%, var(--accent-lo) 100%);
+    color: #fff;
+    border-color: var(--accent-lo);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+      0 1px 2px var(--emb-drop);
+  }
+  .btn-solid:hover {
+    filter: brightness(1.07);
+    border-color: var(--accent-lo);
+    background: linear-gradient(180deg, var(--accent-hi) 0%, var(--accent-lo) 100%);
+  }
+  .btn-solid:active { box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3); }
+
+  .btn-quiet { color: var(--ink-2); }
+  .btn-quiet:hover { color: var(--ink); border-color: var(--rule-2); }
+
+  /* ---------- tray ---------- */
+
+  .tray {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--ink) 42%, transparent);
+    z-index: 50;
+    display: none;
+    overflow-y: auto;
+    padding: 40px 20px;
+  }
+  .tray.on { display: block; }
+  .tray-card {
+    max-width: 760px;
+    margin: 0 auto;
+    background: var(--paper);
+    border: 1px solid var(--rule-2);
+    padding: 32px 34px 34px;
+  }
+  .tray-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .tray-head h3 { margin: 0; flex: 1 1 auto; font-size: 22px; }
+  .tray-sub { color: var(--ink-2); font-size: 15px; margin: 0 0 24px; max-width: 60ch; }
+  .tray-item { border-top: 1px solid var(--rule); padding: 18px 0; }
+  .tray-item h4 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  .tray-item .cmd { margin-top: 9px; }
+  .tray-foot { border-top: 1px solid var(--rule-2); padding-top: 20px; margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .tray-msg { font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); }
+
+  /* ---------- footer ---------- */
+
+  footer { padding: 44px 0 20px; color: var(--ink-3); font-size: 14px; }
+  footer .links { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 16px; }
+  footer a { color: var(--ink-2); }
+
+  @media (max-width: 620px) {
+    .hero { padding: 48px 0 40px; }
+    section { padding: 44px 0; }
+    .wrap { padding: 0 20px; }
+    .tray-card { padding: 24px 20px 26px; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <span class="wordmark">session-handoff-kit</span>
+    <span class="pricetag">Free</span>
+    <span class="spacer"></span>
+    <nav>
+      <a href="#get">Get it</a>
+      <a href="#compat">Compatibility</a>
+      <a href="https://github.com/bens27/session-handoff-kit" target="_blank" rel="noopener">Source</a>
+    </nav>
+  </header>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>Does your AI get <em>dumber</em> mid-conversation?</h1>
+    <p class="lede lede-lead">It does — and not because it ran out of room. Long before the window is full, quality starts sliding.</p>
+    <p class="lede">Reasoning quality degrades and reasoning cost rises as the context window fills — in practice somewhere around <strong>120,000–140,000 tokens</strong> of occupancy, regardless of how cheaply those tokens were served. Cache reads are billed at a discount but occupy the window at full size, so they count in full.</p>
+    <p class="lede">This kit measures that occupancy out-of-band, and past a per-model threshold tells the agent to write a structured handoff and stop. The next session finds it, announces it, and picks up where you left off.</p>
+    <div class="hero-cta">
+      <a class="btn btn-solid" href="https://github.com/bens27/session-handoff-kit/releases/download/v0.6.1/session-handoff.plugin" target="_blank" rel="noopener" title="session-handoff.plugin — Claude Code and Cowork"><svg class="pz" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.5 5H10.2a2.5 2.5 0 1 1 3.6 0H17.5a1.5 1.5 0 0 1 1.5 1.5V10.2a2.5 2.5 0 1 1 0 3.6V17.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 17.5V6.5A1.5 1.5 0 0 1 6.5 5Z"/></svg>Claude Code &amp; Cowork<span class="btn-ext">.plugin</span></a>
+      <a class="btn" href="https://github.com/bens27/session-handoff-kit/releases/download/v0.6.1/session-handoff-chat.skill" target="_blank" rel="noopener" title="session-handoff-chat.skill — Chat">Chat<span class="btn-ext">.skill</span></a>
+      <a class="btn" href="https://github.com/bens27/session-handoff-kit/archive/refs/heads/main.zip" target="_blank" rel="noopener" title="Source archive — run codex/install.sh">Codex<span class="btn-ext">.zip</span></a>
+      <a class="btn" href="https://github.com/bens27/session-handoff-kit/archive/refs/heads/main.zip" target="_blank" rel="noopener" title="Source archive — load chrome-extension/ unpacked">Chrome &amp; Edge<span class="btn-ext">.zip</span></a>
+    </div>
+    <p class="hero-note">Free and open source · direct downloads · <a href="#get">install commands, multi-select and the compatibility matrix below</a></p>
+  </div>
+</div>
+
+<div class="wrap">
+  <section>
+    <h2>How it works</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-n">01</div>
+        <div>
+          <h3>A watcher measures, the model never guesses</h3>
+          <p>A lifecycle hook reads the session's own transcript and computes what the next API call will actually carry. The model is never asked how full its context is — it cannot see its own token count, and asked directly it will produce a confident, plausible, wrong number.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">02</div>
+        <div>
+          <h3>Past the threshold, one instruction fires</h3>
+          <p>Cross an absolute per-model threshold and the watcher injects a single instruction to invoke the handoff skill. The skill finishes the action in flight, writes a dense document — objective, current state, decisions and why, files touched, next steps, gotchas — and stops. It fires at most once per session.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">03</div>
+        <div>
+          <h3>The next session already knows</h3>
+          <p>Session start scans for untransferred handoffs, announces them with a one-line description each, offers a choice when several are open, and marks the chosen one transferred on actual resume. Resuming never requires you to remember that there was something to resume.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="wrap">
+  <section id="get">
+    <h2>Get it — pick your surface</h2>
+    <p style="margin-bottom:26px;color:var(--ink-2)">Tick more than one box and the bar at the bottom collects every link and install command in one place.</p>
+
+    <div class="platforms" id="platforms">
+
+      <div class="plat" data-key="cc">
+        <div class="plat-check"><input type="checkbox" id="pick-cc" data-pick="cc"></div>
+        <div class="plat-body">
+          <div class="plat-head">
+            <label for="pick-cc">Claude Code &amp; Cowork</label>
+            <span class="plat-kind"><svg class="pz" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.5 5H10.2a2.5 2.5 0 1 1 3.6 0H17.5a1.5 1.5 0 0 1 1.5 1.5V10.2a2.5 2.5 0 1 1 0 3.6V17.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 17.5V6.5A1.5 1.5 0 0 1 6.5 5Z"/></svg>plugin · hooks + skill</span>
+          </div>
+          <p class="plat-desc">The full experience: token-threshold trigger, per-model absolute thresholds, lag closure, session-start announcement, auto-resume. In Cowork, open the <code>.plugin</code> file for one-click install.</p>
+          <div class="plat-actions">
+            <a class="btn" href="https://github.com/bens27/session-handoff-kit/releases/download/v0.6.1/session-handoff.plugin" target="_blank" rel="noopener"><svg class="pz" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.5 5H10.2a2.5 2.5 0 1 1 3.6 0H17.5a1.5 1.5 0 0 1 1.5 1.5V10.2a2.5 2.5 0 1 1 0 3.6V17.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 17.5V6.5A1.5 1.5 0 0 1 6.5 5Z"/></svg>Get session-handoff.plugin</a>
+          </div>
+          <code class="cmd">/plugin marketplace add bens27/session-handoff-kit
+/plugin install session-handoff@session-handoff-kit</code>
+        </div>
+      </div>
+
+      <div class="plat" data-key="codex">
+        <div class="plat-check"><input type="checkbox" id="pick-codex" data-pick="codex"></div>
+        <div class="plat-body">
+          <div class="plat-head">
+            <label for="pick-codex">Codex</label>
+            <span class="plat-kind">install script</span>
+          </div>
+          <p class="plat-desc">Copies both scripts to <code>~/.codex/hooks/</code>, the skill to <code>~/.codex/skills/</code>, and generates <code>hooks.json</code> with absolute paths. Requires Codex's experimental hooks flag.</p>
+          <div class="plat-actions">
+            <a class="btn" href="https://github.com/bens27/session-handoff-kit/archive/refs/heads/main.zip" target="_blank" rel="noopener">Get the source archive</a>
+            <a href="https://github.com/bens27/session-handoff-kit/tree/main/codex" target="_blank" rel="noopener" style="font-size:14px">browse codex/</a>
+          </div>
+          <code class="cmd">bash codex/install.sh
+# then in ~/.codex/config.toml:  [features] hooks = true</code>
+        </div>
+      </div>
+
+      <div class="plat" data-key="chat">
+        <div class="plat-check"><input type="checkbox" id="pick-chat" data-pick="chat"></div>
+        <div class="plat-body">
+          <div class="plat-head">
+            <label for="pick-chat">Chat</label>
+            <span class="plat-kind">skill</span>
+          </div>
+          <p class="plat-desc">No hooks exist in chat, so there is no automatic trigger — but the structured handoff, the ledger, the choice menu and mark-on-resume all work. Say "hand off" and it writes the document.</p>
+          <div class="plat-actions">
+            <a class="btn" href="https://github.com/bens27/session-handoff-kit/releases/download/v0.6.1/session-handoff-chat.skill" target="_blank" rel="noopener">Get session-handoff-chat.skill</a>
+          </div>
+          <code class="cmd">Settings → Capabilities → upload the .skill file</code>
+        </div>
+      </div>
+
+      <div class="plat" data-key="ext">
+        <div class="plat-check"><input type="checkbox" id="pick-ext" data-pick="ext"></div>
+        <div class="plat-body">
+          <div class="plat-head">
+            <label for="pick-ext">Chrome &amp; Edge extension</label>
+            <span class="plat-kind">unpacked · optional</span>
+          </div>
+          <p class="plat-desc">Adds the one piece chat can't do alone: it injects the open-handoff announcement as the literal first message of a new conversation, so a fresh chat starts already knowing what's parked.</p>
+          <div class="plat-actions">
+            <a class="btn" href="https://github.com/bens27/session-handoff-kit/archive/refs/heads/main.zip" target="_blank" rel="noopener">Get the source archive</a>
+            <a href="https://github.com/bens27/session-handoff-kit/tree/main/chrome-extension" target="_blank" rel="noopener" style="font-size:14px">browse chrome-extension/</a>
+          </div>
+          <code class="cmd">chrome://extensions → Developer mode → Load unpacked → chrome-extension/</code>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</div>
+
+<div class="wrap">
+  <section id="compat">
+    <h2>What actually works where</h2>
+    <p style="margin-bottom:24px;color:var(--ink-2)">The skill layer works everywhere. The automatic trigger needs hooks, and hooks are not equally real on every surface. Rather than paper over that, here is the whole matrix.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th><th>Claude Code</th><th>Codex</th><th>Cowork</th><th>Chat</th><th>Chat + ext.</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th>Token-threshold trigger</th><td class="y">yes</td><td class="m">yes <sup>1</sup></td><td class="m">partial <sup>2</sup></td><td class="n">no</td><td class="n">no</td></tr>
+          <tr><th>Per-model absolute thresholds</th><td class="y">yes</td><td class="m">yes <sup>1</sup></td><td class="m">partial <sup>2</sup></td><td class="n">no</td><td class="n">no</td></tr>
+          <tr><th>Lag closure (output + pending)</th><td class="y">yes</td><td class="m">yes <sup>1</sup></td><td class="m">partial <sup>2</sup></td><td class="n">no</td><td class="n">no</td></tr>
+          <tr><th>Trigger analytics</th><td class="y">yes</td><td class="m">yes <sup>1</sup></td><td class="m">partial <sup>2</sup></td><td class="n">no</td><td class="n">no</td></tr>
+          <tr><th>Structured handoff skill</th><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td></tr>
+          <tr><th>Open/resumed ledger state</th><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="m">yes <sup>3</sup></td><td class="m">yes <sup>3</sup></td></tr>
+          <tr><th>Session-start announcement</th><td class="y">yes</td><td class="m">yes <sup>1</sup></td><td class="m">partial <sup>2</sup></td><td class="m">passive <sup>4</sup></td><td class="y">yes <sup>5</sup></td></tr>
+          <tr><th>Choice menu on multiple</th><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td></tr>
+          <tr><th>Mark-transferred on resume</th><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="m">yes <sup>3</sup></td><td class="m">yes <sup>3</sup></td></tr>
+          <tr><th>Auto-resume without asking</th><td class="y">yes</td><td class="y">yes</td><td class="m">partial <sup>2</sup></td><td class="n">no</td><td class="m">partial <sup>6</sup></td></tr>
+          <tr><th>Runs before first message</th><td class="y">yes</td><td class="m">yes <sup>1</sup></td><td class="m">partial <sup>2</sup></td><td class="n">no</td><td class="m">yes <sup>7</sup></td></tr>
+          <tr><th>HANDOFF.md portability</th><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td><td class="y">yes</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="fn"><sup>1</sup> Behind Codex's experimental hooks flag; historically unavailable on Windows. <sup>2</sup> Hooks are in-schema but rarely exercised in Cowork; the skill layer is the reliable one. <sup>3</sup> Via the memory ledger. <sup>4</sup> Passive by default; a preference line makes it unconditional. <sup>5</sup> Injected as the literal first message. <sup>6</sup> By editing the template to instruct immediate resume. <sup>7</sup> With auto-send; pre-fill leaves one Enter.</p>
+  </section>
+</div>
+
+<div class="wrap">
+  <section>
+    <h2>Why it's built this way</h2>
+    <div class="principles">
+      <div class="principle">
+        <h3>Deterministic over self-reported</h3>
+        <p>Usage figures are computed by serving infrastructure and returned in metadata the model never sees. All measurement here is a subprocess reading files. No component ever asks the model to estimate its own context usage.</p>
+      </div>
+      <div class="principle">
+        <h3>Occupancy, not billing</h3>
+        <p>The unit is what the next call will carry: fresh input, cache writes, cache reads at full size, and the previous output. Cumulative session totals are a billing concept — summing them double-counts every re-send of the history.</p>
+      </div>
+      <div class="principle">
+        <h3>Inform, don't hijack</h3>
+        <p>Session start announces and offers a choice; it does not seize the session. Open with an unrelated task and parked handoffs get one sentence while your task proceeds. Auto-resume exists, and is off by default.</p>
+      </div>
+      <div class="principle">
+        <h3>Fail open</h3>
+        <p>The watcher and announcer exit 0 on any internal error. A broken hook must never block a session. Memory- and search-based channels degrade honestly — the skill never claims a handoff was saved somewhere it wasn't.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="wrap">
+  <section>
+    <h2>Known limitations</h2>
+    <div class="limits">
+      <ul>
+        <li>Codex hooks are experimental: the flag name and the accepted <code>hooks.json</code> shape have varied across versions, and Windows support has lagged.</li>
+        <li>Cowork hook execution is best-effort. Treat the skill layer as the reliable one there.</li>
+        <li>The extension couples to claude.ai's DOM and internal API shapes, which change without notice. It is built to fail silently rather than interfere.</li>
+        <li>Token estimation for pending content is ±20%-class and deliberately early-biased.</li>
+        <li>Claude Code and Codex occupancy measures differ slightly in composition, so identical numbers are not identical semantics — normalize with per-model entries.</li>
+        <li>Codex <code>PostToolUse</code> injection sacrifices one tool result, by design.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<div class="wrap">
+  <footer>
+    <div class="links">
+      <a href="https://github.com/bens27/session-handoff-kit" target="_blank" rel="noopener">Repository</a>
+      <a href="https://github.com/bens27/session-handoff-kit/blob/main/SPEC.md" target="_blank" rel="noopener">Technical specification</a>
+      <a href="https://github.com/bens27/session-handoff-kit/releases/tag/v0.6.1" target="_blank" rel="noopener">Release v0.6.1</a>
+    </div>
+    <p style="margin:0;max-width:64ch">Plugin 0.6.1 · chat skill 0.4.1. Free, and free of any plan to stop being free. Cost savings are a logged byproduct, never the driver of a design decision.</p>
+  </footer>
+</div>
+
+<div class="bar" id="bar">
+  <div class="bar-inner">
+    <span class="bar-count" id="barCount"><b>0</b> selected</span>
+    <button class="btn btn-quiet" id="clearBtn">Clear</button>
+    <button class="btn btn-solid" id="openBtn">Get selected</button>
+  </div>
+</div>
+
+<div class="tray" id="tray">
+  <div class="tray-card">
+    <div class="tray-head">
+      <h3 id="trayTitle">Your selection</h3>
+      <button class="btn btn-quiet" id="closeBtn">Close</button>
+    </div>
+    <p class="tray-sub">Click each link to download, and copy the install commands below. Downloads open on GitHub in a new tab.</p>
+    <div id="trayItems"></div>
+    <div class="tray-foot">
+      <button class="btn btn-solid" id="copyBtn">Copy all links &amp; commands</button>
+      <span class="tray-msg" id="copyMsg"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var PZ_SVG = '<svg class="pz" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.5 5H10.2a2.5 2.5 0 1 1 3.6 0H17.5a1.5 1.5 0 0 1 1.5 1.5V10.2a2.5 2.5 0 1 1 0 3.6V17.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 17.5V6.5A1.5 1.5 0 0 1 6.5 5Z"/></svg>';
+  var REL = "https://github.com/bens27/session-handoff-kit/releases/download/v0.6.1/";
+  var ZIP = "https://github.com/bens27/session-handoff-kit/archive/refs/heads/main.zip";
+
+  var DATA = {
+    cc: {
+      name: "Claude Code & Cowork",
+      plugin: true,
+      file: "session-handoff.plugin",
+      url: REL + "session-handoff.plugin",
+      cmd: "/plugin marketplace add bens27/session-handoff-kit\n/plugin install session-handoff@session-handoff-kit"
+    },
+    codex: {
+      name: "Codex",
+      file: "source archive (main.zip)",
+      url: ZIP,
+      cmd: "bash codex/install.sh\n# then in ~/.codex/config.toml:  [features] hooks = true"
+    },
+    chat: {
+      name: "Chat",
+      file: "session-handoff-chat.skill",
+      url: REL + "session-handoff-chat.skill",
+      cmd: "Settings → Capabilities → upload the .skill file"
+    },
+    ext: {
+      name: "Chrome & Edge extension",
+      file: "source archive (main.zip)",
+      url: ZIP,
+      cmd: "chrome://extensions → Developer mode → Load unpacked → chrome-extension/"
+    }
+  };
+
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[data-pick]'));
+  var bar = document.getElementById('bar');
+  var barCount = document.getElementById('barCount');
+  var tray = document.getElementById('tray');
+  var trayItems = document.getElementById('trayItems');
+  var trayTitle = document.getElementById('trayTitle');
+  var copyMsg = document.getElementById('copyMsg');
+
+  function picked() {
+    return boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.dataset.pick; });
+  }
+
+  function sync() {
+    var p = picked();
+    boxes.forEach(function (b) {
+      b.closest('.plat').classList.toggle('is-picked', b.checked);
+    });
+    barCount.innerHTML = '<b>' + p.length + '</b> selected';
+    bar.classList.toggle('on', p.length > 0);
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function render() {
+    var p = picked();
+    if (!p.length) return;
+    trayTitle.textContent = p.length === 1 ? 'Your selection' : 'Your ' + p.length + ' selections';
+    trayItems.innerHTML = p.map(function (k) {
+      var d = DATA[k];
+      var mark = d.plugin ? PZ_SVG : '';
+      return '<div class="tray-item">' +
+        '<h4>' + mark + esc(d.name) + '</h4>' +
+        '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">Download ' + esc(d.file) + '</a>' +
+        '<code class="cmd">' + esc(d.cmd) + '</code>' +
+        '</div>';
+    }).join('');
+    copyMsg.textContent = '';
+    tray.classList.add('on');
+  }
+
+  function plain() {
+    return picked().map(function (k) {
+      var d = DATA[k];
+      return d.name + '\n' + d.url + '\n' + d.cmd;
+    }).join('\n\n');
+  }
+
+  boxes.forEach(function (b) { b.addEventListener('change', sync); });
+
+  document.getElementById('openBtn').addEventListener('click', render);
+
+  document.getElementById('clearBtn').addEventListener('click', function () {
+    boxes.forEach(function (b) { b.checked = false; });
+    sync();
+  });
+
+  document.getElementById('closeBtn').addEventListener('click', function () {
+    tray.classList.remove('on');
+  });
+
+  tray.addEventListener('click', function (e) {
+    if (e.target === tray) tray.classList.remove('on');
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') tray.classList.remove('on');
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', function () {
+    var text = plain();
+    function done() { copyMsg.textContent = 'Copied.'; }
+    function fail() { copyMsg.textContent = 'Copy blocked — select the text above instead.'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fail);
+    } else {
+      fail();
+    }
+  });
+
+  sync();
+})();
+</script>
