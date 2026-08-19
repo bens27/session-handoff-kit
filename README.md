@@ -256,7 +256,7 @@ session-handoff-kit/
 └── chrome-extension/                    # Chrome/Edge: pre-populate the new-chat init prompt
 ```
 
-## What "any environment" honestly means
+## What "useful on any environment" means
 
 The deterministic token-threshold trigger requires two things: lifecycle hooks
 and a readable token feed. Claude Code has both natively; Codex has both behind
