@@ -1,0 +1,14 @@
+# Chat session-handoff prompts that should trigger the skill.
+# Live trigger scoring is run manually with model calls, never in CI.
+Wrap up this chat with the current state and next steps.
+Make a handoff doc for this investigation.
+Save our progress before I start a new conversation.
+Continue this in a new chat after preserving the decisions.
+I am hitting the conversation length limit, please hand this off.
+Resume from the handoff for the auth migration.
+Pick up where we left off on the onboarding copy.
+What's still open from the last handoff?
+Any open handoffs I should know about?
+Here is the HANDOFF.md from yesterday, continue from it.
+Park this work so I can come back tomorrow.
+I pasted a session handoff above; pick up the remaining tasks.

@@ -1,0 +1,14 @@
+# Chat session-handoff adjacent prompts that should not trigger the skill.
+# Live trigger scoring is run manually with model calls, never in CI.
+Summarize this conversation in five bullets.
+Write a commit message for this diff.
+Remember my name is Sam.
+Save this preference to memory for later.
+Make a to-do list for tomorrow.
+Export this chat as a PDF.
+What did we decide earlier in this chat?
+Draft an email wrapping up the project.
+Create a handoff document template for nurses.
+Write meeting notes from this transcript.
+Give me a quick recap before we continue.
+Turn this thread into release notes.

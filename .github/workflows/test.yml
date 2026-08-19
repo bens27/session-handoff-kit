@@ -37,5 +37,8 @@ jobs:
       - name: Verify skills
         run: python3 tests/verify-skills.py
 
+      - name: Verify trigger corpus
+        run: python3 tests/verify-triggers.py
+
       - name: Verify extension
         run: bash tests/verify-extension.sh

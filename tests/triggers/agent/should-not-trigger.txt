@@ -1,0 +1,14 @@
+# Agent session-handoff adjacent prompts that should not trigger the skill.
+# Live trigger scoring is run manually with model calls, never in CI.
+Summarize what we did so far, then keep working on the next test.
+Write the commit message for this change.
+Give me a quick status update, then keep going.
+Save this note to memory for future sessions.
+Remember that I prefer tabs when editing Makefiles.
+Hand this off to the Orca worktree for implementation.
+Give this to another worktree agent and stay available here.
+Write a README for this module.
+What did we decide about the ledger fallback path?
+Draft release notes for the new packaging behavior.
+Make a short progress summary for the standup.
+Turn these notes into an implementation checklist.

@@ -1,0 +1,14 @@
+# Agent session-handoff prompts that should trigger the skill.
+# Live trigger scoring is run manually with model calls, never in CI.
+[context-watch] occupancy 131,200 of 130,000 (builtin-default) on claude-opus — finish only the action in progress, invoke the session-handoff skill, write the handoff, stop
+Please hand off this work before the context gets worse.
+Wrap up the session and leave a handoff for the next agent.
+Can you park this work with enough detail for someone else to continue?
+Save this for later; I need to close this session now.
+We are close to compaction, so write the handoff and stop after that.
+The context window is almost exhausted; preserve the current state for the next run.
+Resume the payment-link cleanup from the last handoff.
+Pick up the parked work on the trigger matrix tests.
+Any open handoffs for this repo before we start?
+Session start: open handoffs were found for the packaging verifier and trigger corpus.
+Hand off the current debugging thread once the running test finishes.
