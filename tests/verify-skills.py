@@ -10,6 +10,7 @@ AGENT = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/SKILL
 CODEX = os.path.join(REPO, "codex/skills/session-handoff/SKILL.md")
 CHAT = os.path.join(REPO, "chat/session-handoff-chat/SKILL.md")
 PLUGIN_JSON = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
+SPEC = os.path.join(REPO, "SPEC.md")
 
 failures = []
 
@@ -20,10 +21,29 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def shared_contract_literals(spec):
+    heading = re.search(r"^### .*Shared contract.*$", spec, re.IGNORECASE | re.MULTILINE)
+    if not heading:
+        return None
+    section = spec[heading.end():]
+    next_heading = re.search(r"^##\s+", section, re.MULTILINE)
+    if next_heading:
+        section = section[:next_heading.start()]
+    label = re.search(r"^\*\*Both skills must contain\*\*\s*$", section, re.MULTILINE)
+    if not label:
+        return []
+    must_contain = section[label.end():]
+    next_label = re.search(r"^\*\*.*\*\*\s*$", must_contain, re.MULTILINE)
+    if next_label:
+        must_contain = must_contain[:next_label.start()]
+    return re.findall(r"(?m)^-\s+`([^`]+)`\s+—", must_contain)
+
+
 def main():
     a = open(AGENT).read()
     c = open(CODEX).read()
     chat = open(CHAT).read()
+    spec = open(SPEC).read()
     plugin_version = json.load(open(PLUGIN_JSON))["version"]
 
     check("agent-copies-identical", a == c)
@@ -70,6 +90,26 @@ def main():
     # The four-step order should all be present in the resume flow
     for needle, name in (("SESSION HANDOFF", "chat-past-chat-search-marker",),):
         check(name, needle in chat, "chat skill must search past chats for the literal marker")
+
+    literals = shared_contract_literals(spec)
+    check("spec-shared-contract-section-present", literals is not None,
+          "SPEC.md must contain a Shared contract subsection")
+    if literals is not None:
+        check("spec-shared-contract-literals-parsed", len(literals) >= 8,
+              "expected at least 8 shared-contract literals parsed from SPEC.md")
+        for literal in literals:
+            for text, path, skill_name in ((a, AGENT, "agent"), (chat, CHAT, "chat")):
+                ok = re.search(re.escape(literal), text, re.IGNORECASE) is not None
+                check("shared-contract-%s:%s" % (skill_name, literal), ok,
+                      "missing literal %r in %s" % (literal, path))
+
+    chat_version = re.search(r'version:\s*"([^"]+)"', chat)
+    check("chat-version-present", chat_version is not None,
+          "chat SKILL.md must declare metadata version")
+    if chat_version:
+        declared = "`session-handoff-chat` skill %s" % chat_version.group(1)
+        check("spec-header-chat-version-matches-skill", declared in spec,
+              "SPEC.md header must declare %s" % declared)
 
     print()
     if failures:

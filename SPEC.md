@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.6.1 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.6.1 · `session-handoff-chat` skill 0.4.1 · browser extension 0.1.0
 
 ---
 
@@ -334,6 +334,37 @@ Every announcement includes the exact mark-transferred command and the defer
 clause: if the user's opening request is an unrelated explicit task, mention
 the open handoff(s) in one sentence and proceed with their task; the ledger
 is untouched.
+
+### 7.4 Shared contract between the agent and chat skills
+
+`tests/verify-skills.py` reads the **Both skills must contain** list below and
+asserts each literal appears in both skill files. The `session-handoff-chat`
+skill version bumps by patch whenever the contract list changes.
+
+**Both skills must contain**
+
+- `## Objective` — the handoff must preserve the overall goal.
+- `## Current state` — the handoff must distinguish completed and unverified work.
+- `## Decisions and rationale` — the handoff must preserve why choices were made.
+- `## In flight` — the handoff must identify the exact interrupted work.
+- `## Next steps` — the handoff must give ordered concrete continuation actions.
+- `## Gotchas` — the handoff must capture hazards and rework-prevention notes.
+- `status: open` — persisted handoffs must start in the transferable open state.
+- `description` — persisted handoffs need a one-line announcement summary.
+- `1,500 words` — handoffs should stay dense enough for reliable resumption.
+- `tried and abandoned` — handoffs must record discarded approaches as well as successes.
+- `LESSONS.md` — projects with a lesson log should reference it from Gotchas.
+- `none` — multiple-open-handoff prompts must offer a no-selection option.
+- `one sentence` — unrelated opening requests defer open work without derailing the task.
+- `Do not mark` — listing or announcing a handoff must not count as resuming it.
+
+**Intentional divergences**
+
+- Agent handoffs use `## Files touched`; chat handoffs use `## Artifacts produced`.
+- Agent handoffs use front-matter files and the filesystem ledger; chat handoffs use a memory ledger.
+- The literal `SESSION HANDOFF — <topic> — <date>` header line exists for chat past-chat search only.
+- The `[context-watch]` trigger is agent-only because chat has no lifecycle hook or token feed.
+- The `resolve` and `must_also_read` chain is agent-only; chat has no equivalent chain/reference command today.
 
 ## 8. Chat surface
 
