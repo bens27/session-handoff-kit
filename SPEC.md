@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.6.0 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.6.1 · `session-handoff-chat` skill 0.4.0 · browser extension 0.1.0
 
 ---
 
@@ -287,7 +287,12 @@ entry's `references:` front matter; `resume <path>` marks transfer;
 `supersede <path> [--by <new-path>]` marks replacement and, with `--by`,
 records the newer handoff as a forward link; `save-path [dir]` prints where
 new handoffs should be written: `<dir>/.handoffs` when it exists, otherwise
-the per-project fallback `~/.claude/handoffs/<project-basename>/`;
+the per-project fallback `~/.claude/handoffs/<project-basename>/`.
+`save-path` chooses ONE write location, but every read — `list`, `resolve`,
+and the session-start announcer — scans BOTH, plus `<dir>/HANDOFF.md`, so a
+project that gains a local `.handoffs/` later does not lose sight of the
+handoffs it already wrote to the fallback. `HANDOFF.md` carries topic
+`default` in either location.
 `new-path <topic> [dir] [--json]` takes one clock read and returns
 `directory`, `filename`, `path`, and `created` for a new handoff, using the
 same directory as `save-path`, a filename of

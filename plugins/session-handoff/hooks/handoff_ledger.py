@@ -72,17 +72,41 @@ def _name_parts(path):
     return iso, topic
 
 
+def _fallback_dir(root):
+    """The per-project directory save_path() writes to when a project has no
+    local .handoffs convention."""
+    return os.path.expanduser(os.path.join("~", ".claude", "handoffs",
+                                           os.path.basename(os.path.abspath(root))))
+
+
 def _handoff_paths(root):
+    """Every handoff readable for root, across BOTH locations a handoff can be
+    written to: the local ./.handoffs convention and the per-project fallback.
+    Reading only one of them silently hides whole projects' handoffs from
+    list, resolve, and the session-start announcer."""
     paths = []
-    hdir = os.path.join(root, ".handoffs")
-    if os.path.isdir(hdir):
+    seen = set()
+    for hdir in (os.path.join(root, ".handoffs"), _fallback_dir(root)):
+        if not os.path.isdir(hdir):
+            continue
         for name in sorted(os.listdir(hdir)):
-            if name.endswith(".md"):
-                paths.append(os.path.join(hdir, name))
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(hdir, name)
+            key = os.path.normcase(os.path.realpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
     legacy = os.path.join(root, "HANDOFF.md")
     if os.path.isfile(legacy):
         paths.append(legacy)
     return paths, legacy
+
+
+def _is_legacy_single_file(path, legacy):
+    """The undated single-file convention, in either location."""
+    return path == legacy or os.path.basename(path) == "HANDOFF.md"
 
 
 def _split_csv(value):
@@ -109,7 +133,7 @@ def scan(root, max_age_days=14):
                 continue
             name_ended, name_topic = _name_parts(path)
             topic = fm.get("topic") or name_topic
-            if path == legacy and "topic" not in fm:
+            if _is_legacy_single_file(path, legacy) and "topic" not in fm:
                 topic = "default"
             ended = (name_ended or fm.get("created")
                      or datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M"))
@@ -132,7 +156,7 @@ def _topic_for_path(path, legacy=None):
         fm = parse_front_matter(f.read())
     _, name_topic = _name_parts(path)
     topic = fm.get("topic") or name_topic
-    if (path == legacy or os.path.basename(path) == "HANDOFF.md") and "topic" not in fm:
+    if _is_legacy_single_file(path, legacy) and "topic" not in fm:
         topic = "default"
     return topic
 
@@ -152,7 +176,7 @@ def resolve(topic_or_path, root):
                 fm = parse_front_matter(f.read())
             name_ended, name_topic = _name_parts(path)
             path_topic = fm.get("topic") or name_topic
-            if path == legacy and "topic" not in fm:
+            if _is_legacy_single_file(path, legacy) and "topic" not in fm:
                 path_topic = "default"
             if path_topic != topic:
                 continue
@@ -191,8 +215,7 @@ def save_path(root):
     hdir = os.path.join(abs_root, ".handoffs")
     if os.path.isdir(hdir):
         return hdir
-    return os.path.expanduser(os.path.join("~", ".claude", "handoffs",
-                                           os.path.basename(abs_root)))
+    return _fallback_dir(abs_root)
 
 
 def new_path(topic, root):

@@ -21,8 +21,13 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
-def run(args, cwd):
-    return subprocess.run([PY, PLUGIN] + args, cwd=cwd, capture_output=True, text=True, timeout=30)
+def run(args, cwd, env=None):
+    child_env = None
+    if env:
+        child_env = dict(os.environ)
+        child_env.update(env)
+    return subprocess.run([PY, PLUGIN] + args, cwd=cwd, capture_output=True, text=True,
+                          timeout=30, env=child_env)
 
 
 def main():
@@ -278,6 +283,56 @@ def main():
     check("supersede-by-writes-link", ("superseded_by: " + new2) in old2_text,
           "content=%r" % old2_text[:400])
     check("supersede-by-still-marks-status", "status: superseded" in old2_text)
+
+    # 9. Reads cover the fallback write location. A project with no local
+    #    .handoffs/ has every handoff written to
+    #    ~/.claude/handoffs/<project>/ — so list and resolve must read there
+    #    too, or that project's whole history is invisible to the announcer.
+    tmp10 = tempfile.mkdtemp(prefix="ledger-verify10-fallback-")
+    home = os.path.join(tmp10, "home")
+    proj = os.path.join(tmp10, "myproj")
+    fallback = os.path.join(home, ".claude", "handoffs", "myproj")
+    os.makedirs(proj)
+    os.makedirs(fallback)
+    with open(os.path.join(fallback, "20260813-2219-parked-thread.md"), "w") as f:
+        f.write("---\ntopic: parked-thread\ncreated: 2026-08-13T22:19\nstatus: open\n"
+                "description: parked in the fallback location\n---\n# parked\n")
+    home_env = {"HOME": home, "USERPROFILE": home}
+
+    p = run(["save-path", proj], proj, home_env)
+    check("fallback-save-path-points-into-home", p.stdout.strip() == fallback,
+          "stdout=%r want=%r" % (p.stdout.strip(), fallback))
+
+    p = run(["list", proj, "--json", "--max-age-days", "3650"], proj, home_env)
+    try:
+        listed = json.loads(p.stdout or "[]")
+    except ValueError:
+        listed = []
+    check("fallback-handoff-is-listed",
+          any(entry.get("topic") == "parked-thread" for entry in listed),
+          "rc=%d stdout=%r" % (p.returncode, p.stdout[:300]))
+    check("fallback-handoff-carries-description",
+          any(entry.get("description") == "parked in the fallback location"
+              for entry in listed),
+          "listed=%r" % listed)
+
+    p = run(["resolve", "parked-thread", proj], proj, home_env)
+    check("fallback-handoff-resolves",
+          p.returncode == 0 and "20260813-2219-parked-thread.md" in p.stdout,
+          "rc=%d stdout=%r stderr=%r" % (p.returncode, p.stdout[:300], p.stderr[:300]))
+
+    # A local .handoffs/ still wins for writes, and both locations are read.
+    os.makedirs(os.path.join(proj, ".handoffs"))
+    with open(os.path.join(proj, ".handoffs", "20260814-0900-local-thread.md"), "w") as f:
+        f.write("---\ntopic: local-thread\ncreated: 2026-08-14T09:00\nstatus: open\n---\n# local\n")
+    p = run(["list", proj, "--json", "--max-age-days", "3650"], proj, home_env)
+    try:
+        both = json.loads(p.stdout or "[]")
+    except ValueError:
+        both = []
+    topics = {entry.get("topic") for entry in both}
+    check("both-locations-read-together",
+          {"parked-thread", "local-thread"} <= topics, "topics=%r" % topics)
 
     print()
     if failures:

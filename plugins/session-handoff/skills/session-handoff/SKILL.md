@@ -1,17 +1,16 @@
 ---
 name: session-handoff
 description: >
-  This skill should be used immediately whenever a "[context-watch]" message
-  appears in the conversation — that is the deterministic signal that context
-  usage has crossed its threshold, or that open handoffs are awaiting resume at
-  session start — and whenever the user says "hand off", "handoff", "wrap up
-  the session", "prepare a handoff", "write a handoff doc", "park this work",
-  or "continue this in a new session", or when context is nearly exhausted or
-  auto-compaction is imminent. Also use it to resume: at session start when
-  open handoffs are announced, or whenever the user asks to resume or pick up
-  parked work.
+  Use immediately whenever a "[context-watch]" message appears in conversation.
+  Also run whenever the user says a variation of "hand off", "wrap up the
+  session", "park this work", or "save this for later", or when context is
+  nearly exhausted or auto-compaction is imminent. Also use it to resume: at
+  session start when open handoffs are announced, or whenever the user asks to
+  resume or pick up parked work. Do not use for ordinary progress summaries,
+  commit messages, or status updates while the session is continuing, and do
+  not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.6.0"
+  version: "0.6.1"
 ---
 
 # Session Handoff
@@ -38,8 +37,10 @@ so it can be customized on its own without touching the others:
 - **§6 Mechanics** — how the hooks and ledger work. Reference, not policy.
 
 **Invariants the hooks depend on — keep these through any customization:**
-handoff files end in `.md` and live under `./.handoffs/`; front matter is
-fenced by `---` lines; new handoffs carry `status: open` plus a one-line
+handoff files end in `.md` and live in the directory
+`handoff_ledger.py save-path` prints (`./.handoffs/` when it exists, else the
+per-project fallback `~/.claude/handoffs/<project>/`) — the ledger reads both
+locations plus legacy `./HANDOFF.md`; front matter is fenced by `---` lines; new handoffs carry `status: open` plus a one-line
 `description:`; state changes go through the ledger commands
 (`handoff_ledger.py resume|supersede <path>`), never by hand-editing status
 on a whim. Everything else — section names, body structure, naming pattern,
@@ -71,9 +72,9 @@ write a new dated file and mark the previous one replaced:
 Legacy undated files and the single-file `./HANDOFF.md` (topic "default")
 remain supported.
 
-Customizing: any `.md` filename under the directory printed by
-`handoff_ledger.py save-path [dir]` is scanned, so a project may impose its
-own convention (ticket ids, sprint prefixes). Keep the ending date/time
+Customizing: every `.md` file in either scanned location (`./.handoffs/` and
+the per-project fallback `~/.claude/handoffs/<project>/`) is read, so a
+project may impose its own filename convention (ticket ids, sprint prefixes). Keep the ending date/time
 recoverable — either in the filename prefix or a `created:` front-matter
 line — so announcements can order handoffs newest first.
 
@@ -197,16 +198,11 @@ handoff's "Next steps".
   `resolve <topic-or-path>`, `resume <path>`,
   `supersede <path> [--by <new-path>]`, `save-path [dir]`, and
   `new-path <topic> [dir] [--json]`.
-- Thresholds are absolute tokens per model (quality degrades at an absolute
-  occupancy, not a percentage of the window): HANDOFF_AT (per-launch, highest
-  precedence), then CONTEXT_WATCH_TOKENS_MAP, then ./.context-watch.json,
-  then ~/.context-watch/thresholds.json, then a global CONTEXT_WATCH_TOKENS,
-  with 130,000 as the built-in default. Other knobs: _PENDING, _LOG
-  (analytics; `context_watch.py stats`), _WINDOW, _SKILL, _MODE, _AGENT,
-  _DISABLE, _MAX_AGE_DAYS — see the plugin README. With AUTORESUME=1 (legacy
-  CONTEXT_WATCH_AUTORESUME=1) a single open handoff is resumed at session
-  start without asking; `HANDOFF_AT=<n> AUTORESUME=1 claude` makes the whole
-  hand-off-and-continue cycle cost the user one `/clear`.
+- Thresholds are absolute tokens per model, set by the operator via `HANDOFF_AT`
+  (per-launch) or the `CONTEXT_WATCH_*` knobs; `AUTORESUME=1` resumes a single
+  open handoff at session start without asking. Precedence and the full knob
+  list are owner configuration, documented in the plugin README — the trigger
+  notice already tells this skill whether autoresume is active (§1).
 - In environments without hooks, this skill still works: run
   `python3 <hooks-dir>/handoff_ledger.py list [dir] --json --max-age-days <N>`
   whenever beginning work in a folder, using the same 14-day default as
