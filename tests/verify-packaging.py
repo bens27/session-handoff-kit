@@ -61,24 +61,30 @@ def main():
               "rc=%d stderr=%s" % (p.returncode, p.stderr[:300]))
         plugin_art = os.path.join(REPO, "dist/session-handoff.plugin")
         skill_art = os.path.join(REPO, "dist/session-handoff-chat.skill")
-        for art, member_needle, name in (
-                (plugin_art, "plugin.json", "artifact-plugin"),
-                (skill_art, "SKILL.md", "artifact-skill")):
+        # handoff-template.md must ship in both: SKILL.md delegates the document
+        # structure to it, so a package without it installs a skill that points
+        # at a file the user does not have.
+        for art, member_needles, name in (
+                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md"), "artifact-plugin"),
+                (skill_art, ("SKILL.md", "handoff-template.md"), "artifact-skill")):
             if not os.path.isfile(art):
                 check(name, False, "%s not produced" % os.path.relpath(art, REPO))
                 continue
             try:
                 names = zipfile.ZipFile(art).namelist()
-                check(name, any(member_needle in n for n in names),
-                      "zip %s lacks %s; members=%r" % (os.path.relpath(art, REPO), member_needle, names[:10]))
             except Exception as e:
                 check(name, False, "not a readable zip: %s" % e)
+                continue
+            for member_needle in member_needles:
+                check("%s:%s" % (name, member_needle), any(member_needle in n for n in names),
+                      "zip %s lacks %s; members=%r" % (os.path.relpath(art, REPO), member_needle, names[:10]))
         gi = open(os.path.join(REPO, ".gitignore")).read() if os.path.isfile(os.path.join(REPO, ".gitignore")) else ""
         check("dist-gitignored", "dist" in gi, ".gitignore must exclude dist/")
 
     # 4. Root README layout must mention the actually-shipped files.
     readme = open(os.path.join(REPO, "README.md")).read()
-    for needle in ("handoff_ledger.py", "thresholds.example.json", "package.sh"):
+    for needle in ("handoff_ledger.py", "thresholds.example.json", "package.sh",
+                   "handoff-template.md"):
         check("readme-mentions-%s" % needle, needle in readme)
 
     print()

@@ -246,15 +246,38 @@ session-handoff-kit/
 │   ├── hooks/context_watch.py           # the unified watcher (also used by Codex)
 │   ├── hooks/handoff_ledger.py          # tracks handoff state and chains
 │   ├── hooks/thresholds.example.json    # sample per-model threshold config
-│   └── skills/session-handoff/SKILL.md
+│   └── skills/session-handoff/
+│       ├── SKILL.md                     # trigger, naming, resume, mechanics
+│       └── handoff-template.md          # the handoff's shape — edit this to experiment
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
 ├── codex/
 │   ├── install.sh                       # copies hook + skill, generates ~/.codex/hooks.json
 │   ├── hooks/context_watch.py           # same script
-│   └── skills/session-handoff/SKILL.md  # same skill (SKILL.md is portable)
-├── chat/session-handoff-chat/SKILL.md   # behavioral variant for claude.ai
+│   └── skills/session-handoff/          # same two files (portable, byte-identical)
+├── chat/session-handoff-chat/
+│   ├── SKILL.md                         # behavioral variant for claude.ai
+│   └── handoff-template.md              # chat handoff shape — edit this to experiment
 └── chrome-extension/                    # Chrome/Edge: pre-populate the new-chat init prompt
 ```
+
+## Changing the shape of a handoff
+
+The handoff document's structure is deliberately not inside `SKILL.md`. Each
+skill ships a `handoff-template.md` next to it holding the front matter, the
+body outline, and the length rules; `SKILL.md` §3 just points at it. To try a
+different handoff shape — extra sections, fewer sections, a different order —
+edit `handoff-template.md` alone. Trigger thresholds, file naming, the ledger,
+and the resume flow are untouched by that edit.
+
+Two constraints when you rewrite it:
+
+- **Keep the front matter.** The hooks parse it. `status: open` and the
+  one-line `description:` are what the session-start announcer reads; drop them
+  and your handoffs stop being announced.
+- **The agent template is mirrored.** `plugins/session-handoff/` and `codex/`
+  must stay byte-identical; `tests/verify-skills.py` asserts it, along with the
+  shared agent/chat section contract in SPEC §7.4. Run `python3
+  tests/verify-skills.py` after editing.
 
 ## What "useful on any environment" means
 

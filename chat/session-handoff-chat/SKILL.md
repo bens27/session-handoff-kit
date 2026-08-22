@@ -12,7 +12,7 @@ description: >
   HANDOFF.md — and whenever a memory file listing open handoffs exists and the
   user's request plausibly relates to one of them.
 metadata:
-  version: "0.4.1"
+  version: "0.4.2"
 ---
 
 # Session Handoff (chat)
@@ -53,25 +53,12 @@ announcement unprompted, the chat equivalent of the plugin's SessionStart hook.
 
 ## Producing a handoff
 
-Build the content with this template, under roughly 1,500 words — dense and
-specific, no narration of the conversation:
+The shape of the handoff — its header line, section set, and length rule —
+lives in `handoff-template.md`, bundled with this skill. Read it and build the
+content to that template.
 
-```markdown
-SESSION HANDOFF — <topic-slug> — <date>
-
-## Objective
-## Current state
-## Decisions and rationale
-## Artifacts produced
-## In flight
-## Next steps
-## Gotchas
-```
-
-Record what was tried and abandoned, not only what succeeded. If the work
-lives in a project folder that maintains a `LESSONS.md`, append this session's
-new lessons there and reference it from Gotchas instead of duplicating its
-content.
+It is a separate file so the structure of a handoff can be experimented with on
+its own: rewrite `handoff-template.md` and nothing in this file changes.
 
 Then persist through every channel available, in this order:
 

@@ -10,7 +10,7 @@ description: >
   commit messages, or status updates while the session is continuing, and do
   not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.6.1"
+  version: "0.7.0"
 ---
 
 # Session Handoff
@@ -28,8 +28,8 @@ so it can be customized on its own without touching the others:
 - **§1 Wind-down protocol** — what to do the moment the trigger fires.
 - **§2 Naming and location** — where handoff files live and how they are
   named. Swap in your own naming convention here.
-- **§3 Document structure** — the handoff template. Replace the body outline
-  with your own preferred structure here.
+- **§3 Document structure** — delegates to `handoff-template.md`. Replace the
+  body outline with your own preferred structure there, not here.
 - **§4 Resuming** — how announced handoffs are retrieved and adopted.
 - **§5 After resuming** — the extension point for actions that should always
   run right after retrieval (loading another skill, running a status
@@ -86,67 +86,15 @@ line — so announcements can order handoffs newest first.
 
 ## §3 Document structure
 
-Start the file with this front matter — `created:` comes verbatim from
-`new-path`'s `created` field (§2), `status: open` is what marks it
-untransferred for the session-start announcer, and `description` is the
-one-line summary the announcer shows so handoffs can be told apart without
-opening them (make it specific: what is parked and where it stands):
-Use `references:` when this thread depends on another file or an earlier
-handoff: name it there so `resolve` surfaces it automatically to whoever
-resumes, instead of relying on the resuming session to notice it needs that
-file.
-For the title line, `<date>` is the same `created` value from `new-path`
-(a short date form is fine), not a separately computed or recalled date.
+The shape of the handoff document — front matter, body outline, length rules —
+lives in `handoff-template.md`, beside this file. Read it and write the handoff
+to that template.
 
-```markdown
----
-topic: <topic-slug>
-created: <ISO date-time>
-status: open
-description: <one line: what is parked here and where it stands>
-skills: <optional comma-separated skill names the resuming session must load first>
-references: <optional comma-separated paths another resuming session must also read (feeds resolve's must_also_read list)>
----
-# Session Handoff — <topic> — <date>
-
-## Objective
-<the overall goal of this work, one or two sentences>
-
-## Current state
-<what is done and verified working; what is built but not yet verified>
-
-## Decisions and rationale
-<decisions made this session and why — anything a fresh session might
-otherwise re-litigate>
-
-## Files touched
-<paths, each with a phrase on what changed and why>
-
-## In flight
-<the exact thing in progress at handoff time, and its next concrete step>
-
-## Next steps
-1. <ordered, concrete, with paths and commands>
-
-## Gotchas
-<constraints, footguns, and approaches that were tried and abandoned —
-preventing re-work is half the value of a handoff>
-```
-
-Rules:
-
-- Target under 1,500 words: dense and specific, no narration of the
-  conversation. Prefer facts a fresh session can verify (paths, commands,
-  test names).
-- Record what was tried and abandoned, not only what succeeded.
-- If a `LESSONS.md` is maintained in this project (for example by a
-  mistake-learning skill), append this session's new lessons there and
-  reference it from Gotchas instead of duplicating its content.
-
-Customizing: the body outline above is a default, not a contract — projects
-may substitute their own section set (e.g. add "Open questions", drop
-"Decisions"). Only the front-matter block is load-bearing; everything below
-the second `---` is free-form.
+It is a separate file so the structure of a handoff can be experimented with on
+its own: rewrite `handoff-template.md` and nothing in this file changes. The
+front matter is the load-bearing part (`status: open` plus a one-line
+`description:` are what the session-start announcer reads); the body outline
+under it is yours to replace.
 
 ## §4 Resuming
 

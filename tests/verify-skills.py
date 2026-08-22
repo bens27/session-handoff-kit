@@ -9,6 +9,12 @@ REPO = os.getcwd()
 AGENT = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/SKILL.md")
 CODEX = os.path.join(REPO, "codex/skills/session-handoff/SKILL.md")
 CHAT = os.path.join(REPO, "chat/session-handoff-chat/SKILL.md")
+# The handoff document's shape lives in a bundled template beside each SKILL.md
+# so it can be rewritten on its own. A "skill" is therefore its directory, not
+# one file: shared-contract literals are asserted against SKILL.md + template.
+AGENT_TEMPLATE = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/handoff-template.md")
+CODEX_TEMPLATE = os.path.join(REPO, "codex/skills/session-handoff/handoff-template.md")
+CHAT_TEMPLATE = os.path.join(REPO, "chat/session-handoff-chat/handoff-template.md")
 PLUGIN_JSON = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
 SPEC = os.path.join(REPO, "SPEC.md")
 
@@ -46,7 +52,29 @@ def main():
     spec = open(SPEC).read()
     plugin_version = json.load(open(PLUGIN_JSON))["version"]
 
+    for path, name in ((AGENT_TEMPLATE, "agent"), (CHAT_TEMPLATE, "chat")):
+        check("%s-template-file-present" % name, os.path.exists(path),
+              "%s is missing; SKILL.md delegates the document structure to it" % path)
+    if not all(os.path.exists(p) for p in (AGENT_TEMPLATE, CODEX_TEMPLATE, CHAT_TEMPLATE)):
+        print()
+        print("FAILED: %d assertion(s): %s" % (len(failures), ", ".join(failures)))
+        return 1
+
+    a_tpl = open(AGENT_TEMPLATE).read()
+    c_tpl = open(CODEX_TEMPLATE).read()
+    chat_tpl = open(CHAT_TEMPLATE).read()
+
+    # Contract literals may live in either half of a skill directory.
+    agent_skill = a + "\n" + a_tpl
+    chat_skill = chat + "\n" + chat_tpl
+
     check("agent-copies-identical", a == c)
+    check("agent-template-copies-identical", a_tpl == c_tpl,
+          "the codex mirror of handoff-template.md must be byte-identical")
+    for text, tpl_name, name in ((a, "handoff-template.md", "agent"),
+                                 (chat, "handoff-template.md", "chat")):
+        check("%s-skill-references-template" % name, tpl_name in text,
+              "SKILL.md must point at %s, or the template is orphaned" % tpl_name)
     check("agent-version-matches-plugin-json",
           re.search(r'version:\s*"?%s\b' % re.escape(plugin_version), a) is not None,
           "agent SKILL.md must declare version %s (from plugin.json, the single source of truth)" % plugin_version)
@@ -98,10 +126,12 @@ def main():
         check("spec-shared-contract-literals-parsed", len(literals) >= 8,
               "expected at least 8 shared-contract literals parsed from SPEC.md")
         for literal in literals:
-            for text, path, skill_name in ((a, AGENT, "agent"), (chat, CHAT, "chat")):
+            for text, path, skill_name in ((agent_skill, AGENT, "agent"),
+                                           (chat_skill, CHAT, "chat")):
                 ok = re.search(re.escape(literal), text, re.IGNORECASE) is not None
                 check("shared-contract-%s:%s" % (skill_name, literal), ok,
-                      "missing literal %r in %s" % (literal, path))
+                      "missing literal %r in %s or its handoff-template.md"
+                      % (literal, path))
 
     chat_version = re.search(r'version:\s*"([^"]+)"', chat)
     check("chat-version-present", chat_version is not None,
