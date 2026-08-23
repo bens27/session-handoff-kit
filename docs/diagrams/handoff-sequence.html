@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How a handoff crosses the context boundary</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:       #f4efe6;
+      --paper-2:     #fffdf8;
+      --ink:         #1a1714;
+      --muted:       #5c564e;
+      --soft:        #6e675d;
+      --rule:        rgba(26,23,20,0.12);
+      --accent:      #c24a28;
+      --accent-text: #9a3a1e;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --ui:      ui-sans-serif, system-ui, sans-serif;
+      --mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--ui);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+      text-rendering: optimizeLegibility;
+    }
+    .frame { max-width: 1280px; width: 100%; }
+    .eyebrow {
+      font-family: var(--mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--display);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 600; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--ink); margin-bottom: 0.4rem;
+    }
+    .standfirst {
+      font-family: var(--ui); font-size: 0.9rem; line-height: 1.5;
+      color: var(--muted); max-width: 62ch; margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+    footer {
+      margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid var(--rule);
+      font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--soft);
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Session Handoff Kit</p>
+    <h1>How a handoff crosses the context boundary</h1>
+    <p class="standfirst">The trigger is deterministic and the ledger is the only writer of state, so no
+      participant has to remember to hand off &mdash; and the session that picks the work up shares nothing
+      with the one that parked it.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="handoff-sequence-title handoff-sequence-desc">
+      <title id="handoff-sequence-title">How a handoff crosses the context boundary</title>
+      <desc id="handoff-sequence-desc">Sequence diagram in which a context-watch hook interrupts a filling session, that session asks the ledger for a path and writes a handoff file, then verifies it is discoverable; after the context boundary the session-start announcer queries the ledger, a fresh session with no shared state reads the handoff and marks it resumed.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c564e"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c24a28"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#5c564e" stroke-width="1.2"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f4efe6"/>
+
+      <!-- ============ context boundary band (drawn first: lifelines run over it) ============ -->
+      <rect x="40" y="336" width="1200" height="44" fill="rgba(26,23,20,0.035)"/>
+      <line x1="40" y1="336" x2="1240" y2="336" stroke="#c9c0b0" stroke-width="1" stroke-dasharray="6,4"/>
+      <line x1="40" y1="380" x2="1240" y2="380" stroke="#c9c0b0" stroke-width="1" stroke-dasharray="6,4"/>
+
+      <!-- ============ lifelines ============ -->
+      <line x1="160"  y1="100" x2="160"  y2="608" stroke="rgba(26,23,20,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="400"  y1="100" x2="400"  y2="608" stroke="rgba(26,23,20,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="640"  y1="100" x2="640"  y2="608" stroke="rgba(26,23,20,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="880"  y1="100" x2="880"  y2="608" stroke="rgba(26,23,20,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="1120" y1="100" x2="1120" y2="608" stroke="rgba(26,23,20,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- band label, placed in the clear gap between lifeline 1 and 2 -->
+      <rect x="184" y="340" width="188" height="36" fill="#f4efe6"/>
+      <text x="280" y="354" fill="#9a3a1e" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">CONTEXT BOUNDARY</text>
+      <text x="280" y="368" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.10em">ZERO SHARED STATE</text>
+
+      <!-- ============ activation bars ============ -->
+      <rect x="156"  y="128" width="8" height="192" fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+      <rect x="636"  y="164" width="8" height="48"  fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+      <rect x="636"  y="272" width="8" height="48"  fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+      <rect x="636"  y="396" width="8" height="84"  fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+      <rect x="636"  y="576" width="8" height="32"  fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+      <rect x="1116" y="504" width="8" height="104" fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+
+      <!-- ============ messages ============ -->
+      <!-- 1. hooks -> Session A : async injection -->
+      <line x1="396" y1="136" x2="168" y2="136" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-open)"/>
+      <!-- 2. Session A -> ledger -->
+      <line x1="168" y1="172" x2="632" y2="172" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- 3. ledger -> Session A (return) -->
+      <line x1="632" y1="208" x2="168" y2="208" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- 4. Session A -> .handoffs/ -->
+      <line x1="168" y1="244" x2="872" y2="244" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- 5. Session A -> ledger -->
+      <line x1="168" y1="280" x2="632" y2="280" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- 6. ledger -> Session A (return) -->
+      <line x1="632" y1="316" x2="168" y2="316" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- 7. hooks -> ledger -->
+      <line x1="404" y1="404" x2="632" y2="404" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- 8. ledger -> .handoffs/ -->
+      <line x1="648" y1="440" x2="872" y2="440" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- 9. ledger -> hooks (return) -->
+      <line x1="632" y1="476" x2="408" y2="476" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- 10. hooks -> Session B : async injection -->
+      <line x1="404" y1="512" x2="1112" y2="512" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-open)"/>
+      <!-- 11. Session B -> .handoffs/ -->
+      <line x1="1112" y1="548" x2="888" y2="548" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <!-- 12. Session B -> ledger : headline -->
+      <line x1="1112" y1="584" x2="648" y2="584" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+      <!-- ============ message labels (mask sits 8px clear of every stroke) ============ -->
+      <rect x="240" y="116" width="76" height="12" rx="2" fill="#f4efe6"/>
+      <text x="280" y="125" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">CONTEXT-WATCH</text>
+
+      <rect x="492" y="152" width="52" height="12" rx="2" fill="#f4efe6"/>
+      <text x="520" y="161" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NEW-PATH</text>
+
+      <rect x="476" y="188" width="84" height="12" rx="2" fill="#f4efe6"/>
+      <text x="520" y="197" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">PATH + CREATED</text>
+
+      <rect x="732" y="224" width="56" height="12" rx="2" fill="#f4efe6"/>
+      <text x="760" y="233" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">WRITE .MD</text>
+
+      <rect x="496" y="260" width="48" height="12" rx="2" fill="#f4efe6"/>
+      <text x="520" y="269" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RESOLVE</text>
+
+      <rect x="480" y="296" width="80" height="12" rx="2" fill="#f4efe6"/>
+      <text x="520" y="305" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">AUTHORITATIVE</text>
+
+      <rect x="484" y="384" width="68" height="12" rx="2" fill="#f4efe6"/>
+      <text x="520" y="393" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">LIST --JSON</text>
+
+      <rect x="716" y="420" width="84" height="12" rx="2" fill="#f4efe6"/>
+      <text x="760" y="429" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SCAN BOTH DIRS</text>
+
+      <rect x="480" y="456" width="80" height="12" rx="2" fill="#f4efe6"/>
+      <text x="520" y="465" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">OPEN HANDOFFS</text>
+
+      <rect x="960" y="492" width="76" height="12" rx="2" fill="#f4efe6"/>
+      <text x="1000" y="501" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">CONTEXT-WATCH</text>
+
+      <rect x="964" y="528" width="72" height="12" rx="2" fill="#f4efe6"/>
+      <text x="1000" y="537" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">READ HANDOFF</text>
+
+      <rect x="976" y="564" width="48" height="12" rx="2" fill="#f4efe6"/>
+      <text x="1000" y="573" fill="#9a3a1e" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RESUME</text>
+
+      <!-- ============ actors ============ -->
+      <!-- Session A -->
+      <rect x="60" y="44" width="200" height="56" rx="6" fill="#f4efe6"/>
+      <rect x="60" y="44" width="200" height="56" rx="6" fill="#fffdf8" stroke="#1a1714" stroke-width="1"/>
+      <rect x="68" y="48" width="48" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.40)" stroke-width="0.8"/>
+      <text x="92" y="57" fill="rgba(26,23,20,0.80)" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+      <text x="160" y="80" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Session A</text>
+      <text x="160" y="93" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">context filling up</text>
+
+      <!-- hooks -->
+      <rect x="300" y="44" width="200" height="56" rx="6" fill="#f4efe6"/>
+      <rect x="300" y="44" width="200" height="56" rx="6" fill="rgba(26,23,20,0.03)" stroke="rgba(26,23,20,0.30)" stroke-width="1"/>
+      <rect x="308" y="48" width="40" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.40)" stroke-width="0.8"/>
+      <text x="328" y="57" fill="rgba(26,23,20,0.80)" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">HOOK</text>
+      <text x="400" y="80" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Lifecycle hooks</text>
+      <text x="400" y="93" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">context_watch · announcer</text>
+
+      <!-- ledger -->
+      <rect x="540" y="44" width="200" height="56" rx="6" fill="#f4efe6"/>
+      <rect x="540" y="44" width="200" height="56" rx="6" fill="#fffdf8" stroke="#1a1714" stroke-width="1"/>
+      <rect x="548" y="48" width="32" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.40)" stroke-width="0.8"/>
+      <text x="564" y="57" fill="rgba(26,23,20,0.80)" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CLI</text>
+      <text x="640" y="80" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">handoff_ledger.py</text>
+      <text x="640" y="93" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">only writer of status</text>
+
+      <!-- .handoffs/  — FOCAL -->
+      <rect x="780" y="44" width="200" height="56" rx="6" fill="#f4efe6"/>
+      <rect x="780" y="44" width="200" height="56" rx="6" fill="rgba(194,74,40,0.08)" stroke="#c24a28" stroke-width="1"/>
+      <rect x="788" y="48" width="48" height="12" rx="2" fill="transparent" stroke="rgba(194,74,40,0.50)" stroke-width="0.8"/>
+      <text x="812" y="57" fill="#9a3a1e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+      <text x="880" y="80" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">.handoffs/*.md</text>
+      <text x="880" y="93" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">survives the boundary</text>
+
+      <!-- Session B -->
+      <rect x="1020" y="44" width="200" height="56" rx="6" fill="#f4efe6"/>
+      <rect x="1020" y="44" width="200" height="56" rx="6" fill="#fffdf8" stroke="#1a1714" stroke-width="1"/>
+      <rect x="1028" y="48" width="48" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.40)" stroke-width="0.8"/>
+      <text x="1052" y="57" fill="rgba(26,23,20,0.80)" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+      <text x="1120" y="80" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Session B</text>
+      <text x="1120" y="93" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">fresh · knows nothing</text>
+
+      <!-- ============ legend ============ -->
+      <line x1="40" y1="648" x2="1240" y2="648" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+      <text x="40" y="668" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <line x1="140" y1="664" x2="164" y2="664" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <text x="176" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">CALL</text>
+
+      <line x1="256" y1="664" x2="280" y2="664" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="292" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">RETURN</text>
+
+      <line x1="388" y1="664" x2="412" y2="664" stroke="#5c564e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-open)"/>
+      <text x="424" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">INJECTED NOTICE (ONE-WAY)</text>
+
+      <line x1="660" y1="664" x2="684" y2="664" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="696" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">STATE CHANGE: OPEN &#8594; RESUMED</text>
+
+      <rect x="960" y="656" width="8" height="12" fill="rgba(26,23,20,0.06)" stroke="#5c564e" stroke-width="0.8"/>
+      <text x="980" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">HOLDS CONTROL</text>
+    </svg>
+
+    <footer>Session Handoff Kit &middot; diagram 1 of 3 &middot; skin: soux.ai</footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resuming is a decision, not a default</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:       #f4efe6;
+      --paper-2:     #fffdf8;
+      --ink:         #1a1714;
+      --muted:       #5c564e;
+      --soft:        #6e675d;
+      --rule:        rgba(26,23,20,0.12);
+      --accent:      #c24a28;
+      --accent-text: #9a3a1e;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --ui:      ui-sans-serif, system-ui, sans-serif;
+      --mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--ui);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+      text-rendering: optimizeLegibility;
+    }
+    .frame { max-width: 1280px; width: 100%; }
+    .eyebrow {
+      font-family: var(--mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--display);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 600; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--ink); margin-bottom: 0.4rem;
+    }
+    .standfirst {
+      font-family: var(--ui); font-size: 0.9rem; line-height: 1.5;
+      color: var(--muted); max-width: 62ch; margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+    footer {
+      margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid var(--rule);
+      font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--soft);
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart &middot; Session Handoff Kit</p>
+    <h1>Resuming is a decision, not a default</h1>
+    <p class="standfirst">A session start reads the open handoffs and says so. What happens next depends on how
+      many there are &mdash; and on what the user actually asked for, because an unrelated request wins and leaves
+      the handoffs where they are. Of the three ways out, only one writes anything back.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="handoff-resume-title handoff-resume-desc">
+      <title id="handoff-resume-title">Resuming is a decision, not a default</title>
+      <desc id="handoff-resume-desc">Flowchart of what a session does with announced handoffs: if none are open it starts fresh, if one is open it resolves and reads it, and if several are open it presents the list and asks which. The user then either declines — because they came with an unrelated task, or picked none of the options — leaving every handoff open, or picks one, which is the only branch that marks a handoff resumed in the ledger and loads its skills before the work continues.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c564e"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c24a28"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f4efe6"/>
+
+      <!-- ============ connectors (drawn before shapes: z-order puts lines behind nodes) ============ -->
+      <!-- C1. start -> decision 1 -->
+      <line x1="400" y1="120" x2="400" y2="152" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- C2. none -> start fresh -->
+      <path d="M 540 192 H 792 A 8 8 0 0 1 800 200 V 264 A 8 8 0 0 0 808 272 H 880" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- C3. one -> read and restate -->
+      <path d="M 260 192 H 184 A 8 8 0 0 0 176 200 V 288" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- C4. many -> present the list -->
+      <path d="M 400 232 V 256 A 8 8 0 0 1 408 264 H 664 A 8 8 0 0 1 672 272 V 288" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- C5 / C6. both branches rejoin at the merge dot -->
+      <path d="M 176 352 V 392 A 8 8 0 0 1 184 400 H 352" fill="none" stroke="#5c564e" stroke-width="1"/>
+      <path d="M 672 352 V 392 A 8 8 0 0 0 664 400 H 352" fill="none" stroke="#5c564e" stroke-width="1"/>
+
+      <!-- C7. merge -> decision 2 -->
+      <line x1="352" y1="408" x2="352" y2="440" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- C8. no -> do their task -->
+      <line x1="492" y1="480" x2="880" y2="480" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- C9. yes -> mark resumed : the only branch that writes -->
+      <path d="M 352 520 V 528 A 8 8 0 0 1 360 536 H 672 A 8 8 0 0 1 680 544 V 552" fill="none" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+      <!-- C10. mark resumed -> continue -->
+      <line x1="792" y1="584" x2="880" y2="584" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- ============ branch labels (mask sits 8px clear of every stroke) ============ -->
+      <rect x="200" y="172" width="48" height="12" rx="2" fill="#f4efe6"/>
+      <text x="224" y="181" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ONE</text>
+
+      <rect x="616" y="172" width="56" height="12" rx="2" fill="#f4efe6"/>
+      <text x="644" y="181" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NONE</text>
+
+      <rect x="504" y="244" width="56" height="12" rx="2" fill="#f4efe6"/>
+      <text x="532" y="253" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">MANY</text>
+
+      <rect x="660" y="460" width="48" height="12" rx="2" fill="#f4efe6"/>
+      <text x="684" y="469" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+      <rect x="492" y="516" width="48" height="12" rx="2" fill="#f4efe6"/>
+      <text x="516" y="525" fill="#9a3a1e" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="800" y="564" width="72" height="12" rx="2" fill="#f4efe6"/>
+      <text x="836" y="573" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">LOAD SKILLS</text>
+
+      <!-- ============ terminals ============ -->
+      <!-- session start -->
+      <rect x="288" y="64" width="224" height="56" rx="20" fill="#f4efe6"/>
+      <rect x="288" y="64" width="224" height="56" rx="20" fill="#fffdf8" stroke="#5c564e" stroke-width="1"/>
+      <text x="400" y="88" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Session start</text>
+      <text x="400" y="104" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">a hook reads the ledger</text>
+
+      <!-- start fresh -->
+      <rect x="880" y="244" width="280" height="56" rx="20" fill="#f4efe6"/>
+      <rect x="880" y="244" width="280" height="56" rx="20" fill="#fffdf8" stroke="#5c564e" stroke-width="1"/>
+      <text x="1020" y="268" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Start fresh</text>
+      <text x="1020" y="284" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">nothing to announce</text>
+
+      <!-- do their task -->
+      <rect x="880" y="452" width="280" height="56" rx="20" fill="#f4efe6"/>
+      <rect x="880" y="452" width="280" height="56" rx="20" fill="#fffdf8" stroke="#5c564e" stroke-width="1"/>
+      <text x="1020" y="476" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Do their task</text>
+      <text x="1020" y="492" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">mention them once &middot; leave them open</text>
+
+      <!-- continue the work -->
+      <rect x="880" y="556" width="280" height="56" rx="20" fill="#f4efe6"/>
+      <rect x="880" y="556" width="280" height="56" rx="20" fill="#fffdf8" stroke="#5c564e" stroke-width="1"/>
+      <text x="1020" y="580" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Continue the work</text>
+      <text x="1020" y="596" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">from &#8220;Next steps&#8221;</text>
+
+      <!-- ============ decisions ============ -->
+      <polygon points="400,152 540,192 400,232 260,192" fill="#f4efe6"/>
+      <polygon points="400,152 540,192 400,232 260,192" fill="#fffdf8" stroke="#5c564e" stroke-width="1"/>
+      <text x="400" y="188" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Open handoffs?</text>
+      <text x="400" y="204" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">announced &middot; age &#8804; 14d</text>
+
+      <polygon points="352,440 492,480 352,520 212,480" fill="#f4efe6"/>
+      <polygon points="352,440 492,480 352,520 212,480" fill="#fffdf8" stroke="#5c564e" stroke-width="1"/>
+      <text x="352" y="476" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Resume one?</text>
+      <text x="352" y="492" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the user decides</text>
+
+      <!-- ============ steps ============ -->
+      <!-- read and restate -->
+      <rect x="64" y="288" width="224" height="64" rx="6" fill="#f4efe6"/>
+      <rect x="64" y="288" width="224" height="64" rx="6" fill="#fffdf8" stroke="#1a1714" stroke-width="1"/>
+      <rect x="72" y="296" width="48" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.40)" stroke-width="0.8"/>
+      <text x="96" y="305" fill="rgba(26,23,20,0.80)" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">READ</text>
+      <text x="176" y="328" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Read and restate</text>
+      <text x="176" y="344" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">resolve &middot; must_also_read</text>
+
+      <!-- present the list -->
+      <rect x="560" y="288" width="224" height="64" rx="6" fill="#f4efe6"/>
+      <rect x="560" y="288" width="224" height="64" rx="6" fill="#fffdf8" stroke="#1a1714" stroke-width="1"/>
+      <rect x="568" y="296" width="48" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.40)" stroke-width="0.8"/>
+      <text x="592" y="305" fill="rgba(26,23,20,0.80)" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ASK</text>
+      <text x="672" y="328" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Present the list</text>
+      <text x="672" y="344" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">ask which &mdash; or none</text>
+
+      <!-- mark resumed — FOCAL -->
+      <rect x="568" y="552" width="224" height="64" rx="6" fill="#f4efe6"/>
+      <rect x="568" y="552" width="224" height="64" rx="6" fill="rgba(194,74,40,0.08)" stroke="#c24a28" stroke-width="1"/>
+      <rect x="576" y="560" width="56" height="12" rx="2" fill="transparent" stroke="rgba(194,74,40,0.50)" stroke-width="0.8"/>
+      <text x="604" y="569" fill="#9a3a1e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">WRITE</text>
+      <text x="680" y="592" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle">Mark resumed</text>
+      <text x="680" y="606" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">handoff_ledger.py resume</text>
+
+      <!-- merge point -->
+      <circle cx="352" cy="400" r="4" fill="#1a1714"/>
+
+      <!-- ============ editorial callout ============ -->
+      <text x="64" y="584" fill="#1a1714" font-size="16" font-style="italic" font-family="'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif">three ways out; only this one writes</text>
+      <path d="M 396 572 Q 468 556 556 576" fill="none" stroke="rgba(26,23,20,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="556" cy="576" r="2" fill="#1a1714"/>
+
+      <!-- ============ legend ============ -->
+      <line x1="40" y1="648" x2="1240" y2="648" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+      <text x="40" y="668" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="140" y="656" width="24" height="12" rx="6" fill="#fffdf8" stroke="#5c564e" stroke-width="0.8"/>
+      <text x="176" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">START &middot; END</text>
+
+      <rect x="304" y="656" width="24" height="12" rx="2" fill="#fffdf8" stroke="#5c564e" stroke-width="0.8"/>
+      <text x="340" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">STEP</text>
+
+      <polygon points="460,656 476,662 460,668 444,662" fill="#fffdf8" stroke="#5c564e" stroke-width="0.8"/>
+      <text x="488" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">DECISION</text>
+
+      <circle cx="608" cy="664" r="4" fill="#1a1714"/>
+      <text x="624" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">BRANCHES REJOIN</text>
+
+      <line x1="800" y1="664" x2="824" y2="664" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="836" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">THE ONLY LEDGER WRITE</text>
+    </svg>
+
+    <footer>Session Handoff Kit &middot; diagram 3 of 3 &middot; skin: soux.ai</footer>
+  </div>
+</body>
+</html>

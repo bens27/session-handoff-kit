@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Announcing a handoff is not resuming it</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:       #f4efe6;
+      --paper-2:     #fffdf8;
+      --ink:         #1a1714;
+      --muted:       #5c564e;
+      --soft:        #6e675d;
+      --rule:        rgba(26,23,20,0.12);
+      --accent:      #c24a28;
+      --accent-text: #9a3a1e;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --ui:      ui-sans-serif, system-ui, sans-serif;
+      --mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--ui);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+      text-rendering: optimizeLegibility;
+    }
+    .frame { max-width: 1280px; width: 100%; }
+    .eyebrow {
+      font-family: var(--mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--display);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 600; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--ink); margin-bottom: 0.4rem;
+    }
+    .standfirst {
+      font-family: var(--ui); font-size: 0.9rem; line-height: 1.5;
+      color: var(--muted); max-width: 62ch; margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+    footer {
+      margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid var(--rule);
+      font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--soft);
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">State machine &middot; Session Handoff Kit</p>
+    <h1>Announcing a handoff is not resuming it</h1>
+    <p class="standfirst">A handoff has three statuses and exactly one writer. Every session start reads the
+      open ones and announces them &mdash; a read that changes nothing. Only an explicit ledger command moves a
+      handoff out of <code>open</code>, and nothing moves it back.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="handoff-states-title handoff-states-desc">
+      <title id="handoff-states-title">Announcing a handoff is not resuming it</title>
+      <desc id="handoff-states-desc">State machine of a session handoff's three statuses: a new handoff is created open, where every session start announces it without changing it, and only an explicit ledger command moves it on — to resumed when a session picks the work up, or to superseded when a newer handoff on the same thread replaces it. Both closed statuses are skipped by the announcer, and no transition returns a handoff to open.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c564e"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c24a28"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f4efe6"/>
+
+      <!-- ============ closed region (drawn first: connectors and boxes run over it) ============ -->
+      <rect x="768" y="96" width="456" height="480" rx="8" fill="rgba(26,23,20,0.025)" stroke="rgba(26,23,20,0.20)" stroke-width="1" stroke-dasharray="6,4"/>
+      <text x="792" y="124" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">CLOSED &middot; THE ANNOUNCER SKIPS THESE</text>
+
+      <!-- ============ transitions (drawn before states) ============ -->
+      <!-- T1. start -> open -->
+      <line x1="96" y1="320" x2="192" y2="320" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- T2. open -> resumed -->
+      <path d="M 480 300 H 632 A 8 8 0 0 0 640 292 V 220 A 8 8 0 0 1 648 212 H 808" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- T3. open -> superseded -->
+      <path d="M 480 340 H 632 A 8 8 0 0 1 640 348 V 452 A 8 8 0 0 0 648 460 H 808" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- T4. open -> open : the guard. announcing reads, it never writes -->
+      <path d="M 296 260 V 208 A 8 8 0 0 1 304 200 H 376 A 8 8 0 0 1 384 208 V 256" fill="none" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+      <!-- ============ transition labels (mask sits 8px clear of every stroke) ============ -->
+      <rect x="108" y="300" width="72" height="12" rx="2" fill="#f4efe6"/>
+      <text x="144" y="309" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NEW HANDOFF</text>
+
+      <rect x="684" y="192" width="88" height="12" rx="2" fill="#f4efe6"/>
+      <text x="728" y="201" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RESUME &lt;PATH&gt;</text>
+
+      <rect x="680" y="440" width="96" height="12" rx="2" fill="#f4efe6"/>
+      <text x="728" y="449" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SUPERSEDE --BY</text>
+
+      <rect x="296" y="148" width="88" height="44" rx="2" fill="#f4efe6"/>
+      <text x="340" y="160" fill="#9a3a1e" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SESSION START</text>
+      <text x="340" y="172" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">[AGE &#8804; 14D]</text>
+      <text x="340" y="184" fill="#9a3a1e" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ANNOUNCE ONLY</text>
+
+      <!-- ============ states ============ -->
+      <!-- start -->
+      <circle cx="88" cy="320" r="6" fill="#1a1714"/>
+
+      <!-- open — FOCAL -->
+      <rect x="200" y="260" width="280" height="120" rx="8" fill="#f4efe6"/>
+      <rect x="200" y="260" width="280" height="120" rx="8" fill="rgba(194,74,40,0.08)" stroke="#c24a28" stroke-width="1"/>
+      <rect x="208" y="268" width="40" height="12" rx="2" fill="transparent" stroke="rgba(194,74,40,0.50)" stroke-width="0.8"/>
+      <text x="228" y="277" fill="#9a3a1e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">LIVE</text>
+      <text x="340" y="312" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">open</text>
+      <text x="340" y="332" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status: open</text>
+      <text x="340" y="348" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the only announced status</text>
+
+      <!-- resumed -->
+      <rect x="816" y="152" width="360" height="120" rx="8" fill="#f4efe6"/>
+      <rect x="816" y="152" width="360" height="120" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+      <rect x="824" y="160" width="56" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.30)" stroke-width="0.8"/>
+      <text x="852" y="169" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CLOSED</text>
+      <text x="996" y="204" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">resumed</text>
+      <text x="996" y="224" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status: resumed &middot; resumed: &lt;ts&gt;</text>
+      <text x="996" y="240" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">a session picked the work up</text>
+
+      <!-- superseded -->
+      <rect x="816" y="400" width="360" height="120" rx="8" fill="#f4efe6"/>
+      <rect x="816" y="400" width="360" height="120" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+      <rect x="824" y="408" width="56" height="12" rx="2" fill="transparent" stroke="rgba(26,23,20,0.30)" stroke-width="0.8"/>
+      <text x="852" y="417" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CLOSED</text>
+      <text x="996" y="452" fill="#1a1714" font-size="12" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">superseded</text>
+      <text x="996" y="472" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status: superseded &middot; superseded_by:</text>
+      <text x="996" y="488" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">a newer handoff replaced it</text>
+
+      <!-- ============ editorial callout ============ -->
+      <text x="920" y="616" fill="#1a1714" font-size="16" font-style="italic" font-family="'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif">no transition leads back to open</text>
+      <path d="M 912 600 Q 944 568 996 528" fill="none" stroke="rgba(26,23,20,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="996" cy="528" r="2" fill="#1a1714"/>
+
+      <!-- ============ legend ============ -->
+      <line x1="40" y1="648" x2="1240" y2="648" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+      <text x="40" y="668" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <circle cx="140" cy="664" r="6" fill="#1a1714"/>
+      <text x="156" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">HANDOFF CREATED</text>
+
+      <line x1="316" y1="664" x2="340" y2="664" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+      <text x="352" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">LEDGER COMMAND &middot; WRITES STATUS</text>
+
+      <line x1="628" y1="664" x2="652" y2="664" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="664" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">SESSION START &middot; READS ONLY</text>
+
+      <rect x="880" y="656" width="20" height="12" rx="2" fill="rgba(26,23,20,0.025)" stroke="rgba(26,23,20,0.20)" stroke-width="0.8" stroke-dasharray="6,4"/>
+      <text x="912" y="668" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">NOT ANNOUNCED</text>
+    </svg>
+
+    <footer>Session Handoff Kit &middot; diagram 2 of 3 &middot; skin: soux.ai</footer>
+  </div>
+</body>
+</html>
