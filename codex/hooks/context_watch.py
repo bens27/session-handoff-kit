@@ -372,7 +372,7 @@ def handle_session_start(evt, agent):
         if skills:
             skills_note = ("First load exactly these skills via the Skill tool, in "
                            "order, before resuming: %s. " % skills)
-        note = ("[context-watch] One open handoff awaiting resume: '%s' (%.0fd old, ended %s) at %s%s. "
+        note = ("context-watch: One open handoff awaiting resume: '%s' (%.0fd old, ended %s) at %s%s. "
                 % (h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"], suffix)
                 + action + skills_note + mark + " " + defer)
     else:
@@ -383,20 +383,21 @@ def handle_session_start(evt, agent):
                 " [skills: %s]" % h.get("skills") if h.get("skills") else "")
             for i, h in enumerate(open_handoffs)
         )
-        note = ("[context-watch] %d open handoffs awaiting resume: %s. Before any other "
+        note = ("context-watch: %d open handoffs awaiting resume: %s. Before any other "
                 "work, present this list and ask the user which one to resume (use an "
                 "interactive question tool if available), or none. %s %s"
                 % (len(open_handoffs), listing, mark, defer))
 
-    if agent == "claude":
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": note,
-            }
-        }))
-    else:
-        print(note)  # Codex: SessionStart stdout is injected as context
+    # Always emit SessionStart JSON for both Claude and Codex. Newer Codex treats
+    # stdout that looks like JSON (leading "[" or "{") as JSON; a plain-text note
+    # starting with "[" therefore fails parse. Empty stdout, non-JSON plain text,
+    # and valid SessionStart JSON are all fine.
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": note,
+        }
+    }))
     sys.exit(0)
 
 
@@ -409,7 +410,7 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill):
     if pending:
         detail += "; incl. ~%s pending" % format(pending, ",")
     message = (
-        "[context-watch] Context occupancy ~%s tokens, over the %s-token threshold "
+        "context-watch: Context occupancy ~%s tokens, over the %s-token threshold "
         "for %s [%s] (%s). Finish only the action currently in progress, then "
         "immediately invoke the `%s` skill: write the handoff document and stop. "
         "Do not begin any new work."
