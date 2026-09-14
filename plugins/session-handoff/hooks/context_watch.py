@@ -19,7 +19,9 @@ Occupancy measure (what the window holds heading into the NEXT call):
                (input incl. cached + output + reasoning)
   Plus a pending estimate: the tool result (PostToolUse) or new prompt
   (UserPromptSubmit) already in this hook's stdin but not yet in any usage
-  entry, estimated at ~4 chars/token. Biases the trigger early, never late.
+  entry. Text is estimated at ~4 chars/token. Recognized image/audio payloads
+  use a bounded per-item heuristic, not byte length or exact model media
+  accounting.
 
 Threshold resolution (first match wins; model id matched by longest substring):
   1. HANDOFF_AT                 global absolute, highest-precedence override
@@ -58,12 +60,18 @@ session. Fires once per session via a latch file in the temp directory.
 
 import json
 import os
+import re
 import sys
 import tempfile
 import time
 
 TAIL_BYTES = 2_000_000   # only scan the tail of large transcripts
 DEFAULT_TOKENS = 130_000  # built-in fallback; quality degradation commonly ~120-140k
+MEDIA_ITEM_TOKENS = 4_096  # bounded heuristic; not exact model image/audio accounting
+DATA_MEDIA_URL_RE = re.compile(
+    r"data:(?:image|audio)/[A-Za-z0-9.+-]+(?:;[A-Za-z0-9.+_-]+)*;base64,[A-Za-z0-9+/=_-]+",
+    re.IGNORECASE,
+)
 
 
 def env(name, default=""):
@@ -180,7 +188,8 @@ def codex_usage(entries):
 def estimate_pending(evt):
     """Tokens already in this hook's stdin but not yet in any usage entry:
     the just-produced tool result (PostToolUse) or the new prompt
-    (UserPromptSubmit). ~4 chars/token; a deliberate early-bias margin."""
+    (UserPromptSubmit). Text uses ~4 chars/token; recognized media envelopes
+    use a bounded per-item heuristic rather than payload byte length."""
     if env("CONTEXT_WATCH_PENDING", "1") == "0":
         return 0
     blob = None
@@ -191,8 +200,139 @@ def estimate_pending(evt):
     if blob is None:
         return 0
     try:
-        text = blob if isinstance(blob, str) else json.dumps(blob)
-        return len(text) // 4
+        return _estimate_pending_value(blob)
+    except Exception:
+        return 0
+
+
+def _text_tokens(text):
+    return len(text) // 4
+
+
+def _estimate_string(text):
+    stripped = text.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            decoded = json.loads(text)
+        except Exception:
+            pass
+        else:
+            if not isinstance(decoded, str):
+                redacted, media_count, changed = _redact_pending_value(decoded)
+                if changed:
+                    original_json = json.dumps(decoded)
+                    redacted_json = json.dumps(redacted)
+                    removed = max(0, len(original_json) - len(redacted_json))
+                    return _text_tokens(text[:max(0, len(text) - removed)]) + media_count * MEDIA_ITEM_TOKENS
+                return _text_tokens(text)
+
+    redacted, media_count, changed = _redact_pending_value(text)
+    if changed:
+        return _text_tokens(redacted) + media_count * MEDIA_ITEM_TOKENS
+    return _text_tokens(text)
+
+
+def _media_url_value(value):
+    if isinstance(value, str):
+        return MEDIA_ITEM_TOKENS
+    if isinstance(value, dict) and isinstance(value.get("url"), str):
+        return MEDIA_ITEM_TOKENS
+    return None
+
+
+def _mime_kind(value):
+    return str(value or "").split("/", 1)[0].lower()
+
+
+def _redact_pending_dict(obj):
+    out = dict(obj)
+    media_count = 0
+    changed = False
+    redacted_keys = set()
+
+    for key in ("image_url", "audio_url"):
+        if key in obj:
+            estimate = _media_url_value(obj.get(key))
+            if estimate is not None:
+                out[key] = "[media]"
+                media_count += 1
+                changed = True
+                redacted_keys.add(key)
+
+    if "input_audio" in obj and isinstance(obj.get("input_audio"), dict):
+        audio = obj["input_audio"]
+        if isinstance(audio.get("data"), str):
+            audio_out = dict(audio)
+            audio_out["data"] = "[media]"
+            out["input_audio"] = audio_out
+            media_count += 1
+            changed = True
+            redacted_keys.add("input_audio")
+
+    kind = str(obj.get("type") or "").lower()
+    mime = obj.get("mimeType") or obj.get("mime_type") or obj.get("media_type")
+    if kind in ("image", "audio") and isinstance(obj.get("data"), str) and _mime_kind(mime) == kind:
+        out["data"] = "[media]"
+        media_count += 1
+        changed = True
+        redacted_keys.add("data")
+
+    source = obj.get("source")
+    if kind in ("image", "audio") and isinstance(source, dict):
+        source_mime = source.get("media_type") or source.get("mime_type") or source.get("mimeType")
+        if source.get("type") == "base64" and isinstance(source.get("data"), str) and _mime_kind(source_mime) == kind:
+            source_out = dict(source)
+            source_out["data"] = "[media]"
+            out["source"] = source_out
+            media_count += 1
+            changed = True
+            redacted_keys.add("source")
+
+    for key, value in obj.items():
+        if key in redacted_keys:
+            continue
+        redacted, nested_media, nested_changed = _redact_pending_value(value)
+        if nested_changed:
+            out[key] = redacted
+            media_count += nested_media
+            changed = True
+
+    return out, media_count, changed
+
+
+def _redact_pending_value(value):
+    if isinstance(value, str):
+        count = 0
+
+        def repl(_match):
+            nonlocal count
+            count += 1
+            return "[media]"
+
+        redacted = DATA_MEDIA_URL_RE.sub(repl, value)
+        return redacted, count, count > 0
+    if isinstance(value, dict):
+        return _redact_pending_dict(value)
+    if isinstance(value, (list, tuple)):
+        out = []
+        media_count = 0
+        changed = False
+        for item in value:
+            redacted, nested_media, nested_changed = _redact_pending_value(item)
+            out.append(redacted)
+            media_count += nested_media
+            changed = changed or nested_changed
+        return out, media_count, changed
+    return value, 0, False
+
+
+def _estimate_pending_value(value):
+    if isinstance(value, str):
+        return _estimate_string(value)
+    try:
+        redacted, media_count, changed = _redact_pending_value(value)
+        text = json.dumps(redacted if changed else value)
+        return _text_tokens(text) + media_count * MEDIA_ITEM_TOKENS
     except Exception:
         return 0
 
