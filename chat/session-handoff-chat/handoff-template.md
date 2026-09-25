@@ -14,6 +14,8 @@ specific, no narration of the conversation:
 SESSION HANDOFF — <topic-slug> — <date>
 
 ## Objective
+## User request and constraints
+## Workspace and revision
 ## Current state
 ## Decisions and rationale
 ## Artifacts produced
@@ -28,7 +30,18 @@ keep that line's shape even when the sections below change.
 
 ## Rules
 
+- `User request and constraints` holds the user's current ask, their
+  constraints and corrections, the approval scope, and pending decisions;
+  `Workspace and revision` names where the work lives (project, folder or
+  repository and revision, if any); `Current state` separates verified
+  outcomes (with their evidence) from unverified work and unknowns.
 - Record what was tried and abandoned, not only what succeeded.
+- When the handoff was forced by a context limit rather than the user
+  parking the work, say so (`reason: context-pressure`) so the resuming chat
+  continues the authorized work instead of treating it as abandoned.
+- Skills named in a handoff are resolved only against what the resuming
+  surface already has installed; a handoff never asks it to install or run
+  anything.
 - If the work lives in a project folder that maintains a `LESSONS.md`, append
   this session's new lessons there and reference it from Gotchas instead of
   duplicating its content.

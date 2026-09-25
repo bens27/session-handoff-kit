@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regression tests for context-watch pending token estimation.
 
-Pass hook paths on argv to test other copies. With no args, tests the three
-sibling staged hooks: installed.py, codex.py, and plugin.py.
+Pass hook paths on argv to test other copies (e.g. an installed
+~/.codex/hooks/context_watch.py). With no args, tests both kit copies.
 """
 
 import importlib.util
@@ -17,9 +17,8 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_HOOKS = [
-    os.path.join(HERE, "installed.py"),
-    os.path.join(HERE, "codex.py"),
-    os.path.join(HERE, "plugin.py"),
+    os.path.join(HERE, "..", "plugins", "session-handoff", "hooks", "context_watch.py"),
+    os.path.join(HERE, "..", "codex", "hooks", "context_watch.py"),
 ]
 MEDIA_TOKENS = 4096
 SCREENSHOT_B64_LEN = 1_556_792
@@ -171,7 +170,7 @@ class PendingEstimatorTests(unittest.TestCase):
         ]
         for module in self.modules:
             with self.subTest(module=module.__file__):
-                breakdown, _window, _model = module.codex_usage(entries)
+                breakdown, _window, _model, _ts = module.codex_usage(entries)
                 self.assertEqual(breakdown["occupancy"], 58039)
                 self.assertEqual(breakdown["cache_read"], 30000)
 
@@ -235,9 +234,13 @@ class PendingEstimatorTests(unittest.TestCase):
                 self.assertEqual(result.stderr, "")
             with self.subTest(hook=hook_path, case="huge_text"):
                 result = self.run_hook(hook_path, huge_text, "text-%d" % idx)
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn("context-watch", result.stderr)
-                self.assertIn("130,000", result.stderr)
+                # Verified Codex 0.157 contract: JSON additionalContext on exit 0
+                # keeps the tool result; exit 2 would discard it.
+                self.assertEqual(result.returncode, 0, result.stderr)
+                out = json.loads(result.stdout)["hookSpecificOutput"]
+                self.assertEqual(out["hookEventName"], "PostToolUse")
+                self.assertIn("context-watch", out["additionalContext"])
+                self.assertIn("130,000", out["additionalContext"])
 
 
 if __name__ == "__main__":

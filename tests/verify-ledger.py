@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.getcwd()
 PLUGIN = os.path.join(REPO, "plugins/session-handoff/hooks/handoff_ledger.py")
@@ -197,8 +198,9 @@ def main():
 
     tmp6 = tempfile.mkdtemp(prefix="ledger-verify6-without-myproj-")
     p = run(["save-path", tmp6], tmp6)
+    ws = json.loads(run(["workspace", tmp6, "--json"], tmp6).stdout)
     expected_fallback = os.path.expanduser(
-        os.path.join("~/.claude/handoffs", os.path.basename(tmp6)))
+        os.path.join("~/.claude/handoffs", "%s-%s" % (os.path.basename(tmp6), ws["id"])))
     check("save-path-without-convention-falls-back",
           p.returncode == 0 and p.stdout.strip() == expected_fallback,
           "rc=%d stdout=%r want=%r" % (p.returncode, p.stdout.strip(), expected_fallback))
@@ -284,23 +286,27 @@ def main():
           "content=%r" % old2_text[:400])
     check("supersede-by-still-marks-status", "status: superseded" in old2_text)
 
-    # 9. Reads cover the fallback write location. A project with no local
-    #    .handoffs/ has every handoff written to
-    #    ~/.claude/handoffs/<project>/ — so list and resolve must read there
-    #    too, or that project's whole history is invisible to the announcer.
+    # 9. Fallback write location. A project with no local .handoffs/ writes to
+    #    ~/.claude/handoffs/<basename>-<id>/ (id = hash of the resolved root).
+    #    The pre-0.8 basename-only directory is ambiguous — any project with
+    #    that folder name may have written it — so it is QUARANTINED: listed
+    #    and flagged, never resolved or auto-resumed, never deleted, and
+    #    adopted explicitly with recover-legacy.
     tmp10 = tempfile.mkdtemp(prefix="ledger-verify10-fallback-")
     home = os.path.join(tmp10, "home")
     proj = os.path.join(tmp10, "myproj")
-    fallback = os.path.join(home, ".claude", "handoffs", "myproj")
+    legacy_dir = os.path.join(home, ".claude", "handoffs", "myproj")
     os.makedirs(proj)
-    os.makedirs(fallback)
-    with open(os.path.join(fallback, "20260813-2219-parked-thread.md"), "w") as f:
+    os.makedirs(legacy_dir)
+    with open(os.path.join(legacy_dir, "20260813-2219-parked-thread.md"), "w") as f:
         f.write("---\ntopic: parked-thread\ncreated: 2026-08-13T22:19\nstatus: open\n"
                 "description: parked in the fallback location\n---\n# parked\n")
     home_env = {"HOME": home, "USERPROFILE": home}
 
+    ws = json.loads(run(["workspace", proj, "--json"], proj, home_env).stdout)
+    fallback = os.path.join(home, ".claude", "handoffs", "myproj-" + ws["id"])
     p = run(["save-path", proj], proj, home_env)
-    check("fallback-save-path-points-into-home", p.stdout.strip() == fallback,
+    check("fallback-save-path-is-basename-plus-id", p.stdout.strip() == fallback,
           "stdout=%r want=%r" % (p.stdout.strip(), fallback))
 
     p = run(["list", proj, "--json", "--max-age-days", "3650"], proj, home_env)
@@ -308,16 +314,27 @@ def main():
         listed = json.loads(p.stdout or "[]")
     except ValueError:
         listed = []
-    check("fallback-handoff-is-listed",
-          any(entry.get("topic") == "parked-thread" for entry in listed),
-          "rc=%d stdout=%r" % (p.returncode, p.stdout[:300]))
-    check("fallback-handoff-carries-description",
-          any(entry.get("description") == "parked in the fallback location"
-              for entry in listed),
-          "listed=%r" % listed)
-
+    entry = next((e for e in listed if e.get("topic") == "parked-thread"), {})
+    check("legacy-fallback-listed-quarantined",
+          entry.get("quarantined") is True and entry.get("provenance") == "legacy-basename-fallback"
+          and entry.get("description") == "parked in the fallback location",
+          "rc=%d listed=%r" % (p.returncode, listed))
     p = run(["resolve", "parked-thread", proj], proj, home_env)
-    check("fallback-handoff-resolves",
+    check("legacy-fallback-not-resolved-while-quarantined", p.returncode != 0,
+          "rc=%d stdout=%r" % (p.returncode, p.stdout[:300]))
+
+    p = run(["recover-legacy", proj, "--json"], proj, home_env)
+    moved = json.loads(p.stdout or "[]")
+    check("recover-legacy-moves-into-workspace-dir",
+          len(moved) == 1 and moved[0].startswith(fallback)
+          and os.path.isfile(moved[0]) and not os.listdir(legacy_dir) == ["x"]
+          and os.path.isfile(os.path.join(fallback, "workspace.json")),
+          "rc=%d stdout=%r" % (p.returncode, p.stdout[:300]))
+    check("recover-legacy-provenance-names-root",
+          json.load(open(os.path.join(fallback, "workspace.json"))).get("root")
+          == os.path.realpath(proj))
+    p = run(["resolve", "parked-thread", proj], proj, home_env)
+    check("recovered-handoff-resolves",
           p.returncode == 0 and "20260813-2219-parked-thread.md" in p.stdout,
           "rc=%d stdout=%r stderr=%r" % (p.returncode, p.stdout[:300], p.stderr[:300]))
 
@@ -326,13 +343,163 @@ def main():
     with open(os.path.join(proj, ".handoffs", "20260814-0900-local-thread.md"), "w") as f:
         f.write("---\ntopic: local-thread\ncreated: 2026-08-14T09:00\nstatus: open\n---\n# local\n")
     p = run(["list", proj, "--json", "--max-age-days", "3650"], proj, home_env)
-    try:
-        both = json.loads(p.stdout or "[]")
-    except ValueError:
-        both = []
+    both = json.loads(p.stdout or "[]")
     topics = {entry.get("topic") for entry in both}
     check("both-locations-read-together",
           {"parked-thread", "local-thread"} <= topics, "topics=%r" % topics)
+
+    # 10. Workspace identity: same basename, different roots -> different
+    #     fallback dirs; a symlinked root maps to its target's dir; a git
+    #     worktree keeps its own dir but records the main repository.
+    tmp11 = tempfile.mkdtemp(prefix="ledger-verify11-identity-")
+    a = os.path.join(tmp11, "one", "app")
+    b = os.path.join(tmp11, "two", "app")
+    os.makedirs(a)
+    os.makedirs(b)
+    link = os.path.join(tmp11, "app-link")
+    os.symlink(a, link)
+    sp = lambda d: run(["save-path", d], d, home_env).stdout.strip()
+    check("identity-same-basename-no-collision", sp(a) != sp(b), "%s == %s" % (sp(a), sp(b)))
+    check("identity-symlink-root-follows-target", sp(link) == sp(a), "%s != %s" % (sp(link), sp(a)))
+    wt = os.path.join(tmp11, "wt")
+    os.makedirs(wt)
+    with open(os.path.join(wt, ".git"), "w") as f:
+        f.write("gitdir: %s/main/.git/worktrees/wt\n" % tmp11)
+    ws = json.loads(run(["workspace", wt, "--json"], wt, home_env).stdout)
+    check("identity-worktree-records-main-repo",
+          ws.get("worktree_of") == os.path.realpath(os.path.join(tmp11, "main"))
+          and ws.get("root") == os.path.realpath(wt), "ws=%r" % ws)
+
+    # 11. References: only the authoritative entry's refs load; relative to
+    #     the handoff dir or workspace root; absolute and outside-workspace
+    #     paths, missing files, and over-cap entries are surfaced, not loaded.
+    tmp12 = tempfile.mkdtemp(prefix="ledger-verify12-refs-")
+    hd12 = os.path.join(tmp12, ".handoffs")
+    os.makedirs(hd12)
+    outside = tempfile.mkdtemp(prefix="ledger-verify12-outside-")
+    with open(os.path.join(outside, "secret.md"), "w") as f:
+        f.write("x")
+    with open(os.path.join(tmp12, "notes.md"), "w") as f:
+        f.write("notes")
+    with open(os.path.join(hd12, "20260810-0900-refs.md"), "w") as f:
+        f.write("---\ntopic: refs\nstatus: superseded\nreferences: notes.md, older-only.md\n---\n# old\n")
+    many = ", ".join("notes.md" for _ in range(10))
+    with open(os.path.join(hd12, "20260811-0900-refs.md"), "w") as f:
+        f.write("---\ntopic: refs\nstatus: open\nreferences: notes.md, %s/secret.md, "
+                "../../../../../../etc/hosts, missing.md, %s\n---\n# new\n" % (outside, many))
+    r = json.loads(run(["resolve", "refs", tmp12, "--json"], tmp12).stdout)
+    reasons = {u["ref"]: u["reason"] for u in r["unresolved_references"]}
+    check("refs-only-authoritative-entry", "older-only.md" not in reasons
+          and all("older-only" not in m for m in r["must_also_read"]), "r=%r" % r)
+    check("refs-relative-inside-workspace-loaded",
+          r["must_also_read"] == [os.path.realpath(os.path.join(tmp12, "notes.md"))],
+          "must_also_read=%r" % r["must_also_read"])
+    check("refs-absolute-rejected", "absolute" in reasons.get(outside + "/secret.md", ""), "reasons=%r" % reasons)
+    check("refs-traversal-rejected",
+          reasons.get("../../../../../../etc/hosts", "") in ("outside workspace", "not found"),
+          "reasons=%r" % reasons)
+    check("refs-missing-surfaced", reasons.get("missing.md") == "not found", "reasons=%r" % reasons)
+    check("refs-count-capped", any("count cap" in v for v in reasons.values()), "reasons=%r" % reasons)
+    with open(os.path.join(tmp12, "big.md"), "wb") as f:
+        f.write(b"x" * 300_000)
+    with open(os.path.join(hd12, "20260812-0900-refs.md"), "w") as f:
+        f.write("---\ntopic: refs\nstatus: open\nreferences: big.md\n---\n# newer\n")
+    r = json.loads(run(["resolve", "refs", tmp12, "--json"], tmp12).stdout)
+    check("refs-bytes-capped", r["must_also_read"] == [] and
+          any("byte cap" in u["reason"] for u in r["unresolved_references"]), "r=%r" % r)
+
+    # 12. Claims: claim -> resuming (recoverable); a second owner is refused
+    #     while live; release returns it; a stale claim is taken over; resume
+    #     by another owner is refused while the claim is live.
+    tmp13 = tempfile.mkdtemp(prefix="ledger-verify13-claims-")
+    hd13 = os.path.join(tmp13, ".handoffs")
+    os.makedirs(hd13)
+    hp = os.path.join(hd13, "20260811-0900-claimed.md")
+    with open(hp, "w") as f:
+        f.write("---\ntopic: claimed\nstatus: open\n---\n# body\n")
+    p = run(["claim", hp, "--owner", "sess-A", "--json"], tmp13)
+    text = open(hp).read()
+    check("claim-marks-resuming", p.returncode == 0 and "status: resuming" in text
+          and "claim_owner: sess-A" in text and "claim_at:" in text, "rc=%d text=%r" % (p.returncode, text))
+    listed = json.loads(run(["list", tmp13, "--json"], tmp13).stdout)
+    check("claim-listed-with-live-claim",
+          listed and listed[0]["status"] == "resuming" and listed[0]["stale_claim"] is False
+          and listed[0]["claim"]["owner"] == "sess-A", "listed=%r" % listed)
+    p = run(["claim", hp, "--owner", "sess-B"], tmp13)
+    check("claim-other-owner-refused-while-live", p.returncode == 2 and "sess-A" in p.stderr,
+          "rc=%d stderr=%r" % (p.returncode, p.stderr))
+    p = run(["claim", hp, "--owner", "sess-A", "--json"], tmp13)
+    check("claim-same-owner-idempotent", p.returncode == 0 and json.loads(p.stdout).get("idempotent") is True
+          and open(hp).read().count("claim_at:") == 1, "rc=%d stdout=%r" % (p.returncode, p.stdout))
+    p = run(["resume", hp, "--owner", "sess-B"], tmp13)
+    check("resume-other-owner-refused-while-live", p.returncode == 2, "rc=%d stderr=%r" % (p.returncode, p.stderr))
+    p = run(["release", hp, "--owner", "sess-A"], tmp13)
+    check("release-returns-to-open", p.returncode == 0 and "status: open" in open(hp).read()
+          and "claim_owner" not in open(hp).read(), "text=%r" % open(hp).read())
+    run(["claim", hp, "--owner", "sess-A"], tmp13)
+    stale_env = {"CONTEXT_WATCH_CLAIM_TTL_MIN": "0"}
+    listed = json.loads(run(["list", tmp13, "--json"], tmp13, stale_env).stdout)
+    check("stale-claim-flagged", listed and listed[0]["stale_claim"] is True, "listed=%r" % listed)
+    p = run(["claim", hp, "--owner", "sess-B"], tmp13, stale_env)
+    text = open(hp).read()
+    check("stale-claim-recovered-by-new-owner", p.returncode == 0 and "claim_owner: sess-B" in text
+          and "recovered_from: sess-A" in text, "rc=%d text=%r" % (p.returncode, text))
+    p = run(["resume", hp, "--owner", "sess-B"], tmp13)
+    text = open(hp).read()
+    check("resume-completes-claim", p.returncode == 0 and "status: resumed" in text
+          and "claim_owner" not in text and text.count("status:") == 1, "text=%r" % text)
+    p = run(["claim", hp, "--owner", "sess-C"], tmp13)
+    check("claim-resumed-refused", p.returncode == 2, "rc=%d" % p.returncode)
+
+    # 13. Unique names and atomic, conflict-aware writes.
+    tmp14 = tempfile.mkdtemp(prefix="ledger-verify14-unique-")
+    os.makedirs(os.path.join(tmp14, ".handoffs"))
+    first = json.loads(run(["new-path", "dup", tmp14, "--json"], tmp14).stdout)
+    with open(first["path"], "w") as f:
+        f.write("---\ntopic: dup\nstatus: open\n---\n")
+    second = json.loads(run(["new-path", "dup", tmp14, "--json"], tmp14).stdout)
+    check("new-path-unique-on-collision", second["path"] != first["path"]
+          and second["filename"].endswith("-dup-2.md"), "first=%r second=%r" % (first, second))
+    sys.path.insert(0, os.path.dirname(PLUGIN))
+    import handoff_ledger
+    fm, text, st = handoff_ledger._load(first["path"])
+    with open(first["path"], "a") as f:
+        f.write("changed underneath\n")
+    os.utime(first["path"], (time.time() + 5, time.time() + 5))
+    try:
+        handoff_ledger._atomic_write(first["path"], "clobber", st)
+        conflict = False
+    except handoff_ledger.LedgerConflict:
+        conflict = True
+    check("atomic-write-refuses-changed-file", conflict and "changed underneath" in open(first["path"]).read())
+    check("atomic-write-leaves-no-temp", not [n for n in os.listdir(os.path.join(tmp14, ".handoffs")) if ".tmp-" in n])
+
+    # 14. Stale and malformed entries are shown, flagged, never hidden.
+    tmp15 = tempfile.mkdtemp(prefix="ledger-verify15-stale-")
+    hd15 = os.path.join(tmp15, ".handoffs")
+    os.makedirs(hd15)
+    old = os.path.join(hd15, "20260101-0900-ancient.md")
+    with open(old, "w") as f:
+        f.write("---\ntopic: ancient\nstatus: open\n---\n")
+    t = time.time() - 40 * 86400
+    os.utime(old, (t, t))
+    with open(os.path.join(hd15, "20260811-0900-weird.md"), "w") as f:
+        f.write("---\ntopic: weird\nstatus: done\ncreated: yesterday\nreason: bored\n---\n")
+    with open(os.path.join(hd15, "20260811-0800-nofence.md"), "w") as f:
+        f.write("---\ntopic: nofence\nstatus: open\n# no closing fence\n")
+    with open(os.path.join(hd15, "plain.md"), "w") as f:
+        f.write("# legacy file with no front matter at all\n")
+    listed = {e["topic"]: e for e in json.loads(run(["list", tmp15, "--json"], tmp15).stdout)}
+    check("stale-open-shown-and-flagged", listed.get("ancient", {}).get("stale") is True, "listed=%r" % listed)
+    w = listed.get("weird", {})
+    check("malformed-status-shown-as-open-with-problems",
+          w.get("status") == "open" and any("unknown status" in x for x in w.get("problems", []))
+          and any("created" in x for x in w.get("problems", []))
+          and any("reason" in x for x in w.get("problems", [])), "weird=%r" % w)
+    check("unclosed-fence-flagged-not-hidden",
+          any("closing fence" in x for x in listed.get("nofence", {}).get("problems", [])), "listed=%r" % listed)
+    check("legacy-no-front-matter-still-open",
+          listed.get("plain", {}).get("status") == "open" and listed["plain"]["problems"] == [], "listed=%r" % listed)
 
     print()
     if failures:

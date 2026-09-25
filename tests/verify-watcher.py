@@ -257,6 +257,160 @@ def main():
           and "tdd, dataviz" in p_skills.stdout,
           "rc=%d stdout=%r" % (p_skills.returncode, p_skills.stdout[:500]))
 
+    # 11. Codex PostToolUse: verified 0.157 contract — JSON additionalContext
+    #     on exit 0 keeps the tool result; the exit-2/stderr channel discards it.
+    rollout_pt = os.path.join(tmp, "codex-post.jsonl")
+    with open(rollout_pt, "w") as f:
+        f.write(json.dumps({"payload": {"type": "token_count",
+                                        "info": {"last_token_usage": {"total_tokens": 150000},
+                                                 "model_context_window": 272000}}}) + "\n")
+    p_pt = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                     "transcript_path": rollout_pt, "tool_response": "ok"},
+                    {"CONTEXT_WATCH_TOKENS": "100000", "CONTEXT_WATCH_LOG": "0",
+                     "CONTEXT_WATCH_AGENT": "codex", "TMPDIR": latchdir})
+    try:
+        out_pt = json.loads(p_pt.stdout)
+    except Exception:
+        out_pt = {}
+    check("codex-posttooluse-json-exit0-preserves-result",
+          p_pt.returncode == 0 and p_pt.stderr == "" and "decision" not in out_pt
+          and out_pt.get("hookSpecificOutput", {}).get("hookEventName") == "PostToolUse"
+          and "[context-watch]" in out_pt.get("hookSpecificOutput", {}).get("additionalContext", ""),
+          "rc=%d stdout=%r stderr=%r" % (p_pt.returncode, p_pt.stdout[:200], p_pt.stderr[:200]))
+
+    # 12. block mode is the only path that emits decision: block (discards the result).
+    p_blk = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                      "transcript_path": transcript, "cwd": tmp},
+                     {"CONTEXT_WATCH_TOKENS": "100000", "CONTEXT_WATCH_LOG": "0", "CONTEXT_WATCH_MODE": "block",
+                      "CONTEXT_WATCH_PENDING": "0", "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir})
+    try:
+        out_blk = json.loads(p_blk.stdout)
+    except Exception:
+        out_blk = {}
+    check("block-mode-opt-in-only", out_blk.get("decision") == "block" and "reason" in out_blk
+          and "decision" not in json.loads(p.stdout), "stdout=%r" % p_blk.stdout[:200])
+
+    # 13. Threshold is capped at window - reserve, and the source says so.
+    log_cap = os.path.join(tmp, "events-cap.jsonl")
+    p_cap = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                      "transcript_path": transcript, "cwd": tmp},
+                     {"CONTEXT_WATCH_TOKENS": "999999", "CONTEXT_WATCH_WINDOW": "150000",
+                      "CONTEXT_WATCH_RESERVE": "20000", "CONTEXT_WATCH_LOG": log_cap,
+                      "CONTEXT_WATCH_PENDING": "0", "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir})
+    try:
+        rec_cap = json.loads(open(log_cap).read().splitlines()[-1])
+    except Exception:
+        rec_cap = {}
+    check("threshold-capped-to-window-minus-reserve",
+          rec_cap.get("threshold") == 130000 and "capped" in rec_cap.get("threshold_source", "")
+          and rec_cap.get("threshold_source", "").startswith("TOKENS")
+          and rec_cap.get("window_source") == "assumed"
+          and "window 150,000 assumed" in json.loads(p_cap.stdout)["hookSpecificOutput"]["additionalContext"],
+          "record=%r stdout=%r" % (rec_cap, p_cap.stdout[:300]))
+    p_pct = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                      "transcript_path": transcript, "cwd": tmp},
+                     {"CONTEXT_WATCH_PERCENT": "250", "CONTEXT_WATCH_LOG": log_cap, "CONTEXT_WATCH_WINDOW": "200000",
+                      "CONTEXT_WATCH_PENDING": "0", "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir})
+    rec_pct = json.loads(open(log_cap).read().splitlines()[-1])
+    check("percent-out-of-range-falls-through", rec_pct.get("threshold_source") == "builtin-default"
+          and rec_pct.get("threshold") == 130000, "record=%r" % rec_pct)
+    rec_codex = json.loads(open(log2).read().splitlines()[-1])
+    check("codex-window-reported-in-record", rec_codex.get("window") == 272000
+          and rec_codex.get("window_source") == "reported", "record=%r" % rec_codex)
+
+    # 14. Latch: unknown session ids do not share one latch; compaction re-arms;
+    #     a notice that produced no handoff repeats once occupancy grows; a
+    #     written handoff keeps it quiet.
+    t_a = os.path.join(tmp, "unknown-a.jsonl")
+    t_b = os.path.join(tmp, "unknown-b.jsonl")
+    for t in (t_a, t_b):
+        shutil.copyfile(transcript, t)
+    env_unk = {"CONTEXT_WATCH_TOKENS": "100000", "CONTEXT_WATCH_LOG": "0",
+               "CONTEXT_WATCH_PENDING": "0", "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir}
+    p_a = run_hook({"hook_event_name": "PostToolUse", "transcript_path": t_a, "cwd": tmp}, env_unk)
+    p_b = run_hook({"hook_event_name": "PostToolUse", "transcript_path": t_b, "cwd": tmp}, env_unk)
+    check("latch-unknown-session-not-shared", "[context-watch]" in p_a.stdout and "[context-watch]" in p_b.stdout,
+          "a=%r b=%r" % (p_a.stdout[:100], p_b.stdout[:100]))
+
+    sid_c = "verify-compact-" + uuid.uuid4().hex[:8]
+    proj_c = os.path.join(tmp, "proj-compact")
+    os.makedirs(os.path.join(proj_c, ".handoffs"))
+    ev_c = {"hook_event_name": "PostToolUse", "session_id": sid_c, "transcript_path": transcript, "cwd": proj_c}
+    p1 = run_hook(ev_c, env_unk)
+    p2 = run_hook(ev_c, env_unk)
+    p_compact = run_hook({"hook_event_name": "SessionStart", "source": "compact", "session_id": sid_c,
+                          "cwd": proj_c}, env_unk)
+    p3 = run_hook(ev_c, env_unk)
+    check("compaction-rearms-latch",
+          "[context-watch]" in p1.stdout and p2.stdout.strip() == "" and "[context-watch]" in p3.stdout,
+          "p1=%r p2=%r p3=%r" % (p1.stdout[:80], p2.stdout[:80], p3.stdout[:80]))
+    check("compaction-note-keeps-authorized-task",
+          "authorized" in p_compact.stdout and "evidence" in p_compact.stdout
+          and "demo-topic" not in p_compact.stdout, "stdout=%r" % p_compact.stdout[:300])
+
+    grown = os.path.join(tmp, "claude-grown.jsonl")
+    with open(grown, "w") as f:
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 60000, "cache_creation_input_tokens": 5000,
+                                                  "cache_read_input_tokens": 100000, "output_tokens": 2000}}}) + "\n")
+    p4 = run_hook(dict(ev_c, transcript_path=grown), env_unk)
+    check("repeat-notice-when-no-handoff-written", "REPEAT NOTICE" in p4.stdout, "stdout=%r" % p4.stdout[:200])
+    p5 = run_hook(dict(ev_c, transcript_path=grown), env_unk)
+    check("repeat-notice-latches-again", p5.stdout.strip() == "", "stdout=%r" % p5.stdout[:200])
+    time.sleep(0.05)
+    with open(os.path.join(proj_c, ".handoffs", "20260811-1200-written.md"), "w") as f:
+        f.write("---\ntopic: written\nstatus: open\n---\n")
+    grown2 = os.path.join(tmp, "claude-grown2.jsonl")
+    with open(grown2, "w") as f:
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 90000, "cache_creation_input_tokens": 5000,
+                                                  "cache_read_input_tokens": 100000, "output_tokens": 2000}}}) + "\n")
+    p6 = run_hook(dict(ev_c, transcript_path=grown2), env_unk)
+    check("written-handoff-suppresses-repeat", p6.stdout.strip() == "", "stdout=%r" % p6.stdout[:200])
+
+    # 15. Announcer surfaces stale, quarantined and claimed handoffs instead
+    #     of hiding them, and never autoresumes a flagged one.
+    proj_s = os.path.join(tmp, "proj-stale")
+    os.makedirs(os.path.join(proj_s, ".handoffs"))
+    stale_p = os.path.join(proj_s, ".handoffs", "20260101-0900-stale-topic.md")
+    with open(stale_p, "w") as f:
+        f.write("---\ntopic: stale-topic\nstatus: open\n---\n")
+    old_t = time.time() - 40 * 86400
+    os.utime(stale_p, (old_t, old_t))
+    p_stale = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_s,
+                        "session_id": "sess-S"}, {"AUTORESUME": "1", "TMPDIR": latchdir})
+    check("announcer-stale-shown-not-hidden", "stale-topic" in p_stale.stdout and "stale: older" in p_stale.stdout
+          and "without asking" not in p_stale.stdout and "confirm with the user" in p_stale.stdout,
+          "stdout=%r" % p_stale.stdout[:500])
+    check("announcer-claim-commands-carry-session",
+          "claim" in p_stale.stdout and "--owner sess-S" in p_stale.stdout and "resume" in p_stale.stdout
+          and "installed skill inventory" in p_stale.stdout, "stdout=%r" % p_stale.stdout[:800])
+
+    proj_q = os.path.join(tmp, "proj-q")
+    home_q = os.path.join(tmp, "home-q")
+    os.makedirs(proj_q)
+    os.makedirs(os.path.join(home_q, ".claude", "handoffs", "proj-q"))
+    with open(os.path.join(home_q, ".claude", "handoffs", "proj-q", "20260811-0900-ghost.md"), "w") as f:
+        f.write("---\ntopic: ghost\nstatus: open\n---\n")
+    p_q = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_q, "session_id": "s"},
+                   {"TMPDIR": latchdir, "HOME": home_q, "USERPROFILE": home_q})
+    check("announcer-quarantined-not-offered", "quarantined" in p_q.stdout and "recover-legacy" in p_q.stdout
+          and "awaiting resume" not in p_q.stdout, "stdout=%r" % p_q.stdout[:500])
+
+    proj_cl = os.path.join(tmp, "proj-claim")
+    os.makedirs(os.path.join(proj_cl, ".handoffs"))
+    with open(os.path.join(proj_cl, ".handoffs", "20260811-0900-taken.md"), "w") as f:
+        f.write("---\ntopic: taken\nstatus: resuming\nclaim_owner: other\nclaim_session: other\nclaim_at: %s\n---\n"
+                % time.strftime("%Y-%m-%dT%H:%M:%S"))
+    p_cl = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_cl, "session_id": "s"},
+                    {"TMPDIR": latchdir})
+    check("announcer-live-claim-not-offered", "another live session" in p_cl.stdout and "awaiting resume" not in p_cl.stdout,
+          "stdout=%r" % p_cl.stdout[:400])
+    p_cl2 = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_cl, "session_id": "s"},
+                     {"TMPDIR": latchdir, "CONTEXT_WATCH_CLAIM_TTL_MIN": "0"})
+    check("announcer-stale-claim-offered-recoverable", "awaiting resume" in p_cl2.stdout and "STALE claim by other" in p_cl2.stdout,
+          "stdout=%r" % p_cl2.stdout[:400])
+
     print()
     if failures:
         print("FAILED: %d assertion(s): %s" % (len(failures), ", ".join(failures)))

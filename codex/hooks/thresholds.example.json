@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to ~/.context-watch/thresholds.json (user-global) or ./.context-watch.json (project-local). Keys are case-insensitive substrings of the model id; longest match wins. Values are absolute window-occupancy tokens — set them where YOUR observed reasoning quality drops, per model.",
+  "_comment": "Copy to ~/.context-watch/thresholds.json (user-global) or ./.context-watch.json (project-local). Keys are case-insensitive substrings of the model id; longest match wins. Values are absolute window-occupancy tokens \u2014 set them where YOUR observed reasoning quality drops, per model. Why absolute tokens, not a window fraction: degradation tracks input length itself (NoLiMa 2025, Chroma 'Context Rot' 2025, RULER 2024), so a larger window does not move the point. These values are operating points, not constants: task complexity likely moves them, so tune per model and per kind of work.",
   "claude-opus": 120000,
   "claude-sonnet": 140000,
   "gpt-5.5": 160000,

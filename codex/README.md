@@ -4,7 +4,7 @@ This directory contains the Codex CLI packaging of the session-handoff system: a
 
 ## Installation
 
-Run `codex/install.sh` to install the Codex-specific hooks and skill. The installer uses `merge_hooks.py` to safely merge this plugin's hook configuration into an existing Codex hooks setup (if any) rather than overwriting it, preserving any pre-existing hooks.
+Run `codex/install.sh` to install the Codex-specific hooks and skill. The installer uses `merge_hooks.py` to safely merge this plugin's hook configuration into an existing Codex hooks setup (if any) rather than overwriting it, preserving any pre-existing hooks. (The first-group-only behaviour that merge exists for was observed on Codex 0.145; 0.157 runs every matching group, and the merged fan-out stays harmless there.) On every event the watcher emits JSON `hookSpecificOutput.additionalContext`, which Codex 0.157 records without discarding the tool result.
 
 ## Behavior
 

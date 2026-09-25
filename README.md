@@ -109,10 +109,13 @@ older builds used `codex_hooks = true`). The hook reads the session rollout's
   then silently skipped, not errored, until re-approved: either launch
   `codex` interactively once, or pass `--dangerously-bypass-hook-trust` to
   `codex exec` for headless/automated invocations.
-- On `PostToolUse`, the only documented injection channel is exit code 2 with
-  the message on stderr — which replaces that one tool's result. Acceptable,
-  since the instruction is to stop and hand off anyway. `UserPromptSubmit`
-  uses plain stdout and is non-destructive.
+- On every event the watcher emits JSON `hookSpecificOutput.additionalContext`
+  (verified against 0.157: recorded as context, tool result untouched). The
+  exit-2/stderr channel and `decision: block` both replace the tool result,
+  so only the opt-in `CONTEXT_WATCH_MODE=block` uses the latter.
+- Codex 0.157 runs every matching hook group; the first-group-only behaviour
+  `merge_hooks.py` works around was observed on 0.145, and the fan-out it
+  writes stays harmless on newer builds.
 - The watcher only runs on `PostToolUse`, so it can only act *after* a tool
   call completes. A model that does a large chunk of work in one big tool
   call (e.g. a single `apply_patch` touching many files) can cross the
@@ -188,20 +191,24 @@ Other variables:
 | --- | --- | --- |
 | `CONTEXT_WATCH_PENDING` | on | Adds an estimate (~4 chars/token) for the tool result or prompt already in the hook's stdin but not yet in any usage entry; set `0` to disable |
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Per-trigger analytics (model, occupancy, cache-read share, threshold); `0` disables. Summarize with `python3 context_watch.py stats` |
-| `CONTEXT_WATCH_WINDOW` | `200000` | Used only by the PERCENT path; Codex reports its own window |
+| `CONTEXT_WATCH_WINDOW` | `200000` | Assumed window when the host reports none (Codex reports its own); every threshold is capped at window − `CONTEXT_WATCH_RESERVE` (20000) so the handoff can still be written |
+| `CONTEXT_WATCH_REARM_TOKENS` | `20000` | A notice that produced no handoff repeats once occupancy grows this much; compaction re-arms the trigger too |
+| `CONTEXT_WATCH_CLAIM_TTL_MIN` | `120` | A handoff claimed (`resuming`) by a session that died is offered again after this |
 | `CONTEXT_WATCH_SKILL` | `session-handoff` | Skill named in the injected instruction |
 | `CONTEXT_WATCH_MODE` | `warn` | `warn` injects context; `block` uses the blocking channel on `PostToolUse` |
 | `CONTEXT_WATCH_AGENT` | auto | Force `claude` or `codex` if auto-detection guesses wrong |
 | `CONTEXT_WATCH_DISABLE` | — | Set `1` to disable without uninstalling |
-| `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
+| `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are announced flagged stale, never auto-resumed |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
 
 ## How automated does it get
 
 Fully closed-loop on the hook surfaces. Handoffs carry `status: open` until a
-session actually resumes one and marks it (`handoff_ledger.py resume`), so
-session starts can check for **untransferred** work every time and never
-re-announce what was already picked up:
+session picks one up (`handoff_ledger.py claim`, a recoverable in-progress
+mark with owner and time) and then actually resumes it (`handoff_ledger.py
+resume`), so session starts can check for **untransferred** work every time,
+never re-announce what was already picked up, and offer again whatever a
+dead session left claimed:
 
 - **0 open** — silence.
 - **1 open** — announced with "read it and continue" (or resumed outright with
@@ -216,7 +223,10 @@ references from `references:` front matter. `handoff_ledger.py supersede
 <path> [--by <new-path>]` can record the newer handoff as a forward link, and
 `handoff_ledger.py save-path [dir]` prints where new handoffs should be
 written, using `<dir>/.handoffs` when present and otherwise the per-project
-fallback under `~/.claude/handoffs/<project-basename>/`.
+fallback under `~/.claude/handoffs/<project-basename>-<id>/` (the id hashes
+the resolved workspace root, so two projects named `app` never share a
+directory; the old basename-only directory is quarantined until
+`handoff_ledger.py recover-legacy` adopts it).
 `handoff_ledger.py new-path <topic> [dir] [--json]` uses one clock read and
 returns the `directory`, `filename`, `path`, and `created` values for a new
 handoff, with the same directory choice as `save-path`, filename format
@@ -232,8 +242,14 @@ makes the announcement unconditional — the chat equivalent of the
 SessionStart hook.
 
 Design guarantees: stdlib-only Python, fail-open (any error exits 0), fires
-once per session via a temp-dir latch keyed on `session_id`, and only scans
-the tail of large transcripts so it stays fast on every tool call.
+once per window via a temp-dir latch keyed on `session_id` (re-armed by
+compaction and by a notice that produced no handoff), and only scans the
+tail of large transcripts so it stays fast on every tool call. A handoff is
+evidence, not authority: it records the user's request, constraints,
+approval scope, pending decisions, workspace/revision and verified outcomes
+with evidence, and whether the user parked it or context pressure forced
+it — the current user and the live tree always win, and named skills are
+never installed or run on a handoff's say-so.
 
 ## Layout
 

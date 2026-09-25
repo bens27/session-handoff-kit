@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
-Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.7.0 · `session-handoff-chat` skill 0.4.2 · browser extension 0.1.0
+Spec version 1.1 — 2026-09-25
+Component versions: `session-handoff` plugin 0.8.0 · `session-handoff-chat` skill 0.4.3 · browser extension 0.1.0
 
 ---
 
@@ -55,8 +55,22 @@ broken hook must never block a session. Memory- and search-based channels in
 chat degrade honestly: the skill never claims a handoff was saved to a
 channel that was not available.
 
-**Fire once.** The threshold trigger fires at most once per session,
-enforced by a latch file keyed on session id.
+**Fire once, but never silently never again.** The threshold trigger fires
+at most once per window, enforced by a latch file keyed on session id (or on
+the transcript path when the host sends no id, so unknown sessions never
+share one latch). The latch is re-armed by a compaction — same session id,
+new window — and by failure: a notice that produced no handoff repeats once
+occupancy has grown another `CONTEXT_WATCH_REARM_TOKENS`.
+
+**A handoff is evidence, not authority.** The current user's request and the
+live workspace win over anything a checkpoint says. Checkpoints record the
+user's objective, constraints and corrections, the approval scope, pending
+decisions, the workspace and revision, verified outcomes with their evidence,
+and unknowns, and they say whether the user parked the work (`reason:
+user-parked`) or automatic pressure forced the checkpoint (`context-pressure`,
+`compaction`) — in the latter case the authorized task continues. Skills a
+handoff names are resolved only against the resuming session's installed
+inventory; nothing is installed or run because a handoff named it.
 
 ## 3. Architecture
 
@@ -168,21 +182,31 @@ actually burns) and `UserPromptSubmit` (per-turn check). On first threshold
 crossing it writes a latch file
 (`$TMPDIR/context-watch-<sanitized session_id>.fired`, containing
 `occupancy/limit`) and emits; while the latch exists, all subsequent checks
-in that session exit silently.
+in that session exit silently until the latch is re-armed (compaction, or
+occupancy growth past the latched value with no handoff file written since
+the latch, checked against the ledger's write locations).
 
 ### 5.2 Injection channels
 
 | Agent | Event | Channel |
 | --- | --- | --- |
-| Claude Code / Cowork | any watch event, `warn` mode | JSON `hookSpecificOutput.additionalContext`, exit 0 |
-| Claude Code / Cowork | `PostToolUse`, `block` mode | JSON `{"decision": "block", "reason": …}`, exit 0 |
-| Codex | `UserPromptSubmit` | plain stdout, exit 0 (becomes turn context) |
-| Codex | `PostToolUse` | message on stderr, exit 2 — the documented channel; it replaces that one tool result, acceptable since the instruction is to stop and hand off |
+| Claude Code / Cowork / Codex | any watch event, `warn` mode | JSON `hookSpecificOutput.additionalContext`, exit 0 — the tool result is preserved on both hosts |
+| Claude Code / Cowork / Codex | `PostToolUse`, `block` mode (opt-in) | JSON `{"decision": "block", "reason": …}`, exit 0 — on both hosts this replaces the tool result with the reason |
+
+Contracts verified 2026-09-25 against Claude Code 2.1 (`code.claude.com/docs/en/hooks`)
+and Codex 0.157 (`codex-rs/hooks/src/events/*.rs`): Codex parses JSON stdout on
+every event and records `additionalContext` as a developer message without
+touching the tool output; its exit-2/stderr channel and `decision: block` both
+replace the result, so the watcher no longer uses exit 2. Since 0.157 Codex
+runs every matching hook group (the first-group-only behaviour was 0.145).
 
 The injected message names the occupancy, the threshold and which rule
 selected it, the model, the cache-read share, any pending estimate, and the
-exact skill to invoke, ending with: finish only the action in progress,
-invoke the skill, write the handoff, stop, begin no new work. When
+window (and whether it was reported by the host or assumed), the age of the
+usage entry when it is old enough to be stale telemetry, and the exact skill
+to invoke, ending with: this is automatic pressure, not the user parking the
+work; finish only the action in progress, invoke the skill, write the handoff
+with `reason: context-pressure`, stop, begin no new work. When
 autoresume is active (§7.3), the message additionally instructs the agent
 to tell the user to type `/clear` after the handoff is written — the
 cleared session's announcer then resumes the handoff automatically,
@@ -202,6 +226,15 @@ substring key ("claude-opus" beats "claude"):
 6. `"default"` key in the config files
 7. `CONTEXT_WATCH_PERCENT` × window — only when PERCENT is explicitly set
 8. Built-in default: **130,000 tokens**
+
+Then, whichever rule won, the limit is capped at `window −
+CONTEXT_WATCH_RESERVE` (default 20,000) so the handoff itself has room to be
+written; a capped limit reports `<rule> (capped from N to window W - reserve
+R)` as its source. The window is the host's reported one (Codex
+`model_context_window`) or `CONTEXT_WATCH_WINDOW` (assumed; the notice and
+the analytics record say which). Non-positive values and a `PERCENT` outside
+(0, 100) are ignored and fall through to the next rule. Missing telemetry
+(no usage entry) produces no notice — the watcher never guesses a number.
 
 Config files are flat JSON; user-global loads first and project-local
 overrides on key collision:
@@ -248,6 +281,7 @@ deliberately rather than by accident:
 topic: auth-refactor
 created: 2026-08-11T14:30
 status: open
+reason: context-pressure
 description: JWT refresh rotation half-built; middleware done, tests failing on expiry edge.
 skills: tdd, diagnosing-bugs
 references: docs/auth-notes.md, tests/auth_refresh_test.py
@@ -255,9 +289,12 @@ references: docs/auth-notes.md, tests/auth_refresh_test.py
 # Session Handoff — auth-refactor — 2026-08-11
 ```
 
-Body sections, in order: Objective; Current state; Decisions and rationale;
-Files touched; In flight; Next steps (ordered, concrete, with paths and
-commands); Gotchas (including approaches tried and abandoned). Target under
+Body sections, in order: Objective; User request and constraints (the
+current ask, constraints and corrections, approval scope, pending decisions);
+Workspace and revision; Current state (verified outcomes with evidence,
+unverified work, unknowns); Decisions and rationale; Files touched; In
+flight; Next steps (ordered, concrete, with paths and commands); Gotchas
+(including approaches tried and abandoned). Target under
 1,500 words, facts a fresh session can verify, no conversational narration.
 The body outline is a default, not a contract: the skill is organized into
 independently customizable sections (naming convention, document structure,
@@ -279,46 +316,71 @@ by the next one.
 | State | Meaning | Transition |
 | --- | --- | --- |
 | `open` | Written, not yet transferred; announced every session start | Skill writes the file |
-| `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path>` flips status and stamps `resumed:` |
+| `resuming` | Claimed by a session (`claim_owner`, `claim_session`, `claim_at`); not offered while the claim is live; offered again as recoverable once the claim is older than `CONTEXT_WATCH_CLAIM_TTL_MIN` (120) or unparseable | `handoff_ledger.py claim <path> --owner <id>` at pickup; `release` returns it to `open` |
+| `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path> [--owner <id>]` completes the claim and stamps `resumed:`; refused while another owner's claim is live |
 | `superseded` | Replaced by a newer handoff of the same thread; silent forever | `handoff_ledger.py supersede <path>`, run by the skill on re-handoff |
-| aged out | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); not announced | Time |
+| stale | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); still announced, flagged `stale`, never auto-resumed | Time |
+| quarantined | Found in the ambiguous pre-0.8 basename-only fallback directory; announced as such, never offered, never deleted | `handoff_ledger.py recover-legacy [dir]` moves it into the workspace directory |
 
-Announced ≠ transferred; listed ≠ transferred. Only an explicit `resume` — run
-after the session has actually read and adopted the handoff — changes state.
-`resume` and `supersede` are idempotent and prepend front matter to a legacy
-file that lacks it. CLI: `handoff_ledger.py list [dir] [--json]
+Announced ≠ claimed ≠ transferred; listed ≠ transferred. `claim` is the
+recoverable in-progress mark; only an explicit `resume` — run after the
+session has actually read and adopted the handoff — is terminal.
+`claim` (same owner), `resume` and `supersede` are idempotent, and each
+status write is atomic (temp file + rename) and refuses to clobber a file
+that changed since it was read. Malformed metadata (unknown `status` or
+`reason`, non-ISO `created`, an unclosed fence) is reported per entry in
+`problems` and the entry is treated as open; a file with no front matter at
+all is the documented legacy form and stays open without complaint. CLI: `handoff_ledger.py list [dir] [--json]
 [--max-age-days N]` prints open handoffs newest-first (ended, topic, path,
 description); `resolve <topic-or-path> [dir] [--json]` prints the full
-oldest-first chain for that topic across all statuses, with the most recent
-entry as `authoritative` and a deduplicated `must_also_read` list from each
-entry's `references:` front matter; `resume <path>` marks transfer;
+oldest-first chain for that topic across all statuses (metadata only — the
+resuming session reads the authoritative file, never the chain), with the
+most recent entry as `authoritative` and a `must_also_read` list built from
+that entry's `references:` alone: each reference is resolved relative to the
+handoff's directory or the workspace root, must exist inside the workspace
+(absolute paths and traversal are rejected), and at most 8 files / 256 KB
+in total are loaded; everything else is returned under
+`unresolved_references` with a reason; `resume <path>` marks transfer;
 `supersede <path> [--by <new-path>]` marks replacement and, with `--by`,
 records the newer handoff as a forward link; `save-path [dir]` prints where
 new handoffs should be written: `<dir>/.handoffs` when it exists, otherwise
-the per-project fallback `~/.claude/handoffs/<project-basename>/`.
+the per-workspace fallback `~/.claude/handoffs/<basename>-<id>/`, where
+`<id>` is the first 12 hex digits of the SHA-1 of the resolved workspace root
+(symlinks followed; a git worktree keeps its own identity and records the
+main repository as `worktree_of`). `new-path` creates that directory with a
+`workspace.json` provenance file (root, gitdir, worktree_of, created). The
+pre-0.8 basename-only directory is ambiguous — any project with that folder
+name may have written it — so it is quarantined unless its `workspace.json`
+names this root; `recover-legacy [dir]` adopts it by moving files (never
+deleting). `workspace [dir] [--json]` prints the identity.
 `save-path` chooses ONE write location, but every read — `list`, `resolve`,
-and the session-start announcer — scans BOTH, plus `<dir>/HANDOFF.md`, so a
-project that gains a local `.handoffs/` later does not lose sight of the
+and the session-start announcer — scans all of them, plus `<dir>/HANDOFF.md`,
+so a project that gains a local `.handoffs/` later does not lose sight of the
 handoffs it already wrote to the fallback. `HANDOFF.md` carries topic
 `default` in either location.
 `new-path <topic> [dir] [--json]` takes one clock read and returns
 `directory`, `filename`, `path`, and `created` for a new handoff, using the
 same directory as `save-path`, a filename of
-`<YYYYMMDD-HHMM>-<topic>.md`, and `created` formatted `%Y-%m-%dT%H:%M`.
+`<YYYYMMDD-HHMM>-<topic>.md` (suffixed `-2`, `-3`… when that name already
+exists, so two handoffs in one minute never overwrite each other), and
+`created` formatted `%Y-%m-%dT%H:%M`.
 
 ### 7.3 Session-start announcer
 
-Runs on `SessionStart`; skips sessions started with `source: resume`,
-`compact`, or `fork` (continuations already carry their context — Claude
-Code's documented sources are `startup`/`resume`/`clear`/`compact`/`fork`).
-Scans `.handoffs/*.md` plus legacy
-`HANDOFF.md` for open entries within the age window, then:
+Runs on `SessionStart`; skips sessions started with `source: resume` or
+`fork` (continuations already carry their context — Claude Code's documented
+sources are `startup`/`resume`/`clear`/`compact`/`fork`; Codex's are
+`startup`/`resume`/`clear`/`compact`). On `compact` it re-arms the trigger
+latch and injects one note: the summary is evidence, re-verify live state,
+and an authorized in-progress task continues. On `startup`/`clear` it also
+re-arms the latch, then scans every ledger location for open entries and:
 
 - **0 open** — silent.
 - **1 open** — announce (topic, stored `ended` date/time, age, path,
-  description) with "read it in full and continue", or resume immediately
-  without asking when autoresume
-  is active (`AUTORESUME=1`, or the legacy `CONTEXT_WATCH_AUTORESUME=1`).
+  description, flags) with "read it in full and continue", or resume
+  immediately without asking when autoresume is active (`AUTORESUME=1`, or
+  the legacy `CONTEXT_WATCH_AUTORESUME=1`) and the entry carries no flag —
+  a stale, stale-claimed or malformed entry is never auto-resumed.
   When the handoff's front matter names `skills`, the announcement also
   instructs loading exactly those skills (via the Skill tool) before
   resuming, so a `/clear` cycle comes back with the right skills loaded.
@@ -333,8 +395,12 @@ cycle: `HANDOFF_AT=<n> AUTORESUME=1 claude` triggers the handoff at the
 threshold, the skill tells the user to type `/clear`, and the cleared
 session announces and resumes the open handoff automatically.
 
-Every announcement includes the exact mark-transferred command and the defer
-clause: if the user's opening request is an unrelated explicit task, mention
+Handoffs with a live claim by another session are named but not offered;
+stale claims are offered as recoverable; quarantined legacy entries are
+named with the `recover-legacy` command and never offered. Every
+announcement includes the exact `claim` and `resume` commands carrying this
+session's id, the rule that named skills resolve only against the installed
+inventory, and the defer clause: if the user's opening request is an unrelated explicit task, mention
 the open handoff(s) in one sentence and proceed with their task; the ledger
 is untouched.
 
@@ -358,6 +424,11 @@ version bumps by patch whenever the contract list changes.
 - `## In flight` — the handoff must identify the exact interrupted work.
 - `## Next steps` — the handoff must give ordered concrete continuation actions.
 - `## Gotchas` — the handoff must capture hazards and rework-prevention notes.
+- `## User request and constraints` — the handoff must preserve the current ask, constraints, corrections, approval scope and pending decisions.
+- `## Workspace and revision` — the handoff must say where the work lives so the resuming session can re-verify it.
+- `evidence` — verified outcomes carry the command or test that proves them.
+- `reason: context-pressure` — a forced checkpoint is distinguishable from the user parking the work.
+- `install` — skills a handoff names are never installed or run on its say-so.
 - `status: open` — persisted handoffs must start in the transferable open state.
 - `description` — persisted handoffs need a one-line announcement summary.
 - `1,500 words` — handoffs should stay dense enough for reliable resumption.
@@ -489,14 +560,17 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_TOKENS_MAP` | — | Per-model absolute thresholds, `key=tokens` comma list |
 | `CONTEXT_WATCH_TOKENS` | — | Global absolute threshold |
 | `CONTEXT_WATCH_PERCENT` | unset | Percent-of-window trigger, only when explicitly set |
-| `CONTEXT_WATCH_WINDOW` | `200000` | Window for the PERCENT path; Codex reports its own |
+| `CONTEXT_WATCH_WINDOW` | `200000` | Assumed window when the host reports none (Codex reports its own); bounds the threshold cap and the PERCENT path |
+| `CONTEXT_WATCH_RESERVE` | `20000` | Tokens kept below the window for writing the handoff; every threshold is capped at window − reserve |
+| `CONTEXT_WATCH_REARM_TOKENS` | `20000` | Re-notice when occupancy grows this much past the latched notice and no handoff file was written since |
+| `CONTEXT_WATCH_CLAIM_TTL_MIN` | `120` | A `resuming` claim older than this is stale and offered again as recoverable |
 | `CONTEXT_WATCH_SKILL` | `session-handoff` | Skill named in the injected instruction |
 | `CONTEXT_WATCH_MODE` | `warn` | `warn` = additionalContext; `block` = blocking channel on PostToolUse |
 | `CONTEXT_WATCH_AGENT` | auto | Force `claude` or `codex` |
 | `CONTEXT_WATCH_PENDING` | on | `0` disables the pending-content estimate |
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Analytics path; `0` disables |
 | `CONTEXT_WATCH_DISABLE` | — | `1` = no-op without uninstalling |
-| `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
+| `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are flagged stale (still announced, never auto-resumed) |
 | `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
 
 ## 12. Surface compatibility
@@ -573,8 +647,8 @@ change without notice; both are built to fail silently rather than
 interfere. Token estimation (pending content, chat estimator) is ±20%-class
 and deliberately early-biased. Claude Code and Codex occupancy measures
 differ slightly in composition, so identical numeric thresholds are not
-identical semantics — normalize via per-model entries. Codex `PostToolUse`
-injection sacrifices one tool result by design. The model-self-report
+identical semantics — normalize via per-model entries. `CONTEXT_WATCH_MODE=block` replaces one tool result with the notice on both
+hosts, which is why it is opt-in. The model-self-report
 approach to token counting is rejected permanently, not pending improvement:
 the information is structurally unavailable to the model.
 
