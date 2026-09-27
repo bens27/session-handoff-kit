@@ -367,6 +367,34 @@ def _context_tokens(obj):
     return 0
 
 
+def unrecorded_results(entries, skip_id=None):
+    """~tokens of tool results already in a Claude transcript but after its
+    last usage entry. Claude Code writes an assistant message (and its usage)
+    only after that tool call's PostToolUse hook has run, so earlier results
+    since the last API call are otherwise invisible. skip_id is the current
+    tool call, whose result estimate_pending already counts."""
+    total = 0
+    for e in entries:
+        if e.get("isSidechain"):
+            continue
+        if (e.get("type") == "system" and e.get("subtype") == "compact_boundary") \
+                or e.get("isCompactSummary"):
+            total = 0
+            continue
+        msg = e.get("message")
+        if not isinstance(msg, dict):
+            continue
+        if isinstance(msg.get("usage"), dict) and "input_tokens" in msg["usage"]:
+            total = 0
+            continue
+        content = msg.get("content")
+        for block in content if isinstance(content, list) else ():
+            if isinstance(block, dict) and block.get("type") == "tool_result" \
+                    and block.get("tool_use_id") != skip_id:
+                total += min(_context_tokens(block.get("content")), PENDING_CAP)
+    return total
+
+
 def estimate_pending(evt):
     """(capped, raw) tokens already in this hook's stdin but not yet in any
     usage entry: the just-produced tool result (PostToolUse) or the new prompt
@@ -827,6 +855,10 @@ def main():
         sys.exit(0)
 
     pending, pending_raw = estimate_pending(evt)
+    # ponytail: Claude only; Codex rollouts' write order around hooks is unverified.
+    unrecorded = unrecorded_results(entries, evt.get("tool_use_id")) \
+        if agent == "claude" and env("CONTEXT_WATCH_PENDING", "1") != "0" else 0
+    pending += unrecorded
     occupancy = breakdown["occupancy"] + pending
 
     cwd = evt.get("cwd") or os.getcwd()
@@ -900,6 +932,7 @@ def main():
         "occupancy": occupancy,
         "pending_estimate": pending,
         "pending_raw": pending_raw,
+        "unrecorded_results": unrecorded,
         "threshold": limit,
         "threshold_source": source,
         "window": window,

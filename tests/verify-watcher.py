@@ -300,6 +300,34 @@ def main():
           "[context-watch]" in first_q.stdout and p_q.stdout.strip() == "",
           "stdout=%r" % p_q.stdout[:200])
 
+    # 5h. Claude writes usage only after PostToolUse runs: tool results already
+    #     in the transcript after the last usage entry count as pending, except
+    #     the current call's own result (already counted from the hook input).
+    unrec = os.path.join(tmp, "claude-unrecorded.jsonl")
+    with open(unrec, "w") as f:
+        f.write(STARTUP_CLAUDE)  # startup context: keeps the floor below the threshold
+        f.write(json.dumps({"message": {"model": "claude-opus-4", "usage": {"input_tokens": 40000},
+                                        "content": [{"type": "tool_use", "id": "A"}]}}) + "\n")
+        f.write(json.dumps({"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "A", "content": "word " * 12000}]}}) + "\n")
+    def unrec_run(use_id, response, limit, **extra):
+        log_u = os.path.join(tmp, "events-unrec-%s.jsonl" % uuid.uuid4().hex[:6])
+        p_u = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                        "transcript_path": unrec, "cwd": tmp, "tool_use_id": use_id,
+                        "tool_response": response},
+                       dict({"HANDOFF_AT": str(limit), "CONTEXT_WATCH_LOG": log_u,
+                             "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir}, **extra))
+        recs = open(log_u).read().splitlines() if os.path.exists(log_u) else []
+        return p_u, json.loads(recs[-1]) if recs else {}  # logged only when it fires
+    p_u, rec = unrec_run("B", {"stdout": "ok"}, 50000)  # 40k + 15k unrecorded
+    check("unrecorded-results-fire", "[context-watch]" in p_u.stdout
+          and rec.get("unrecorded_results") == 15000, "record=%r" % rec)
+    p_u, rec = unrec_run("A", {"stdout": "word " * 12000}, 65000)  # 55k, not 70k
+    check("unrecorded-results-skip-current", p_u.stdout.strip() == "", "stdout=%r" % p_u.stdout[:200])
+    p_u, rec = unrec_run("B", {"stdout": "ok"}, 50000, CONTEXT_WATCH_PENDING="0")
+    check("unrecorded-results-off-with-pending", p_u.stdout.strip() == "",
+          "stdout=%r" % p_u.stdout[:200])
+
     # 6. stats CLI honors CONTEXT_WATCH_LOG=0 as 'disabled', not a path
     env = dict(os.environ)
     env["CONTEXT_WATCH_LOG"] = "0"

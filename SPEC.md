@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.9.1 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.9.2 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -142,7 +142,11 @@ result (`PostToolUse`) or the new prompt (`UserPromptSubmit`). The watcher
 estimates its weight at ~4 characters per token from the first present key
 among `tool_response`, `tool_output`, `tool_result`, `prompt`, and adds it to
 occupancy before the comparison. The estimate deliberately biases the trigger
-early — the correct direction for a quality guard. Disable with
+early — the correct direction for a quality guard. Claude Code writes an
+assistant message and its usage only after that call's PostToolUse hook
+runs, so on Claude the estimate also adds tool results already in the
+transcript after the last usage entry (each capped, the current call's
+excluded). Disable with
 `CONTEXT_WATCH_PENDING=0`. Exact pre-flight counting via a token-counting API
 is rejected by design: a hook cannot reconstruct the request payload, and the
 early-biased estimate achieves the same protection with no network call.
