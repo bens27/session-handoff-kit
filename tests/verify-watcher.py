@@ -406,6 +406,9 @@ def main():
     ev_skills = {"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_skills,
                  "session_id": "verify-skills"}
     p_skills = run_hook(ev_skills, {"TMPDIR": latchdir})
+    check("announcer-claim-owner", "claim <path> --owner verify-skills" in p_skills.stdout
+          and "resume <path> --owner verify-skills" in p_skills.stdout,
+          "stdout=%r" % p_skills.stdout[:900])
     check("announcer-skills-single",
           p_skills.returncode == 0 and "First load exactly these skills" in p_skills.stdout
           and "tdd, dataviz" in p_skills.stdout,

@@ -435,6 +435,101 @@ def main():
     check("new-path-git-position", "@" in json.loads(p.stdout).get("git", ""),
           "stdout=%r" % p.stdout[:300])
 
+    # 11. Hardening: atomic conflict check, unique new-path, problems, ref caps.
+    t12 = tempfile.mkdtemp(prefix="ledger-verify12-")
+    h12 = os.path.join(t12, ".handoffs")
+    os.makedirs(h12)
+    def put12(name, body):
+        path = os.path.join(h12, name)
+        with open(path, "w") as f:
+            f.write(body)
+        return path
+    f12 = put12("20260910-0900-atom.md", "---\ntopic: atom\nstatus: open\n---\nbody\n")
+    try:
+        hl._atomic_write(f12, "clobbered", (0, 0))
+        conflict = False
+    except hl.ConflictError:
+        conflict = True
+    check("atomic-write-refuses-changed-file", conflict and "clobbered" not in open(f12).read()
+          and not [n for n in os.listdir(h12) if n.startswith(".handoff-")])
+    os.chmod(f12, 0o640)
+    run(["resume", f12], t12)
+    check("atomic-write-keeps-mode", os.stat(f12).st_mode & 0o777 == 0o640
+          and "status: resumed" in open(f12).read())
+
+    first = json.loads(run(["new-path", "same", t12, "--json"], t12).stdout)
+    open(first["path"], "w").write("---\ntopic: same\nstatus: open\n---\n")
+    second = json.loads(run(["new-path", "same", t12, "--json"], t12).stdout)
+    check("new-path-unique-suffix", second["path"] != first["path"]
+          and second["filename"].endswith("-same-2.md"), "second=%r" % second)
+    open(second["path"], "w").write("---\ntopic: same\nstatus: open\n---\n")
+    check("suffixed-file-keeps-topic",
+          len(hl.resolve("same", t12)["chain"]) == 2, "chain=%r" % hl.resolve("same", t12)["chain"])
+
+    put12("20260911-0900-weird.md", "---\ntopic: weird\nstatus: resuming\ncreated: yesterday\n---\n")
+    put12("20260911-0901-nofence.md", "---\ntopic: nofence\nstatus: open\n")
+    by_topic = {h["topic"]: h for h in hl.scan(t12)}
+    check("unknown-status-listed-as-open", "weird" in by_topic, "topics=%r" % list(by_topic))
+    probs = " ".join(by_topic.get("weird", {}).get("problems", []))
+    check("problems-unknown-status-and-created", "unknown status" in probs and "not ISO" in probs,
+          "problems=%r" % probs)
+    check("problems-no-closing-fence",
+          any("closing" in x for x in by_topic.get("20260911-0901-nofence", by_topic.get("nofence", {}))
+              .get("problems", [])), "scan=%r" % by_topic)
+    p = run(["resolve", "weird", t12], t12)
+    check("resolve-prints-problems", "problem: unknown status" in p.stdout, "stdout=%r" % p.stdout)
+
+    refs = ["r%d.md" % i for i in range(10)]
+    for ref in refs[:9]:
+        with open(os.path.join(t12, ref), "w") as f:
+            f.write("x" * (200_000 if ref == "r1.md" else 10))
+    put12("20260912-0900-refs.md", "---\ntopic: refs\nstatus: open\nreferences: %s, r9.md\n---\n"
+          % ", ".join(refs[:9]))
+    r = hl.resolve("refs", t12)
+    check("resolve-ref-caps", len(r["must_also_read"]) == 8 and "r9.md" not in r["must_also_read"]
+          and {u["ref"] for u in r["unresolved_references"]} == {"r8.md", "r9.md"},
+          "resolved=%r" % r)
+    big = put12("20260912-0901-bigrefs.md", "---\ntopic: bigrefs\nstatus: open\n"
+                "references: r1.md, r1.md, big2.md, r0.md\n---\n")
+    with open(os.path.join(t12, "big2.md"), "w") as f:
+        f.write("y" * 100_000)
+    r = hl.resolve("bigrefs", t12)
+    check("resolve-byte-cap", r["must_also_read"] == ["r1.md", "r0.md"]
+          and r["unresolved_references"][0]["ref"] == "big2.md", "resolved=%r" % r)
+    p = run(["resolve", "bigrefs", t12], t12)
+    check("resolve-prints-unresolved", "unresolved_reference: big2.md" in p.stdout, "stdout=%r" % p.stdout)
+
+    # 12. Owner-aware claims.
+    oc = put12("20260913-0900-owned.md", "---\ntopic: owned\nstatus: open\n---\n")
+    p = run(["claim", oc, "--owner", "sess-a"], t12)
+    check("owner-claim-writes-owner", p.returncode == 0 and "claim_owner: sess-a" in open(oc).read())
+    p = run(["claim", oc, "--owner", "sess-a"], t12)
+    check("owner-claim-idempotent", p.returncode == 0 and open(oc).read().count("claim_owner:") == 1)
+    p = run(["claim", oc, "--owner", "sess-b"], t12)
+    check("owner-claim-refuses-other", p.returncode == 1 and "refused" in p.stderr
+          and "claim_owner: sess-a" in open(oc).read(), "rc=%d stderr=%r" % (p.returncode, p.stderr))
+    p = run(["claim", oc], t12)
+    check("bare-claim-refuses-owned", p.returncode == 1, "rc=%d" % p.returncode)
+    p = run(["resume", oc, "--owner", "sess-b"], t12)
+    check("owner-resume-refuses-other", p.returncode == 1 and "status: open" in open(oc).read())
+    p = run(["release", oc, "--owner", "sess-b"], t12)
+    check("release-refuses-other", p.returncode == 1)
+    p = run(["release", oc, "--owner", "sess-a"], t12)
+    check("release-drops-claim", p.returncode == 0 and "claimed:" not in open(oc).read()
+          and "claim_owner:" not in open(oc).read())
+    run(["claim", oc, "--owner", "sess-a"], t12)
+    p = run(["resume", oc, "--owner", "sess-a"], t12)
+    txt = open(oc).read()
+    check("owner-resume-drops-owner", p.returncode == 0 and "status: resumed" in txt
+          and "claim_owner:" not in txt, "content=%r" % txt)
+    bc = put12("20260913-0901-bare.md", "---\ntopic: bare\nstatus: open\n---\n")
+    check("bare-claim-still-works", run(["claim", bc], t12).returncode == 0
+          and run(["claim", bc, "--owner", "x"], t12).returncode == 0)
+    expired = put12("20260913-0902-expired.md", "---\ntopic: expired\nstatus: open\n"
+                    "claimed: 2000-01-01T00:00\nclaim_owner: gone\n---\n")
+    check("expired-owner-claim-yields", run(["claim", expired, "--owner", "new"], t12).returncode == 0
+          and "claim_owner: new" in open(expired).read())
+
     print()
     if failures:
         print("FAILED: %d assertion(s): %s" % (len(failures), ", ".join(failures)))

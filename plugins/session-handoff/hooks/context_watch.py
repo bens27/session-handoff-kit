@@ -549,9 +549,12 @@ def handle_session_start(evt, agent):
         sys.exit(0)
 
     label = LABEL.get(agent, LABEL["claude"])
+    sid = str(evt.get("session_id") or "").strip()
+    owner = " --owner %s" % sid if sid and all(c.isalnum() or c in "-_." for c in sid) else ""
     mark = ("Before resuming, claim it so a parallel session start skips it: python3 %s "
-            "claim <path>. After a handoff has been resumed, mark it transferred so future "
-            "sessions stop announcing it: python3 %s resume <path>" % (ledger, ledger))
+            "claim <path>%s (if it refuses, another session holds it: do not resume it). "
+            "After a handoff has been resumed, mark it transferred so future sessions stop "
+            "announcing it: python3 %s resume <path>%s" % (ledger, owner, ledger, owner))
     defer = ("If the user's opening request is an unrelated explicit task, mention the "
              "open handoff(s) in one sentence and proceed with their task instead.")
     hidden = ""

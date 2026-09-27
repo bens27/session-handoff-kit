@@ -28,9 +28,12 @@ Subcommands:
   resolve <topic-or-path> [dir] [--json]   print every handoff for a topic
                                             oldest first, across all statuses
   new-path <topic> [dir] [--json]          print deterministic path data for a new handoff
-  claim <path>                             stamp a handoff as being resumed now, so a
-                                            parallel session start does not announce it
-  resume <path>                            mark a handoff resumed (transferred)
+  claim <path> [--owner X]                 stamp a handoff as being resumed now, so a
+                                            parallel session start does not announce it;
+                                            refuses a live claim held by another owner
+  release <path> [--owner X]               drop a claim without resuming
+  resume <path> [--owner X]                mark a handoff resumed (transferred); with
+                                            --owner, refuses a live claim by another owner
   supersede <path> [--by <new-path>]       mark a handoff replaced by a newer one
   abandon <path>                           mark a handoff dropped (never to be resumed)
   save-path [dir]                          print where new handoffs should be saved
@@ -44,6 +47,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta
 
@@ -51,6 +55,14 @@ from datetime import datetime, timedelta
 DATED_NAME = re.compile(r"^(\d{8})-(\d{4}|\d{6})-(.+)$")
 STAMP = "%Y-%m-%dT%H:%M"
 CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
+KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
+CLOSED_STATUSES = ("resumed", "superseded", "abandoned")
+MAX_REFS = 8              # references a resume is asked to read, at most
+MAX_REF_BYTES = 256_000   # combined size of the existing referenced files
+
+
+class ConflictError(RuntimeError):
+    """The file changed between read and write, or a claim is held by another owner."""
 
 
 def parse_front_matter(text):
@@ -164,6 +176,28 @@ def _is_legacy_single_file(path, legacy):
     return path == legacy or os.path.basename(path) == "HANDOFF.md"
 
 
+def _problems(text, fm):
+    """Front-matter defects worth surfacing instead of silently defaulting."""
+    out = []
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---" and not fm:
+        out.append("front matter has no closing --- fence")
+    status = (fm.get("status") or "open").lower()
+    if status not in KNOWN_STATUSES:
+        out.append("unknown status %r (treated as open)" % status)
+    created = fm.get("created")
+    if created:
+        try:
+            datetime.fromisoformat(created)
+        except ValueError:
+            out.append("created %r is not ISO 8601" % created)
+    return out
+
+
+def _is_open(fm):
+    return (fm.get("status") or "open").lower() not in CLOSED_STATUSES
+
+
 def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -189,6 +223,7 @@ def _records(root):
             out.append({
                 "path": path, "fm": fm, "text": text, "mtime": mtime, "topic": topic,
                 "legacy": _is_legacy_single_file(path, legacy),
+                "problems": _problems(text, fm),
                 "ended": (name_ended or fm.get("created")
                           or datetime.fromtimestamp(mtime).strftime(STAMP)),
             })
@@ -215,7 +250,7 @@ def scan(root, max_age_days=14, stats=None):
     found = []
     for r in _records(root):
         fm = r["fm"]
-        if (fm.get("status") or "open").lower() != "open":
+        if not _is_open(fm):
             continue
         # A bare root HANDOFF.md is only a handoff if it says so near the top.
         if r["legacy"] and not fm and "handoff" not in "\n".join(
@@ -232,6 +267,7 @@ def scan(root, max_age_days=14, stats=None):
             "description": fm.get("description") or "",
             "skills": fm.get("skills") or "",
             "age_days": round(age_days, 1),
+            "problems": r["problems"],
             "_claimed": _claimed_recently(fm, datetime.now()),
         })
     found.sort(key=lambda h: h["ended"], reverse=True)
@@ -271,20 +307,39 @@ def resolve(topic_or_path, root):
         "ended": r["ended"],
         "description": r["fm"].get("description") or "",
         "references": _split_csv(r["fm"].get("references") or ""),
+        "problems": r["problems"],
     } for r in _records(root) if r["topic"] == topic]
     chain.sort(key=lambda h: h["ended"])
 
     # Only the authoritative (newest) handoff's references are current: earlier
     # handoffs' references were either carried forward or deliberately dropped.
-    must_also_read = list(dict.fromkeys(chain[-1]["references"])) if chain else []
-    missing = [ref for ref in must_also_read
-               if not os.path.exists(os.path.join(root, os.path.expanduser(ref)))]
+    # Capped so a runaway references line cannot flood a resuming session.
+    refs = list(dict.fromkeys(chain[-1]["references"])) if chain else []
+    must_also_read, missing, unresolved, total = [], [], [], 0
+    for ref in refs:
+        full = os.path.join(root, os.path.expanduser(ref))
+        if len(must_also_read) >= MAX_REFS:
+            unresolved.append({"ref": ref, "reason": "over the %d-reference cap" % MAX_REFS})
+            continue
+        if not os.path.exists(full):
+            missing.append(ref)
+        else:
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                size = 0
+            if total + size > MAX_REF_BYTES:
+                unresolved.append({"ref": ref, "reason": "over the %d-byte cap" % MAX_REF_BYTES})
+                continue
+            total += size
+        must_also_read.append(ref)
     return {
         "topic": topic,
         "chain": chain,
         "authoritative": chain[-1]["path"] if chain else None,
         "must_also_read": must_also_read,
         "missing_references": missing,
+        "unresolved_references": unresolved,
     }
 
 
@@ -312,7 +367,10 @@ def new_path(topic, root):
     now = datetime.now()
     abs_root = project_root(root)
     directory = save_path(abs_root)
-    filename = "%s-%s.md" % (now.strftime("%Y%m%d-%H%M"), topic)
+    stem = "%s-%s" % (now.strftime("%Y%m%d-%H%M"), topic)
+    filename, n = stem + ".md", 2
+    while os.path.exists(os.path.join(directory, filename)):
+        filename, n = "%s-%d.md" % (stem, n), n + 1  # topic: front matter keeps the topic
     return {
         "directory": directory,
         "filename": filename,
@@ -323,9 +381,38 @@ def new_path(topic, root):
     }
 
 
+def _stat_key(path):
+    st = os.stat(path)
+    return st.st_mtime_ns, st.st_size
+
+
+def _atomic_write(path, text, expect):
+    """Write text via a temp file + fsync + rename, refusing (ConflictError)
+    when the file's (mtime_ns, size) is no longer `expect`."""
+    directory = os.path.dirname(os.path.abspath(path))
+    mode = os.stat(path).st_mode & 0o7777
+    fd, tmp = tempfile.mkstemp(prefix=".handoff-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        if _stat_key(path) != expect:
+            raise ConflictError("%s changed while it was being updated; retry" % path)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _set_fields(path, fields, drop):
     """Rewrite front matter: remove lines whose key starts with any of drop,
     then append fields in order. Adds a header to files without one."""
+    before = _stat_key(path)
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     new = ["%s: %s" % kv for kv in fields]
@@ -342,15 +429,14 @@ def _set_fields(path, fields, drop):
         if os.path.basename(path) == "HANDOFF.md":
             topic = "default"
         new_text = "---\ntopic: %s\n%s\n---\n" % (topic, "\n".join(new)) + text
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(new_text)
+    _atomic_write(path, new_text, before)
 
 
 def _mark(path, status, superseded_by=None):
     """Flip a handoff's status and stamp the time. Idempotent."""
     stamp = datetime.now().strftime(STAMP)
     fields = [("status", status), (status, stamp)]
-    drop = ("status:", "resumed:", "superseded:", "abandoned:", "claimed:")
+    drop = ("status:", "resumed:", "superseded:", "abandoned:", "claimed:", "claim_owner:")
     if superseded_by is not None:
         drop += ("superseded_by:",)
         fields.append(("superseded_by", superseded_by))
@@ -358,10 +444,27 @@ def _mark(path, status, superseded_by=None):
     return stamp
 
 
-def claim(path):
+def _check_owner(path, owner):
+    """Raise ConflictError when a live claim is held by an owner other than
+    `owner` (an owner-less caller counts as different). Unowned or expired
+    claims never block."""
+    fm = _read_fm(path)
+    holder = fm.get("claim_owner")
+    if holder and holder != owner and _claimed_recently(fm, datetime.now()):
+        raise ConflictError("%s is claimed by %s since %s" % (path, holder, fm.get("claimed")))
+
+
+def claim(path, owner=None):
+    _check_owner(path, owner)
     stamp = datetime.now().strftime(STAMP)
-    _set_fields(path, [("claimed", stamp)], ("claimed:",))
+    fields = [("claimed", stamp)] + ([("claim_owner", owner)] if owner else [])
+    _set_fields(path, fields, ("claimed:", "claim_owner:"))
     return stamp
+
+
+def release(path, owner=None):
+    _check_owner(path, owner)
+    _set_fields(path, [], ("claimed:", "claim_owner:"))
 
 
 def mark_resumed(path):
@@ -420,11 +523,15 @@ def _cli(argv):
             for h in resolved["chain"]:
                 print("%s\t%s\t%s\t%s" % (h["ended"], h["status"], h["path"],
                                           h["description"]))
+                for problem in h["problems"]:
+                    print("  problem: %s" % problem)
             print("authoritative: %s" % resolved["authoritative"])
             if resolved["must_also_read"]:
                 print("must_also_read: %s" % ", ".join(resolved["must_also_read"]))
             if resolved["missing_references"]:
                 print("missing_references: %s" % ", ".join(resolved["missing_references"]))
+            for u in resolved["unresolved_references"]:
+                print("unresolved_reference: %s (%s)" % (u["ref"], u["reason"]))
         return 0
     if cmd == "save-path":
         root = args[0] if args else "."
@@ -445,7 +552,14 @@ def _cli(argv):
             for key in ("directory", "filename", "path", "created", "project", "git"):
                 print("%s: %s" % (key, result[key]))
         return 0
-    if cmd in ("resume", "supersede", "abandon", "claim"):
+    if cmd in ("resume", "supersede", "abandon", "claim", "release"):
+        owner = None
+        if cmd in ("claim", "release", "resume") and "--owner" in args:
+            i = args.index("--owner")
+            if i + 1 >= len(args):
+                print("usage: handoff_ledger.py %s <path> [--owner X]" % cmd, file=sys.stderr)
+                return 1
+            owner, args = args[i + 1], args[:i] + args[i + 2:]
         if not args:
             print("usage: handoff_ledger.py %s <path>" % cmd, file=sys.stderr)
             return 1
@@ -464,12 +578,22 @@ def _cli(argv):
             if p is not None and not os.path.isfile(p):
                 print("no such handoff: %s" % p, file=sys.stderr)
                 return 1
-        if cmd == "claim":
-            print("claimed (%s): %s" % (claim(path), path))
-            return 0
-        status = {"resume": "resumed", "supersede": "superseded",
-                  "abandon": "abandoned"}[cmd]
-        stamp = _mark(path, status, superseded_by)
+        try:
+            if cmd == "claim":
+                print("claimed (%s): %s" % (claim(path, owner), path))
+                return 0
+            if cmd == "release":
+                release(path, owner)
+                print("released: %s" % path)
+                return 0
+            if owner is not None:
+                _check_owner(path, owner)
+            status = {"resume": "resumed", "supersede": "superseded",
+                      "abandon": "abandoned"}[cmd]
+            stamp = _mark(path, status, superseded_by)
+        except ConflictError as e:
+            print("refused: %s" % e, file=sys.stderr)
+            return 1
         print("marked %s (%s): %s" % (status, stamp, path))
         return 0
     print("unknown subcommand: %s" % cmd, file=sys.stderr)
