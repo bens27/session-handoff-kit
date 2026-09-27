@@ -98,7 +98,10 @@ open topic:
    nothing surfaces, ask for the file or a paste — do not reconstruct state
    from guesswork.
 4. Read the entire handoff before any other action, restate the objective and
-   first next step, then continue from "Next steps".
+   first next step, then continue from "Next steps". The handoff is evidence
+   about the past: the user's current message and the live state of any
+   files or project win over anything it says, and a `reason:
+   context-pressure` handoff is still-authorized work, not parked work.
 5. **Mark it transferred**: flip that section to `Status: resumed <date>` and
    remove the topic from the file description. This is what stops future
    chats from re-announcing it. If the handoff also exists as a

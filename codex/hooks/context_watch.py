@@ -719,7 +719,8 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill,
     message = (
         "%s %sContext occupancy ~%s tokens, over the %s-token threshold "
         "for %s [%s] (%s). Finish only the action currently in progress, then "
-        "immediately invoke the `%s` skill: write the handoff document and stop. "
+        "immediately invoke the `%s` skill: write the handoff document (with "
+        "`reason: context-pressure`) and stop. "
         "Do not begin any new work."
         % (LABEL.get(agent, LABEL["claude"]),
            "SECOND NOTICE, the first was not acted on: " if second else "",
