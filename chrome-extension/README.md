@@ -18,7 +18,8 @@ No store listing needed for personal use.
 - **Template** — the injected prompt. Default asks Claude to check the
   open-handoffs ledger, list open items one line each, and ask which to
   resume; the empty case costs five words ("No open handoffs").
-- **Inject on every new chat** (default on) — off means injection happens only
+- **Inject on every new chat** (default off, so unrelated chats get no extra
+  context) — off means injection happens only
   when you open a chat via the toolbar button.
 - **Auto-send** (default off) — off pre-fills and leaves Enter to you. On
   makes the check truly zero-keystroke: by the time you focus the window, the

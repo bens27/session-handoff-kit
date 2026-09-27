@@ -14,3 +14,12 @@ The runtime behavior (watcher thresholds, announcer logic, ledger states, and sk
 - See the root `README.md`'s "Codex CLI" install section for context on how this packaging fits into the broader kit.
 
 The `hooks/` directory and `skills/session-handoff/SKILL.md` are kept byte-identical to their Claude-plugin counterparts, so the plugin's documentation accurately describes this directory's runtime behavior.
+
+One difference: Codex gets no `Stop` hook here, so fully automatic mode
+(`HANDOFF_AUTO=1`) cannot clear an interactive Codex session. Use the
+headless runner instead, which re-runs Codex with `resume` for as long as
+each run leaves a new open handoff:
+
+```
+python3 ~/.codex/hooks/context_watch.py auto --max 10 --prompt "build X" -- codex exec
+```

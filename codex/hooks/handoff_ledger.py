@@ -4,10 +4,12 @@
 Layout:
   ./.handoffs/<YYYYMMDD-HHMM>-<topic>.md   handoff files, named by ending
                                            date/time, with front matter
-                                           (status: open|resumed|superseded,
+                                           (status: open|resumed|superseded|abandoned,
                                            description: one-line summary,
                                            skills: comma-separated skill names,
-                                           references: comma-separated paths)
+                                           references: comma-separated paths,
+                                           project: absolute project root,
+                                           git: branch@sha when it was written)
   ./.handoffs/<topic>.md                   legacy undated naming, still scanned
   ./HANDOFF.md                             legacy single file, topic "default"
 
@@ -16,28 +18,39 @@ starts can announce untransferred work without ever re-announcing what has
 already been picked up. Re-handing-off the same thread writes a new dated file
 and marks the previous one superseded.
 
+The project root is the nearest ancestor of the working directory that has a
+./.handoffs/ directory (or whose per-project fallback directory holds a handoff
+recording it as `project:`), stopping at $HOME; otherwise the directory itself.
+A session started in a subfolder therefore still finds the project's handoffs.
+
 Subcommands:
   list [dir] [--json] [--max-age-days N]   print open handoffs (default dir: .)
   resolve <topic-or-path> [dir] [--json]   print every handoff for a topic
                                             oldest first, across all statuses
   new-path <topic> [dir] [--json]          print deterministic path data for a new handoff
+  claim <path>                             stamp a handoff as being resumed now, so a
+                                            parallel session start does not announce it
   resume <path>                            mark a handoff resumed (transferred)
   supersede <path> [--by <new-path>]       mark a handoff replaced by a newer one
+  abandon <path>                           mark a handoff dropped (never to be resumed)
   save-path [dir]                          print where new handoffs should be saved
 
-Stdlib only. Also importable: scan(root, max_age_days), mark_resumed(path),
-mark_superseded(path).
+Stdlib only. Also importable: scan(root, max_age_days, stats=None),
+project_root(start), mark_resumed(path), mark_superseded(path).
 """
 
 import json
 import os
 import re
+import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 20260811-1902-pantry-cli(.md) -> ended 2026-08-11T19:02, topic pantry-cli
 DATED_NAME = re.compile(r"^(\d{8})-(\d{4}|\d{6})-(.+)$")
+STAMP = "%Y-%m-%dT%H:%M"
+CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
 
 
 def parse_front_matter(text):
@@ -72,6 +85,11 @@ def _name_parts(path):
     return iso, topic
 
 
+def _same_dir(a, b):
+    return os.path.normcase(os.path.realpath(os.path.expanduser(a))) == \
+        os.path.normcase(os.path.realpath(os.path.expanduser(b)))
+
+
 def _fallback_dir(root):
     """The per-project directory save_path() writes to when a project has no
     local .handoffs convention."""
@@ -79,14 +97,51 @@ def _fallback_dir(root):
                                            os.path.basename(os.path.abspath(root))))
 
 
+def _read_fm(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return parse_front_matter(f.read())
+
+
+def _fallback_claims(d):
+    """True when d's fallback directory holds a handoff recording d as its project."""
+    fdir = _fallback_dir(d)
+    try:
+        for name in os.listdir(fdir):
+            if name.endswith(".md"):
+                project = _read_fm(os.path.join(fdir, name)).get("project")
+                if project and _same_dir(project, d):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def project_root(start):
+    """Nearest ancestor (inclusive) with a .handoffs/ dir or a fallback-dir handoff
+    naming it as project, stopping at $HOME; else start. Deliberately NOT the git
+    toplevel: a folder of projects can itself be a git repo."""
+    start = os.path.abspath(start)
+    home = os.path.abspath(os.path.expanduser("~"))
+    d = start
+    while d != home:
+        if os.path.isdir(os.path.join(d, ".handoffs")) or (d != start and _fallback_claims(d)):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return start
+
+
 def _handoff_paths(root):
     """Every handoff readable for root, across BOTH locations a handoff can be
     written to: the local ./.handoffs convention and the per-project fallback.
     Reading only one of them silently hides whole projects' handoffs from
-    list, resolve, and the session-start announcer."""
+    list, resolve, and the session-start announcer. Yields (path, in_fallback)."""
     paths = []
     seen = set()
-    for hdir in (os.path.join(root, ".handoffs"), _fallback_dir(root)):
+    fallback = _fallback_dir(root)
+    for hdir in (os.path.join(root, ".handoffs"), fallback):
         if not os.path.isdir(hdir):
             continue
         for name in sorted(os.listdir(hdir)):
@@ -97,10 +152,10 @@ def _handoff_paths(root):
             if key in seen:
                 continue
             seen.add(key)
-            paths.append(path)
+            paths.append((path, hdir == fallback))
     legacy = os.path.join(root, "HANDOFF.md")
     if os.path.isfile(legacy):
-        paths.append(legacy)
+        paths.append((legacy, False))
     return paths, legacy
 
 
@@ -113,47 +168,89 @@ def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def scan(root, max_age_days=14):
-    """Return open handoffs under root as [{path, topic, ended, description,
-    skills, age_days}], newest (most recently ended) first."""
-    now = time.time()
+def _records(root):
+    """Every handoff belonging to root: {path, fm, text, mtime, topic, ended}.
+    Fallback-dir files that name a different `project:` belong to another
+    project sharing the same basename and are skipped."""
     paths, legacy = _handoff_paths(root)
-
-    found = []
-    for path in paths:
+    out = []
+    for path, in_fallback in paths:
         try:
             mtime = os.path.getmtime(path)
-            age_days = (now - mtime) / 86400.0
-            if age_days > max_age_days:
-                continue
             with open(path, encoding="utf-8", errors="replace") as f:
-                fm = parse_front_matter(f.read())
-            status = (fm.get("status") or "open").lower()
-            if status != "open":
+                text = f.read()
+            fm = parse_front_matter(text)
+            if in_fallback and fm.get("project") and not _same_dir(fm["project"], root):
                 continue
             name_ended, name_topic = _name_parts(path)
             topic = fm.get("topic") or name_topic
             if _is_legacy_single_file(path, legacy) and "topic" not in fm:
                 topic = "default"
-            ended = (name_ended or fm.get("created")
-                     or datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M"))
-            found.append({
-                "path": path,
-                "topic": topic,
-                "ended": ended,
-                "description": fm.get("description") or "",
-                "skills": fm.get("skills") or "",
-                "age_days": round(age_days, 1),
+            out.append({
+                "path": path, "fm": fm, "text": text, "mtime": mtime, "topic": topic,
+                "legacy": _is_legacy_single_file(path, legacy),
+                "ended": (name_ended or fm.get("created")
+                          or datetime.fromtimestamp(mtime).strftime(STAMP)),
             })
         except Exception:
             continue
+    return out
+
+
+def _claimed_recently(fm, now):
+    try:
+        return now - datetime.strptime(fm.get("claimed", ""), STAMP) < CLAIM_TTL
+    except ValueError:
+        return False
+
+
+def scan(root, max_age_days=14, stats=None):
+    """Return open handoffs under root as [{path, topic, ended, description,
+    skills, age_days}], newest (most recently ended) first, one per topic.
+    If a dict is passed as stats it receives {"stale": n, "duplicates": n}:
+    open handoffs hidden for age, and older open handoffs of a newer one's topic."""
+    now = time.time()
+    root = project_root(root)
+    stale = 0
+    found = []
+    for r in _records(root):
+        fm = r["fm"]
+        if (fm.get("status") or "open").lower() != "open":
+            continue
+        # A bare root HANDOFF.md is only a handoff if it says so near the top.
+        if r["legacy"] and not fm and "handoff" not in "\n".join(
+                r["text"].splitlines()[:5]).lower():
+            continue
+        age_days = (now - r["mtime"]) / 86400.0
+        if age_days > max_age_days:
+            stale += 1
+            continue
+        found.append({
+            "path": r["path"],
+            "topic": r["topic"],
+            "ended": r["ended"],
+            "description": fm.get("description") or "",
+            "skills": fm.get("skills") or "",
+            "age_days": round(age_days, 1),
+            "_claimed": _claimed_recently(fm, datetime.now()),
+        })
     found.sort(key=lambda h: h["ended"], reverse=True)
-    return found
+    newest, seen = [], set()
+    for h in found:
+        if h["topic"] not in seen:
+            seen.add(h["topic"])
+            newest.append(h)
+    # A claimed topic is being resumed by another session right now: hide it,
+    # and (having collapsed first) hide its older open handoffs with it.
+    newest = [h for h in newest if not h.pop("_claimed")]
+    if stats is not None:
+        stats["stale"] = stale
+        stats["duplicates"] = len(found) - len(newest)
+    return newest
 
 
 def _topic_for_path(path, legacy=None):
-    with open(path, encoding="utf-8", errors="replace") as f:
-        fm = parse_front_matter(f.read())
+    fm = _read_fm(path)
     _, name_topic = _name_parts(path)
     topic = fm.get("topic") or name_topic
     if _is_legacy_single_file(path, legacy) and "topic" not in fm:
@@ -166,109 +263,105 @@ def resolve(topic_or_path, root):
         topic = _topic_for_path(topic_or_path)
     else:
         topic = topic_or_path
+    root = project_root(root)
 
-    paths, legacy = _handoff_paths(root)
-    chain = []
-    for path in paths:
-        try:
-            mtime = os.path.getmtime(path)
-            with open(path, encoding="utf-8", errors="replace") as f:
-                fm = parse_front_matter(f.read())
-            name_ended, name_topic = _name_parts(path)
-            path_topic = fm.get("topic") or name_topic
-            if _is_legacy_single_file(path, legacy) and "topic" not in fm:
-                path_topic = "default"
-            if path_topic != topic:
-                continue
-            ended = (name_ended or fm.get("created")
-                     or datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M"))
-            chain.append({
-                "path": path,
-                "status": (fm.get("status") or "open").lower(),
-                "ended": ended,
-                "description": fm.get("description") or "",
-                "references": _split_csv(fm.get("references") or ""),
-            })
-        except Exception:
-            continue
+    chain = [{
+        "path": r["path"],
+        "status": (r["fm"].get("status") or "open").lower(),
+        "ended": r["ended"],
+        "description": r["fm"].get("description") or "",
+        "references": _split_csv(r["fm"].get("references") or ""),
+    } for r in _records(root) if r["topic"] == topic]
     chain.sort(key=lambda h: h["ended"])
 
-    must_also_read = []
-    seen = set()
-    for entry in chain:
-        for ref in entry["references"]:
-            if ref not in seen:
-                seen.add(ref)
-                must_also_read.append(ref)
-
-    authoritative = chain[-1]["path"] if chain else None
+    # Only the authoritative (newest) handoff's references are current: earlier
+    # handoffs' references were either carried forward or deliberately dropped.
+    must_also_read = list(dict.fromkeys(chain[-1]["references"])) if chain else []
+    missing = [ref for ref in must_also_read
+               if not os.path.exists(os.path.join(root, os.path.expanduser(ref)))]
     return {
         "topic": topic,
         "chain": chain,
-        "authoritative": authoritative,
+        "authoritative": chain[-1]["path"] if chain else None,
         "must_also_read": must_also_read,
+        "missing_references": missing,
     }
 
 
 def save_path(root):
-    abs_root = os.path.abspath(root)
+    abs_root = project_root(root)
     hdir = os.path.join(abs_root, ".handoffs")
     if os.path.isdir(hdir):
         return hdir
     return _fallback_dir(abs_root)
 
 
+def _git_position(root):
+    """'branch@shortsha' for root, or '' when it is not a git work tree."""
+    def git(*args):
+        return subprocess.run(["git", "-C", root] + list(args), capture_output=True,
+                              text=True, timeout=5).stdout.strip()
+    try:
+        sha = git("rev-parse", "--short", "HEAD")
+        return "%s@%s" % (git("rev-parse", "--abbrev-ref", "HEAD"), sha) if sha else ""
+    except Exception:
+        return ""
+
+
 def new_path(topic, root):
     now = datetime.now()
-    directory = save_path(root)
+    abs_root = project_root(root)
+    directory = save_path(abs_root)
     filename = "%s-%s.md" % (now.strftime("%Y%m%d-%H%M"), topic)
     return {
         "directory": directory,
         "filename": filename,
         "path": os.path.join(directory, filename),
-        "created": now.strftime("%Y-%m-%dT%H:%M"),
+        "created": now.strftime(STAMP),
+        "project": abs_root,
+        "git": _git_position(abs_root),
     }
+
+
+def _set_fields(path, fields, drop):
+    """Rewrite front matter: remove lines whose key starts with any of drop,
+    then append fields in order. Adds a header to files without one."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    new = ["%s: %s" % kv for kv in fields]
+    lines = text.splitlines()
+    end = None
+    if lines and lines[0].strip() == "---":
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is not None:
+        block = [l for l in lines[1:end] if not l.strip().lower().startswith(drop)]
+        new_text = "\n".join(["---"] + block + new + lines[end:]) + (
+            "\n" if text.endswith("\n") else "")
+    else:
+        _, topic = _name_parts(path)
+        if os.path.basename(path) == "HANDOFF.md":
+            topic = "default"
+        new_text = "---\ntopic: %s\n%s\n---\n" % (topic, "\n".join(new)) + text
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new_text)
 
 
 def _mark(path, status, superseded_by=None):
     """Flip a handoff's status and stamp the time. Idempotent."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        text = f.read()
-    stamp = datetime.now().strftime("%Y-%m-%dT%H:%M")
-    stamps = ("status:", "resumed:", "superseded:")
+    stamp = datetime.now().strftime(STAMP)
+    fields = [("status", status), (status, stamp)]
+    drop = ("status:", "resumed:", "superseded:", "abandoned:", "claimed:")
     if superseded_by is not None:
-        stamps += ("superseded_by:",)
-    lines = text.splitlines()
-    if lines and lines[0].strip() == "---":
-        try:
-            end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
-        except StopIteration:
-            end = None
-        if end is not None:
-            block = lines[1:end]
-            block = [l for l in block if not l.strip().lower().startswith(stamps)]
-            block += ["status: %s" % status, "%s: %s" % (status, stamp)]
-            if superseded_by is not None:
-                block += ["superseded_by: %s" % superseded_by]
-            lines = ["---"] + block + lines[end:]
-            new_text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
-        else:
-            new_text = _legacy_header(path, status, stamp, superseded_by) + text
-    else:
-        new_text = _legacy_header(path, status, stamp, superseded_by) + text
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(new_text)
+        drop += ("superseded_by:",)
+        fields.append(("superseded_by", superseded_by))
+    _set_fields(path, fields, drop)
     return stamp
 
 
-def _legacy_header(path, status, stamp, superseded_by=None):
-    _, topic = _name_parts(path)
-    if os.path.basename(path) == "HANDOFF.md":
-        topic = "default"
-    header = "---\ntopic: %s\nstatus: %s\n%s: %s\n" % (topic, status, status, stamp)
-    if superseded_by is not None:
-        header += "superseded_by: %s\n" % superseded_by
-    return header + "---\n"
+def claim(path):
+    stamp = datetime.now().strftime(STAMP)
+    _set_fields(path, [("claimed", stamp)], ("claimed:",))
+    return stamp
 
 
 def mark_resumed(path):
@@ -296,13 +389,18 @@ def _cli(argv):
                 pass
             args = args[:i] + args[i + 2:]
         root = args[0] if args else "."
-        handoffs = scan(root, max_age)
+        stats = {}
+        handoffs = scan(root, max_age, stats)
         if as_json:
             print(json.dumps(handoffs, indent=2))
         else:
             for h in handoffs:
                 print("%s\t%s\t%s\t%s" % (h["ended"], h["topic"], h["path"],
                                           h["description"]))
+        if stats["stale"]:
+            print("%d open handoff(s) older than %d days hidden; raise --max-age-days to "
+                  "see them, or `abandon <path>` to close them" % (stats["stale"], max_age),
+                  file=sys.stderr)
         return 0
     if cmd == "resolve":
         as_json = "--json" in args
@@ -325,6 +423,8 @@ def _cli(argv):
             print("authoritative: %s" % resolved["authoritative"])
             if resolved["must_also_read"]:
                 print("must_also_read: %s" % ", ".join(resolved["must_also_read"]))
+            if resolved["missing_references"]:
+                print("missing_references: %s" % ", ".join(resolved["missing_references"]))
         return 0
     if cmd == "save-path":
         root = args[0] if args else "."
@@ -342,12 +442,10 @@ def _cli(argv):
         if as_json:
             print(json.dumps(result, indent=2))
         else:
-            print("directory: %s" % result["directory"])
-            print("filename: %s" % result["filename"])
-            print("path: %s" % result["path"])
-            print("created: %s" % result["created"])
+            for key in ("directory", "filename", "path", "created", "project", "git"):
+                print("%s: %s" % (key, result[key]))
         return 0
-    if cmd in ("resume", "supersede"):
+    if cmd in ("resume", "supersede", "abandon", "claim"):
         if not args:
             print("usage: handoff_ledger.py %s <path>" % cmd, file=sys.stderr)
             return 1
@@ -365,7 +463,11 @@ def _cli(argv):
         if not os.path.isfile(path):
             print("no such handoff: %s" % path, file=sys.stderr)
             return 1
-        status = "resumed" if cmd == "resume" else "superseded"
+        if cmd == "claim":
+            print("claimed (%s): %s" % (claim(path), path))
+            return 0
+        status = {"resume": "resumed", "supersede": "superseded",
+                  "abandon": "abandoned"}[cmd]
         stamp = _mark(path, status, superseded_by)
         print("marked %s (%s): %s" % (status, stamp, path))
         return 0

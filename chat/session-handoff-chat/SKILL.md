@@ -12,7 +12,7 @@ description: >
   HANDOFF.md — and whenever a memory file listing open handoffs exists and the
   user's request plausibly relates to one of them.
 metadata:
-  version: "0.4.2"
+  version: "0.5.0"
 ---
 
 # Session Handoff (chat)
@@ -35,7 +35,9 @@ section:
 ```
 
 Resumed handoffs stay in the file with `Status: resumed <date>` until the user
-asks to clear them.
+asks to clear them, or until they are more than 30 days old: whenever you
+write the ledger, delete resumed sections older than 30 days so the file does
+not grow into stale context. Open sections are never pruned automatically.
 
 **The file's one-line description is the announcement channel.** Memory file
 descriptions are visible at the start of every new conversation, so keep it in
@@ -99,7 +101,10 @@ open topic:
    first next step, then continue from "Next steps".
 5. **Mark it transferred**: flip that section to `Status: resumed <date>` and
    remove the topic from the file description. This is what stops future
-   chats from re-announcing it. Do not mark resumed merely for listing it.
+   chats from re-announcing it. If the handoff also exists as a
+   `.handoffs/*.md` file copy and a shell is available, mark that copy too
+   (`python3 <hooks-dir>/handoff_ledger.py resume <path>`), or tell the user
+   it is still `status: open` so the plugin will announce it again. Do not mark resumed merely for listing it.
 6. If the user's opening request is unrelated to any open handoff, mention
    open work in at most one sentence and do their task; the ledger stays as
    it is.

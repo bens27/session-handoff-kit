@@ -31,6 +31,8 @@ def run_hook(event, env_extra, script=PLUGIN):
     env = dict(os.environ)
     env.pop("HANDOFF_AT", None)
     env.pop("AUTORESUME", None)
+    env.pop("HANDOFF_AUTO", None)
+    env.pop("HANDOFF_AUTO_RUNNER", None)
     env.pop("CONTEXT_WATCH_AUTORESUME", None)
     env.pop("CONTEXT_WATCH_TOKENS", None)
     env.pop("CONTEXT_WATCH_TOKENS_MAP", None)
@@ -135,10 +137,56 @@ def main():
     check("autoresume-trigger-message-clear", p_ar.returncode == 0 and "/clear" in msg_ar,
           "rc=%d stdout=%r" % (p_ar.returncode, p_ar.stdout[:400]))
 
-    # 5. Latch: same session id fires once
-    p2 = run_hook(evt, envx)
+    # 5. Latch: the same session fires once below 125% of the threshold, then a
+    #    second notice at 125%, then never again until a compaction re-arms it.
+    p2 = run_hook(evt, dict(envx, CONTEXT_WATCH_TOKENS="120000"))  # 137k < 150k
     check("latch-fires-once", p2.returncode == 0 and p2.stdout.strip() == "",
           "stdout=%r" % p2.stdout[:200])
+    p2b = run_hook(evt, envx)  # 137k >= 125k
+    check("latch-second-notice", "SECOND NOTICE" in p2b.stdout, "stdout=%r" % p2b.stdout[:200])
+    check("latch-second-notice-logged",
+          json.loads(open(log1).read().splitlines()[-1]).get("notice") == 2)
+    p2c = run_hook(evt, envx)
+    check("latch-silent-after-second", p2c.stdout.strip() == "", "stdout=%r" % p2c.stdout[:200])
+    small = os.path.join(tmp, "claude-compacted.jsonl")
+    with open(transcript) as f_in, open(small, "w") as f:
+        f.write(f_in.read())
+        f.write(json.dumps({"type": "system", "subtype": "compact_boundary"}) + "\n")
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 20000,
+                                                  "output_tokens": 1000}}}) + "\n")
+    p2d = run_hook(dict(evt, transcript_path=small), envx)
+    check("latch-rearm-after-compaction", p2d.stdout.strip() == ""
+          and not os.path.exists(os.path.join(latchdir, "context-watch-%s.fired" % sid)),
+          "stdout=%r" % p2d.stdout[:200])
+    p2e = run_hook(evt, envx)
+    check("latch-fires-again-after-rearm", "[context-watch]" in p2e.stdout
+          and "SECOND NOTICE" not in p2e.stdout, "stdout=%r" % p2e.stdout[:200])
+
+    # 5b. Compaction boundary: pre-compaction usage is not the window any more.
+    p2f = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                    "transcript_path": small, "cwd": tmp}, envx)
+    check("compaction-resets-usage", p2f.stdout.strip() == "", "stdout=%r" % p2f.stdout[:200])
+
+    # 5c. Pending estimate: capped, skips hook-only metadata, flat cost for base64.
+    small_t = os.path.join(tmp, "claude-small.jsonl")
+    with open(small_t, "w") as f:
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 90000}}}) + "\n")
+    def pending_for(response):
+        log_p = os.path.join(tmp, "events-pending-%s.jsonl" % uuid.uuid4().hex[:6])
+        run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                  "transcript_path": small_t, "cwd": tmp, "tool_response": response},
+                 {"CONTEXT_WATCH_TOKENS": "90000", "CONTEXT_WATCH_LOG": log_p,
+                  "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir})
+        return json.loads(open(log_p).read().splitlines()[-1])
+    rec = pending_for({"stdout": "word " * 80000})
+    check("pending-capped", rec["pending_estimate"] == 25000 and rec["pending_raw"] == 100000,
+          "record=%r" % rec)
+    rec = pending_for({"filePath": "a.py", "originalFile": "y" * 400000, "newString": "z" * 400})
+    check("pending-skips-originalFile", rec["pending_estimate"] < 200, "record=%r" % rec)
+    rec = pending_for({"type": "image", "data": "QUJD" * 50000})
+    check("pending-base64-flat", 1600 <= rec["pending_estimate"] < 1700, "record=%r" % rec)
 
     # 6. stats CLI honors CONTEXT_WATCH_LOG=0 as 'disabled', not a path
     env = dict(os.environ)
@@ -161,7 +209,7 @@ def main():
              "CONTEXT_WATCH_PENDING": "0", "CONTEXT_WATCH_AGENT": "codex",
              "TMPDIR": latchdir}
     p4 = run_hook(evt2, envx2)
-    check("codex-trigger-stdout", p4.returncode == 0 and "[context-watch]" in p4.stdout,
+    check("codex-trigger-stdout", p4.returncode == 0 and p4.stdout.startswith("context-watch:"),
           "rc=%d stdout=%r" % (p4.returncode, p4.stdout[:200]))
     model = ""
     if os.path.isfile(log2):
@@ -256,6 +304,110 @@ def main():
           p_skills.returncode == 0 and "First load exactly these skills" in p_skills.stdout
           and "tdd, dataviz" in p_skills.stdout,
           "rc=%d stdout=%r" % (p_skills.returncode, p_skills.stdout[:500]))
+
+    # 11. Codex: PostToolUse notice says it replaced the tool result; SessionStart
+    #     is JSON with the bracket-free label.
+    evt_cx = {"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+              "transcript_path": rollout}
+    p_cx = run_hook(evt_cx, envx2)
+    check("codex-posttooluse-exit2-notes-replaced-result",
+          p_cx.returncode == 2 and p_cx.stderr.startswith("context-watch:")
+          and "replaced the output" in p_cx.stderr,
+          "rc=%d stderr=%r" % (p_cx.returncode, p_cx.stderr[:300]))
+    p_cx_ss = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_skills,
+                        "session_id": "verify-cx-ss"},
+                       {"TMPDIR": latchdir, "CONTEXT_WATCH_AGENT": "codex"})
+    try:
+        cx_note = json.loads(p_cx_ss.stdout)["hookSpecificOutput"]["additionalContext"]
+    except Exception:
+        cx_note = ""
+    check("codex-sessionstart-json-label", cx_note.startswith("context-watch:"),
+          "stdout=%r" % p_cx_ss.stdout[:300])
+
+    # 12. Announcer: cap at 5 listed, count the rest, mention hidden stale ones.
+    proj_many = os.path.join(tmp, "proj-many")
+    os.makedirs(os.path.join(proj_many, ".handoffs"))
+    for i in range(8):
+        with open(os.path.join(proj_many, ".handoffs", "2026081%d-0900-t%d.md" % (i, i)), "w") as f:
+            f.write("---\ntopic: t%d\nstatus: open\n---\n# Session Handoff\n" % i)
+    stale = os.path.join(proj_many, ".handoffs", "20250101-0900-ancient.md")
+    with open(stale, "w") as f:
+        f.write("---\ntopic: ancient\nstatus: open\n---\n# Session Handoff\n")
+    os.utime(stale, (time.time() - 90 * 86400.0,) * 2)
+    p_many = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_many,
+                       "session_id": "verify-many"}, {"TMPDIR": latchdir})
+    check("announcer-caps-listing", "8 open handoffs" in p_many.stdout and "5) t3" in p_many.stdout
+          and "6)" not in p_many.stdout and "and 3 more" in p_many.stdout,
+          "stdout=%r" % p_many.stdout[:900])
+    check("announcer-mentions-hidden-stale", "1 open handoff(s) older than 14 days" in p_many.stdout,
+          "stdout=%r" % p_many.stdout[-400:])
+
+    # 13. Fully automatic mode: the newest handoff wins without asking; the trigger
+    #     tells the agent to end its turn instead of asking the user to /clear.
+    p_auto = run_hook({"hook_event_name": "SessionStart", "source": "clear", "cwd": proj_multi,
+                       "session_id": "verify-auto"}, {"TMPDIR": latchdir, "HANDOFF_AUTO": "1"})
+    check("auto-announcer-picks-newest",
+          "'second'" in p_auto.stdout and "without asking" in p_auto.stdout
+          and "newest of 2" in p_auto.stdout and "ask the user which" not in p_auto.stdout,
+          "stdout=%r" % p_auto.stdout[:500])
+    p_auto_t = run_hook(dict(evt_ar, session_id="verify-" + uuid.uuid4().hex[:8]),
+                        dict(env_ar, HANDOFF_AUTO="1"))
+    check("auto-trigger-ends-turn", "end your turn" in p_auto_t.stdout
+          and "type /clear" not in p_auto_t.stdout, "stdout=%r" % p_auto_t.stdout[:500])
+
+    # 14. Stop hook (auto mode, tmux): after the trigger fired and a handoff was
+    #     written, types /clear then "resume" into the pane, exactly once.
+    bindir = os.path.join(tmp, "bin")
+    os.makedirs(bindir)
+    keys = os.path.join(tmp, "tmux-keys.txt")
+    with open(os.path.join(bindir, "tmux"), "w") as f:
+        f.write("#!/bin/sh\necho \"$*\" >> %s\n" % keys)
+    os.chmod(os.path.join(bindir, "tmux"), 0o755)
+    proj_stop = os.path.join(tmp, "proj-stop")
+    os.makedirs(os.path.join(proj_stop, ".handoffs"))
+    sid_stop = "verify-" + uuid.uuid4().hex[:8]
+    env_stop = {"TMPDIR": latchdir, "HANDOFF_AUTO": "1", "TMUX_PANE": "%9",
+                "PATH": bindir + os.pathsep + os.environ.get("PATH", "")}
+    stop_evt = {"hook_event_name": "Stop", "session_id": sid_stop, "cwd": proj_stop}
+    run_hook(stop_evt, env_stop)  # not fired yet: nothing to do
+    open(os.path.join(latchdir, "context-watch-%s.fired" % sid_stop), "w").close()
+    run_hook(stop_evt, env_stop)  # fired but no handoff yet
+    with open(os.path.join(proj_stop, ".handoffs", "20260927-0900-stopdemo.md"), "w") as f:
+        f.write("---\ntopic: stopdemo\nstatus: open\n---\n# Session Handoff\n")
+    run_hook(stop_evt, env_stop)
+    run_hook(stop_evt, env_stop)  # second Stop must not type again
+    deadline = time.time() + 15
+    while time.time() < deadline and (not os.path.exists(keys)
+                                      or "resume" not in open(keys).read()):
+        time.sleep(0.5)
+    time.sleep(1)
+    typed = open(keys).read() if os.path.exists(keys) else ""
+    check("auto-stop-types-clear-then-resume",
+          typed.count("/clear") == 1 and typed.count("resume") == 1
+          and typed.index("/clear") < typed.index("resume") and "-t %9" in typed,
+          "typed=%r" % typed)
+
+    # 15. Headless runner: loops while each run leaves a new open handoff.
+    proj_run = os.path.join(tmp, "proj-run")
+    os.makedirs(os.path.join(proj_run, ".handoffs"))
+    fake = os.path.join(bindir, "fake-agent")
+    with open(fake, "w") as f:
+        f.write("#!/bin/sh\necho \"$HANDOFF_AUTO $*\" >> calls.txt\n"
+                "n=$(wc -l < calls.txt | tr -d ' ')\n"
+                "if [ \"$n\" -lt 3 ]; then printf -- '---\\ntopic: run%s\\nstatus: open\\n---\\n' $n"
+                " > .handoffs/2026092$n-0900-run$n.md; fi\n")
+    os.chmod(fake, 0o755)
+    p_run = subprocess.run([PY, PLUGIN, "auto", "--prompt", "build it", "--", fake],
+                           cwd=proj_run, capture_output=True, text=True, timeout=60)
+    calls = open(os.path.join(proj_run, "calls.txt")).read().splitlines()
+    check("auto-runner-loops-until-no-handoff",
+          calls == ["1 build it", "1 resume", "1 resume"] and p_run.returncode == 0,
+          "calls=%r stderr=%r" % (calls, p_run.stderr[-300:]))
+    p_run_max = subprocess.run([PY, PLUGIN, "auto", "--max", "1", "--", "true"],
+                               cwd=proj_run, capture_output=True, text=True, timeout=60)
+    check("auto-runner-usage", subprocess.run([PY, PLUGIN, "auto"], capture_output=True,
+                                              text=True).returncode == 2
+          and p_run_max.returncode == 0)
 
     print()
     if failures:

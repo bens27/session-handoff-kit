@@ -10,7 +10,8 @@ session-handoff skill. Any cost savings are a logged byproduct (see analytics),
 not the objective.
 
 Hook events: PostToolUse + UserPromptSubmit (threshold watch), SessionStart
-(open-handoff announcer, see handoff_ledger.py).
+(open-handoff announcer, see handoff_ledger.py), Stop (fully-automatic mode only:
+clears a tmux-hosted session once its handoff is written).
 
 Occupancy measure (what the window holds heading into the NEXT call):
   Claude Code: last main-chain usage -> input_tokens + cache_creation_input_tokens
@@ -49,30 +50,75 @@ Other environment variables:
   AUTORESUME                  announcer + trigger note: true resumes a single open
                               handoff without asking after /clear
   CONTEXT_WATCH_AUTORESUME    legacy alias for AUTORESUME
+  HANDOFF_AUTO                fully automatic: implies AUTORESUME, the newest open
+                              handoff wins without asking, the agent ends its turn
+                              after writing the handoff, and the Stop hook types
+                              /clear + "resume" into the session's tmux pane
+                              (or use the `auto` runner below for headless runs)
 
 CLI: `context_watch.py stats` summarizes the analytics log.
+     `context_watch.py auto [--max N] [--prompt TEXT] -- <agent command...>`
+     runs a headless agent (e.g. `claude -p`, `codex exec`) in a loop with
+     HANDOFF_AUTO=1: each run that leaves a new open handoff is followed by a
+     fresh run given the prompt "resume"; the loop ends when a run leaves none.
 
 Stdlib only. Fails open: any error exits 0 so the watcher can never break a
-session. Fires once per session via a latch file in the temp directory.
+session. Fires at the threshold and once more at 125% of it (latch files in the
+temp directory); a drop below 50% of it (compaction) re-arms both.
 """
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
 
 TAIL_BYTES = 2_000_000   # only scan the tail of large transcripts
 DEFAULT_TOKENS = 130_000  # built-in fallback; quality degradation commonly ~120-140k
+# Pending-estimate guards. Claude Code caps a tool result at ~25k tokens before
+# it enters context and Codex truncates harder, so a larger "pending" figure is
+# hook-payload metadata (full original files, base64 images), not context.
+PENDING_CAP = 25_000
+IMAGE_TOKENS = 1_600      # an image block costs ~1.6k tokens, not len(base64)/4
+BASE64_MIN = 1_000
+NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
+SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold
+REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
+LABEL = {"claude": "[context-watch]",
+         # Newer Codex parses stdout that starts with "[" or "{" as JSON, so the
+         # Codex label must not start with a bracket (see handle_session_start).
+         "codex": "context-watch:"}
 
 
 def env(name, default=""):
     return os.environ.get(name, default)
 
 
+def _truthy(value):
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def auto_mode_on():
+    return _truthy(env("HANDOFF_AUTO"))
+
+
 def autoresume_on():
-    return (env("AUTORESUME") or env("CONTEXT_WATCH_AUTORESUME")).strip().lower() in (
-        "1", "true", "yes", "on")
+    return auto_mode_on() or _truthy(env("AUTORESUME") or env("CONTEXT_WATCH_AUTORESUME"))
+
+
+def _ledger():
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import handoff_ledger
+    return handoff_ledger
+
+
+def latch_path(session_id, stage=1):
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(session_id))
+    return os.path.join(tempfile.gettempdir(),
+                        "context-watch-%s.fired%s" % (safe, "" if stage == 1 else stage))
 
 
 # ---------------------------------------------------------------- transcript
@@ -127,6 +173,10 @@ def claude_usage(entries):
     for e in entries:
         if e.get("isSidechain"):
             continue
+        if (e.get("type") == "system" and e.get("subtype") == "compact_boundary") \
+                or e.get("isCompactSummary"):
+            last = None  # pre-compaction usage no longer describes the window
+            continue
         msg = e.get("message")
         if isinstance(msg, dict):
             usage = msg.get("usage")
@@ -177,24 +227,43 @@ def codex_usage(entries):
     return breakdown, window, model
 
 
+def _looks_base64(s):
+    if len(s) < BASE64_MIN or " " in s[:BASE64_MIN]:
+        return False
+    head = s[:BASE64_MIN].replace("\n", "")
+    return all(c.isalnum() or c in "+/=" for c in head)
+
+
+def _context_tokens(obj):
+    """~tokens the model will actually see from a hook payload value: string
+    content at ~4 chars/token, images at a flat cost, and keys that are hook
+    metadata (an Edit's full original file) skipped."""
+    if isinstance(obj, str):
+        return IMAGE_TOKENS if _looks_base64(obj) else len(obj) // 4
+    if isinstance(obj, dict):
+        return sum(_context_tokens(v) for k, v in obj.items() if k not in NOT_IN_CONTEXT_KEYS)
+    if isinstance(obj, list):
+        return sum(_context_tokens(v) for v in obj)
+    return 0
+
+
 def estimate_pending(evt):
-    """Tokens already in this hook's stdin but not yet in any usage entry:
-    the just-produced tool result (PostToolUse) or the new prompt
-    (UserPromptSubmit). ~4 chars/token; a deliberate early-bias margin."""
+    """(capped, raw) tokens already in this hook's stdin but not yet in any
+    usage entry: the just-produced tool result (PostToolUse) or the new prompt
+    (UserPromptSubmit). Biased early, but capped: a harness never admits more
+    than ~PENDING_CAP tokens of one tool result into context."""
     if env("CONTEXT_WATCH_PENDING", "1") == "0":
-        return 0
-    blob = None
+        return 0, 0
     for key in ("tool_response", "tool_output", "tool_result", "prompt"):
-        if key in evt and evt[key] is not None:
-            blob = evt[key]
-            break
-    if blob is None:
-        return 0
-    try:
-        text = blob if isinstance(blob, str) else json.dumps(blob)
-        return len(text) // 4
-    except Exception:
-        return 0
+        if evt.get(key) is not None:
+            try:
+                raw = _context_tokens(evt[key])
+            except Exception:
+                return 0, 0
+            if key == "prompt":
+                return raw, raw  # a pasted prompt enters context whole
+            return min(raw, PENDING_CAP), raw
+    return 0, 0
 
 
 # ---------------------------------------------------------------- thresholds
@@ -305,18 +374,31 @@ def stats_cli():
     by_model = {}
     for e in events:
         by_model.setdefault(e.get("model") or "unknown", []).append(e)
+    untuned = []
     for model, evs in sorted(by_model.items()):
         occ = [e.get("occupancy", 0) for e in evs]
         cache = [e.get("breakdown", {}).get("cache_read", 0) for e in evs]
         avg_occ = sum(occ) / len(occ)
         cache_share = (sum(cache) / sum(occ) * 100.0) if sum(occ) else 0.0
-        print("  %-32s n=%-3d avg trigger %8.0f tok  cache-read share %4.1f%%"
-              % (model, len(evs), avg_occ, cache_share))
+        # triggers that only crossed the threshold because of the pending estimate
+        by_pending = sum(1 for e in evs if e.get("occupancy", 0) - e.get("pending_estimate", 0)
+                         < e.get("threshold", 0))
+        print("  %-32s n=%-3d avg trigger %8.0f tok  cache-read share %4.1f%%  pending-driven %d"
+              % (model, len(evs), avg_occ, cache_share, by_pending))
+        if all(e.get("threshold_source") == "builtin-default" for e in evs):
+            untuned.append(model)
+    if untuned:
+        print("untuned: %s used only the built-in %s-token default. Set per-model values in "
+              "~/.context-watch/thresholds.json (see hooks/thresholds.example.json) where each "
+              "model's quality actually drops." % (", ".join(untuned), format(DEFAULT_TOKENS, ",")))
     print("last event: %s" % json.dumps(events[-1]))
     return 0
 
 
 # ---------------------------------------------------------------- announcer
+
+ANNOUNCE_CAP = 5  # handoffs listed by name; the rest are counted
+
 
 def handle_session_start(evt, agent):
     """Announce open (untransferred) handoffs; enumerate and offer a choice when several exist."""
@@ -330,12 +412,9 @@ def handle_session_start(evt, agent):
     except ValueError:
         max_age = 14
 
-    open_handoffs = []
+    open_handoffs, stats = [], {}
     try:
-        if here not in sys.path:
-            sys.path.insert(0, here)
-        import handoff_ledger
-        open_handoffs = handoff_ledger.scan(cwd, max_age)
+        open_handoffs = _ledger().scan(cwd, max_age, stats)
     except Exception:
         path = os.path.join(cwd, "HANDOFF.md")
         try:
@@ -353,13 +432,20 @@ def handle_session_start(evt, agent):
     if not open_handoffs:
         sys.exit(0)
 
-    mark = ("After a handoff has been resumed, mark it transferred so future "
-            "sessions stop announcing it: python3 %s resume <path>" % ledger)
+    label = LABEL.get(agent, LABEL["claude"])
+    mark = ("Before resuming, claim it so a parallel session start skips it: python3 %s "
+            "claim <path>. After a handoff has been resumed, mark it transferred so future "
+            "sessions stop announcing it: python3 %s resume <path>" % (ledger, ledger))
     defer = ("If the user's opening request is an unrelated explicit task, mention the "
              "open handoff(s) in one sentence and proceed with their task instead.")
+    hidden = ""
+    if stats.get("stale"):
+        hidden = (" %d open handoff(s) older than %d days are hidden; list them with "
+                  "`python3 %s list --max-age-days 9999` and close dead ones with "
+                  "`python3 %s abandon <path>`." % (stats["stale"], max_age, ledger, ledger))
 
-    if len(open_handoffs) == 1:
-        h = open_handoffs[0]
+    if len(open_handoffs) == 1 or auto_mode_on():
+        h = open_handoffs[0]  # newest first
         desc = h.get("description") or ""
         suffix = " — %s" % desc if desc else ""
         if autoresume_on():
@@ -372,26 +458,32 @@ def handle_session_start(evt, agent):
         if skills:
             skills_note = ("First load exactly these skills via the Skill tool, in "
                            "order, before resuming: %s. " % skills)
-        note = ("context-watch: One open handoff awaiting resume: '%s' (%.0fd old, ended %s) at %s%s. "
-                % (h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"], suffix)
-                + action + skills_note + mark + " " + defer)
+        others = ""
+        if len(open_handoffs) > 1:
+            others = ("Fully automatic mode: this is the newest of %d open handoffs; the "
+                      "others stay open. " % len(open_handoffs))
+        note = ("%s One open handoff awaiting resume: '%s' (%.0fd old, ended %s) at %s%s. "
+                % (label, h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"], suffix)
+                + others + action + skills_note + mark + " " + defer + hidden)
     else:
+        shown = open_handoffs[:ANNOUNCE_CAP]
         listing = "; ".join(
             "%d) %s (%.0fd old, ended %s, %s)%s%s" % (
                 i + 1, h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"],
                 " — %s" % h.get("description") if h.get("description") else "",
                 " [skills: %s]" % h.get("skills") if h.get("skills") else "")
-            for i, h in enumerate(open_handoffs)
+            for i, h in enumerate(shown)
         )
-        note = ("context-watch: %d open handoffs awaiting resume: %s. Before any other "
+        if len(open_handoffs) > len(shown):
+            listing += "; and %d more (python3 %s list)" % (
+                len(open_handoffs) - len(shown), ledger)
+        note = ("%s %d open handoffs awaiting resume: %s. Before any other "
                 "work, present this list and ask the user which one to resume (use an "
-                "interactive question tool if available), or none. %s %s"
-                % (len(open_handoffs), listing, mark, defer))
+                "interactive question tool if available), or none. %s %s%s"
+                % (label, len(open_handoffs), listing, mark, defer, hidden))
 
-    # Always emit SessionStart JSON for both Claude and Codex. Newer Codex treats
-    # stdout that looks like JSON (leading "[" or "{") as JSON; a plain-text note
-    # starting with "[" therefore fails parse. Empty stdout, non-JSON plain text,
-    # and valid SessionStart JSON are all fine.
+    # JSON for both agents: newer Codex parses stdout that starts with "[" or "{"
+    # as JSON, so a plain-text note would fail there; the JSON form works in both.
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
@@ -401,23 +493,94 @@ def handle_session_start(evt, agent):
     sys.exit(0)
 
 
+# ---------------------------------------------------------------- auto mode
+
+def handle_stop(evt):
+    """Fully automatic mode, interactive session inside tmux: once this session's
+    trigger has fired and a handoff was written after it, type /clear and then
+    "resume" into the pane, so the cleared session picks the handoff up."""
+    pane = env("TMUX_PANE")
+    if not auto_mode_on() or not pane or env("HANDOFF_AUTO_RUNNER"):
+        sys.exit(0)  # the headless runner starts fresh sessions itself
+    latch = latch_path(evt.get("session_id") or "unknown")
+    if not os.path.exists(latch):
+        sys.exit(0)
+    fired_at = os.path.getmtime(latch)
+    handoffs = _ledger().scan(evt.get("cwd") or os.getcwd(), 1)
+    if not any(os.path.getmtime(h["path"]) >= fired_at - 60 for h in handoffs):
+        sys.exit(0)  # still writing it; the next Stop will check again
+    try:
+        os.close(os.open(latch + ".cleared", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        sys.exit(0)
+    # Detached, so this hook returns and the TUI goes idle before the keys arrive.
+    script = ("sleep 2; tmux send-keys -t \"$P\" -l /clear; tmux send-keys -t \"$P\" Enter; "
+              "sleep 4; tmux send-keys -t \"$P\" -l resume; tmux send-keys -t \"$P\" Enter")
+    subprocess.Popen(["sh", "-c", script], env=dict(os.environ, P=pane),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    sys.exit(0)
+
+
+def auto_cli(argv):
+    """context_watch.py auto [--max N] [--prompt TEXT] -- <agent command...>"""
+    if "--" not in argv or argv.index("--") == len(argv) - 1:
+        print(auto_cli.__doc__, file=sys.stderr)
+        return 2
+    opts, cmd = argv[:argv.index("--")], argv[argv.index("--") + 1:]
+    max_runs, prompt = 10, "resume"
+    try:
+        if "--max" in opts:
+            max_runs = int(opts[opts.index("--max") + 1])
+        if "--prompt" in opts:
+            prompt = opts[opts.index("--prompt") + 1]
+    except (IndexError, ValueError):
+        print(auto_cli.__doc__, file=sys.stderr)
+        return 2
+    child_env = dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1")
+    rc = 0
+    for run in range(1, max_runs + 1):
+        started = time.time()
+        print("[auto] run %d: %s" % (run, " ".join(cmd + [prompt])), file=sys.stderr)
+        rc = subprocess.run(cmd + [prompt], env=child_env).returncode
+        fresh = [h for h in _ledger().scan(os.getcwd(), 1)
+                 if os.path.getmtime(h["path"]) >= started]
+        if not fresh:
+            print("[auto] run %d left no new open handoff; done (exit %d)" % (run, rc),
+                  file=sys.stderr)
+            return rc
+        print("[auto] handoff %s written; clearing and resuming" % fresh[0]["path"],
+              file=sys.stderr)
+        prompt = "resume"
+    print("[auto] stopped after --max %d runs; the newest handoff is still open" % max_runs,
+          file=sys.stderr)
+    return rc
+
+
 # ---------------------------------------------------------------- emit
 
-def build_message(occupancy, pending, breakdown, limit, source, model, skill):
+def build_message(occupancy, pending, breakdown, limit, source, model, skill,
+                  agent="claude", second=False):
     cache_read = breakdown.get("cache_read", 0)
     cache_share = (cache_read / occupancy * 100.0) if occupancy else 0.0
     detail = "cache-read %s of it (%.0f%%)" % (format(cache_read, ","), cache_share)
     if pending:
         detail += "; incl. ~%s pending" % format(pending, ",")
     message = (
-        "context-watch: Context occupancy ~%s tokens, over the %s-token threshold "
+        "%s %sContext occupancy ~%s tokens, over the %s-token threshold "
         "for %s [%s] (%s). Finish only the action currently in progress, then "
         "immediately invoke the `%s` skill: write the handoff document and stop. "
         "Do not begin any new work."
-        % (format(occupancy, ","), format(limit, ","), model or "unknown model",
+        % (LABEL.get(agent, LABEL["claude"]),
+           "SECOND NOTICE, the first was not acted on: " if second else "",
+           format(occupancy, ","), format(limit, ","), model or "unknown model",
            source, detail, skill)
     )
-    if autoresume_on():
+    if auto_mode_on():
+        message += (" Fully automatic mode is active: after the handoff is written and "
+                    "verified, end your turn at once without asking the user anything — "
+                    "the session is cleared and the newest handoff resumed automatically.")
+    elif autoresume_on():
         message += (" Autoresume is active: after the handoff is written, tell the user "
                     "to type /clear — the cleared session will announce the open handoff "
                     "and resume it automatically.")
@@ -439,9 +602,12 @@ def emit(agent, event_name, message, mode):
     if event_name == "UserPromptSubmit":
         print(message)  # Codex: stdout becomes extra context for the turn
         sys.exit(0)
-    # Codex PostToolUse: exit 2 + stderr is the documented injection channel.
-    # It replaces this one tool result — acceptable, the instruction is to stop.
-    print(message, file=sys.stderr)
+    # Codex PostToolUse: exit 2 + stderr is the documented injection channel, and
+    # it replaces this one tool result, so say so: the handoff must not trust
+    # output the model never saw.
+    print(message + " Note: this notice replaced the output of the tool call that just "
+          "ran; if the handoff needs that output, re-run the call read-only.",
+          file=sys.stderr)
     sys.exit(2)
 
 
@@ -453,6 +619,8 @@ def main():
 
     evt = read_event()
     event_name = evt.get("hook_event_name") or ""
+    if event_name == "Stop":
+        handle_stop(evt)
     transcript_path = evt.get("transcript_path") or ""
     entries = load_transcript_tail(transcript_path) if transcript_path else []
     agent = detect_agent(evt, entries)
@@ -464,13 +632,7 @@ def main():
         sys.exit(0)
 
     session_id = str(evt.get("session_id") or "unknown")
-    latch = os.path.join(
-        tempfile.gettempdir(),
-        "context-watch-%s.fired" % "".join(
-            c if c.isalnum() or c in "-_" else "_" for c in session_id),
-    )
-    if os.path.exists(latch):
-        sys.exit(0)
+    first, second = latch_path(session_id), latch_path(session_id, 2)
 
     try:
         window = int(env("CONTEXT_WATCH_WINDOW", "200000"))
@@ -489,16 +651,26 @@ def main():
     if not breakdown or breakdown.get("occupancy", 0) <= 0:
         sys.exit(0)
 
-    pending = estimate_pending(evt)
+    pending, pending_raw = estimate_pending(evt)
     occupancy = breakdown["occupancy"] + pending
 
     cwd = evt.get("cwd") or os.getcwd()
     limit, source = resolve_threshold(model, window, cwd)
-    if occupancy < limit:
+    fired = os.path.exists(first)
+    if fired and occupancy < limit * REARM_FACTOR:
+        for path in (first, second, first + ".cleared"):
+            try:
+                os.remove(path)  # the window was compacted: re-arm
+            except OSError:
+                pass
+        sys.exit(0)
+    if os.path.exists(second):
+        sys.exit(0)  # both notices given; only a compaction re-arms
+    if occupancy < (limit * SECOND_NOTICE_FACTOR if fired else limit):
         sys.exit(0)
 
     try:
-        fd = os.open(latch, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(second if fired else first, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
             f.write("%d/%d\n" % (occupancy, limit))
     except FileExistsError:
@@ -512,8 +684,10 @@ def main():
         "model": model,
         "occupancy": occupancy,
         "pending_estimate": pending,
+        "pending_raw": pending_raw,
         "threshold": limit,
         "threshold_source": source,
+        "notice": 2 if fired else 1,
         "breakdown": breakdown,
         "session_id": session_id,
         "cwd": cwd,
@@ -522,11 +696,14 @@ def main():
     skill = env("CONTEXT_WATCH_SKILL", "session-handoff")
     mode = env("CONTEXT_WATCH_MODE", "warn").strip().lower()
     emit(agent, event_name,
-         build_message(occupancy, pending, breakdown, limit, source, model, skill),
+         build_message(occupancy, pending, breakdown, limit, source, model, skill,
+                       agent, second=fired),
          mode)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "auto":
+        sys.exit(auto_cli(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "stats":
         try:
             sys.exit(stats_cli())

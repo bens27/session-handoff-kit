@@ -33,6 +33,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_watch.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

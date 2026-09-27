@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.7.0 · `session-handoff-chat` skill 0.4.2 · browser extension 0.1.0
+Component versions: `session-handoff` plugin 0.8.0 · `session-handoff-chat` skill 0.5.0 · browser extension 0.2.0
 
 ---
 
@@ -55,8 +55,11 @@ broken hook must never block a session. Memory- and search-based channels in
 chat degrade honestly: the skill never claims a handoff was saved to a
 channel that was not available.
 
-**Fire once.** The threshold trigger fires at most once per session,
-enforced by a latch file keyed on session id.
+**Fire once, remind once.** The threshold trigger fires at most once per
+session, enforced by a latch file keyed on session id. One SECOND NOTICE
+fires at 1.25x the threshold if the first was not acted on, and both latches
+re-arm when occupancy falls below half the threshold (after a compaction or
+a clear).
 
 ## 3. Architecture
 
@@ -82,7 +85,7 @@ conversationally or by standing convention; file-ledger fallback checks run
 | Component | Role |
 | --- | --- |
 | `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, shared verbatim between Claude Code and Codex. |
-| `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `resume`, `supersede`, `save-path`, `new-path`). |
+| `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `claim`, `resume`, `supersede`, `abandon`, `save-path`, `new-path`). |
 | `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. |
 | `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
 | `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
@@ -281,6 +284,8 @@ by the next one.
 | `open` | Written, not yet transferred; announced every session start | Skill writes the file |
 | `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path>` flips status and stamps `resumed:` |
 | `superseded` | Replaced by a newer handoff of the same thread; silent forever | `handoff_ledger.py supersede <path>`, run by the skill on re-handoff |
+| `abandoned` | Dropped, never to be resumed; silent forever | `handoff_ledger.py abandon <path>` |
+| claimed | Still `open`, but a session is resuming it; hidden for 2 hours | `handoff_ledger.py claim <path>` stamps `claimed:` |
 | aged out | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); not announced | Time |
 
 Announced ≠ transferred; listed ≠ transferred. Only an explicit `resume` — run
@@ -498,6 +503,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_DISABLE` | — | `1` = no-op without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
 | `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
+| `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
 
 ## 12. Surface compatibility
 

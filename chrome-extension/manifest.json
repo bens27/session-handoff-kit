@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Session Handoff Check",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pre-populates new claude.ai chats with a handoff-check prompt, so every session starts by surfacing open (untransferred) handoffs.",
   "permissions": ["storage"],
   "host_permissions": ["https://claude.ai/*"],

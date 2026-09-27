@@ -16,7 +16,9 @@ handoff ledger.
   requests are deferred to, so the announcer informs without hijacking.
 - **Ledger** (`hooks/handoff_ledger.py`): `list` prints open handoffs
   newest-first; `resolve <topic>` returns the full chain for a topic plus
-  must-also-read references; `resume <path>` marks a handoff transferred;
+  must-also-read references (and any that are missing); `claim <path>` hides
+  a handoff from parallel sessions for two hours while one resumes it;
+  `abandon <path>` closes it for good; `resume <path>` marks a handoff transferred;
   `supersede <path> [--by <new-path>]` marks it replaced by a newer one
   and can record the forward link, so future sessions stop announcing it;
   `save-path` prints where to write new handoffs (`./.handoffs/` when it
@@ -33,7 +35,10 @@ handoff ledger.
   then stops. Handles both the single- and multiple-handoff resume flows.
 
 What it touches (review before installing, as with any hook that runs code):
-stdlib-only Python, no network, no subprocesses. The watcher reads the session
+stdlib-only Python, no network, no subprocesses except in fully automatic
+mode (`HANDOFF_AUTO=1`), where the `Stop` hook runs `tmux send-keys` to type
+`/clear` and `resume` into your own pane, and the `auto` runner launches the
+agent command you give it. The watcher reads the session
 transcript path it is handed on stdin and keeps a once-per-session latch (and
 optional analytics log) under the system temp dir; the announcer and ledger
 read the handoff locations above, and the only files the ledger writes are
@@ -44,5 +49,6 @@ Configuration via environment variables: `HANDOFF_AT` (per-launch threshold,
 highest precedence) and `AUTORESUME` (with `HANDOFF_AT`, makes the whole
 hand-off/`/clear`/resume cycle one keystroke), plus `CONTEXT_WATCH_TOKENS`,
 `_PERCENT`, `_WINDOW`, `_SKILL`, `_MODE`, `_AGENT`, `_DISABLE`,
-`_MAX_AGE_DAYS` — see the kit README. Fail-open by design: the watcher and
+`_MAX_AGE_DAYS`, and `HANDOFF_AUTO` (fully automatic: resume the newest
+handoff and clear the session for you) — see the kit README. Fail-open by design: the watcher and
 announcer can never block a session.

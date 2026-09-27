@@ -18,6 +18,12 @@ Use `references:` when this thread depends on another file or an earlier
 handoff: name it there so `resolve` surfaces it automatically to whoever
 resumes, instead of relying on the resuming session to notice it needs that
 file.
+`project:` and `git:` also come verbatim from `new-path` (leave `git:` blank
+when it printed nothing): `project:` keeps same-named projects' handoffs apart
+in the shared fallback directory, and `git:` lets the resuming session see what
+changed in the repository since this handoff was written.
+Only this handoff's `references:` reach `must_also_read`; carry forward any
+earlier handoff's reference that is still needed.
 For the title line, `<date>` is the same `created` value from `new-path`
 (a short date form is fine), not a separately computed or recalled date.
 
@@ -31,6 +37,8 @@ status: open
 description: <one line: what is parked here and where it stands>
 skills: <optional comma-separated skill names the resuming session must load first>
 references: <optional comma-separated paths another resuming session must also read (feeds resolve's must_also_read list)>
+project: <verbatim from new-path>
+git: <verbatim from new-path: branch@sha, or blank>
 ---
 # Session Handoff — <topic> — <date>
 

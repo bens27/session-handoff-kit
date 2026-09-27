@@ -4,10 +4,10 @@ When an AI Agent reaches a certain amount of cumulative context usage in a sessi
 
 This kit is my attempt to simplify this. Here are its components:
 1. A context monitor - watches your session's context usage, and allows you to set a limit
-2. Context-limit hooks - when you get to your limit, automatically create a handoff document for a new session to retrieve. With `AUTORESUME=1`, also nudge you to clear your current session context usage (Anthropic - if you're reading this - please allow for programmatic context clearing)
+2. Context-limit hooks - when you get to your limit, automatically create a handoff document for a new session to retrieve. With `AUTORESUME=1`, also nudge you to clear your current session context usage (Anthropic - if you're reading this - please allow for programmatic context clearing). With `HANDOFF_AUTO=1`, clear and resume for you (inside tmux, or through a headless runner)
 3. Session-start actions - when you start or clear a session, automatically check for open handoff documents in the current repo and list them for a user to select (if desired)
 4. Handoff customizations - specify skills to be loaded when a handoff is retrieved 
-5. Basic state management on handoff documents - open/resumed/superseded
+5. Basic state management on handoff documents - open/resumed/superseded/abandoned, plus a short claim so two sessions don't resume the same handoff
 
 One handoff system, packaged for every surface it can run on. A deterministic
 hook watches the session's own token usage and — at a configurable threshold —
@@ -67,6 +67,20 @@ keystroke. Handoff files are named by ending date/time
 tellable-apart as they accumulate. The filename timestamp and `created:`
 front matter are produced together by `handoff_ledger.py new-path`, so the
 agent never guesses them independently.
+
+**Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Inside tmux,
+a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
+is written (Claude Code hooks cannot clear a session themselves). Outside
+tmux, or for Codex, use the headless runner, which re-launches the agent with
+`resume` for as long as each run leaves a new open handoff:
+
+```
+python3 plugins/session-handoff/hooks/context_watch.py auto --max 10 --prompt "build X" -- claude -p
+```
+
+If the first notice is ignored, a SECOND NOTICE fires at 1.25x the threshold.
+Both notices re-arm once occupancy drops below half the threshold, for
+example after a compaction.
 
 ### Claude Cowork
 
@@ -195,6 +209,7 @@ Other variables:
 | `CONTEXT_WATCH_DISABLE` | — | Set `1` to disable without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
+| `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
 
 ## How automated does it get
 
@@ -216,7 +231,13 @@ references from `references:` front matter. `handoff_ledger.py supersede
 <path> [--by <new-path>]` can record the newer handoff as a forward link, and
 `handoff_ledger.py save-path [dir]` prints where new handoffs should be
 written, using `<dir>/.handoffs` when present and otherwise the per-project
-fallback under `~/.claude/handoffs/<project-basename>/`.
+fallback under `~/.claude/handoffs/<project-basename>/` (the project is the
+nearest ancestor holding `.handoffs/`, so subdirectories share one ledger).
+`claim <path>` hides a handoff from other sessions for two hours while one
+session resumes it; `abandon <path>` closes one for good. The announcer lists
+at most five handoffs ("and N more"), and says how many open ones are hidden
+as too old. New handoffs record `project:` and `git: <branch>@<sha>` so the
+resuming session can check what has changed since.
 `handoff_ledger.py new-path <topic> [dir] [--json]` uses one clock read and
 returns the `directory`, `filename`, `path`, and `created` values for a new
 handoff, with the same directory choice as `save-path`, filename format

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.getcwd()
 PLUGIN = os.path.join(REPO, "plugins/session-handoff/hooks/handoff_ledger.py")
@@ -219,19 +220,20 @@ def main():
     fields = {}
     lines = p.stdout.strip().splitlines()
     for line in lines:
-        key, sep, value = line.partition(": ")
+        key, sep, value = line.partition(":")
         if sep:
-            fields[key] = value
+            fields[key] = value.strip()
     expected_directory = p_save.stdout.strip()
     expected_filename = fields.get("filename", "")
     expected_path = os.path.join(expected_directory, expected_filename)
     check("new-path-default-exit0", p.returncode == 0,
           "rc=%d stderr=%r" % (p.returncode, p.stderr[:200]))
     check("new-path-default-fields-present",
-          set(fields.keys()) == set(["directory", "filename", "path", "created"]),
+          set(fields.keys()) == set(["directory", "filename", "path", "created", "project", "git"]),
           "stdout=%r" % p.stdout[:500])
     check("new-path-default-line-order",
-          [line.partition(": ")[0] for line in lines] == ["directory", "filename", "path", "created"],
+          [line.partition(":")[0] for line in lines] == ["directory", "filename", "path", "created",
+                                                     "project", "git"],
           "stdout=%r" % p.stdout[:500])
     check("new-path-directory-matches-save-path",
           fields.get("directory") == expected_directory,
@@ -260,7 +262,7 @@ def main():
     else:
         check("new-path-json-parses", True)
     check("new-path-json-exact-keys",
-          set(generated.keys()) == set(["directory", "filename", "path", "created"]),
+          set(generated.keys()) == set(["directory", "filename", "path", "created", "project", "git"]),
           "keys=%r" % sorted(generated.keys()))
     check("new-path-json-directory-matches-save-path",
           generated.get("directory") == expected_directory,
@@ -333,6 +335,98 @@ def main():
     topics = {entry.get("topic") for entry in both}
     check("both-locations-read-together",
           {"parked-thread", "local-thread"} <= topics, "topics=%r" % topics)
+
+    # 10. Accuracy fixes: per-topic collapse, claim, abandon, stale count,
+    #     HANDOFF.md heuristic, missing references, subfolder root, project filter.
+    sys.path.insert(0, os.path.dirname(PLUGIN))
+    import handoff_ledger as hl
+    t11 = tempfile.mkdtemp(prefix="ledger-verify11-")
+    h11 = os.path.join(t11, ".handoffs")
+    os.makedirs(h11)
+    def put(name, body):
+        path = os.path.join(h11, name)
+        with open(path, "w") as f:
+            f.write(body)
+        return path
+    put("20260901-0900-dup.md", "---\ntopic: dup\nstatus: open\n---\n")
+    newest = put("20260902-0900-dup.md", "---\ntopic: dup\nstatus: open\n"
+                 "references: exists.md, gone.md\n---\n")
+    put("20260801-0900-old.md", "---\ntopic: old\nstatus: open\nreferences: stale-ref.md\n---\n")
+    newest_old = put("20260802-0900-old.md", "---\ntopic: old\nstatus: superseded\n---\n")
+    open(os.path.join(t11, "exists.md"), "w").close()
+    stats = {}
+    listed = hl.scan(t11, 14, stats)
+    check("scan-one-per-topic", [h["path"] for h in listed if h["topic"] == "dup"] == [newest]
+          and stats["duplicates"] == 1, "listed=%r stats=%r" % (listed, stats))
+    r = hl.resolve("dup", t11)
+    check("resolve-missing-references", r["must_also_read"] == ["exists.md", "gone.md"]
+          and r["missing_references"] == ["gone.md"], "resolved=%r" % r)
+    r = hl.resolve("old", t11)
+    check("resolve-refs-from-authoritative-only",
+          r["authoritative"] == newest_old and r["must_also_read"] == [], "resolved=%r" % r)
+
+    p = run(["claim", newest], t11)
+    check("claim-hides-from-scan", p.returncode == 0 and "claimed:" in open(newest).read()
+          and not any(h["topic"] == "dup" for h in hl.scan(t11)), "stderr=%r" % p.stderr)
+    txt = open(newest).read().replace("claimed: ", "claimed: 2000-01-01T00:00 #")
+    open(newest, "w").write(txt.replace("#" + txt.split("#")[1].split("\n")[0], ""))
+    check("expired-claim-listed-again", any(h["path"] == newest for h in hl.scan(t11)))
+    run(["resume", newest], t11)
+    check("resume-drops-claim", "claimed:" not in open(newest).read())
+
+    ab = put("20260903-0900-drop.md", "---\ntopic: drop\nstatus: open\n---\n")
+    p = run(["abandon", ab], t11)
+    check("abandon-closes", p.returncode == 0 and "status: abandoned" in open(ab).read()
+          and not any(h["topic"] == "drop" for h in hl.scan(t11)))
+
+    aged = put("20250101-0900-aged.md", "---\ntopic: aged\nstatus: open\n---\n")
+    os.utime(aged, (time.time() - 60 * 86400.0,) * 2)
+    p = run(["list", t11], t11)
+    check("list-reports-hidden-stale", "1 open handoff(s) older than 14 days hidden" in p.stderr,
+          "stderr=%r" % p.stderr)
+
+    t12 = tempfile.mkdtemp(prefix="ledger-verify12-")
+    with open(os.path.join(t12, "HANDOFF.md"), "w") as f:
+        f.write("# Release notes\nnothing to see\n")
+    check("bare-handoff-md-needs-marker", hl.scan(t12) == [])
+    with open(os.path.join(t12, "HANDOFF.md"), "w") as f:
+        f.write("# Session handoff\nnext: ship\n")
+    check("bare-handoff-md-with-marker", [h["topic"] for h in hl.scan(t12)] == ["default"])
+
+    sub = os.path.join(t11, "src", "deep")
+    os.makedirs(sub)
+    p = run(["list", sub, "--json"], sub)
+    check("subfolder-finds-project-handoffs",
+          any(h["topic"] == "dup" for h in json.loads(p.stdout or "[]"))
+          and run(["save-path", sub], sub).stdout.strip() == h11, "stdout=%r" % p.stdout[:300])
+
+    t13 = tempfile.mkdtemp(prefix="ledger-verify13-")
+    home13 = os.path.join(t13, "home")
+    a_proj = os.path.join(t13, "a", "verdict")
+    b_proj = os.path.join(t13, "b", "verdict")
+    fb = os.path.join(home13, ".claude", "handoffs", "verdict")
+    for d in (a_proj, b_proj, fb):
+        os.makedirs(d)
+    env13 = {"HOME": home13, "USERPROFILE": home13}
+    p = run(["new-path", "mine", a_proj, "--json"], a_proj, env13)
+    np_ = json.loads(p.stdout)
+    check("new-path-records-project", np_["project"] == os.path.realpath(a_proj)
+          or np_["project"] == a_proj, "new-path=%r" % np_)
+    with open(np_["path"], "w") as f:
+        f.write("---\ntopic: mine\nstatus: open\nproject: %s\n---\n" % np_["project"])
+    with open(os.path.join(fb, "20260101-0900-legacy.md"), "w") as f:
+        f.write("---\ntopic: legacy\nstatus: open\n---\n")
+    def topics(proj):
+        p = run(["list", proj, "--json", "--max-age-days", "3650"], proj, env13)
+        return {h["topic"] for h in json.loads(p.stdout or "[]")}
+    check("fallback-project-filter", topics(a_proj) == {"mine", "legacy"}
+          and topics(b_proj) == {"legacy"}, "a=%r b=%r" % (topics(a_proj), topics(b_proj)))
+    a_sub = os.path.join(a_proj, "pkg")
+    os.makedirs(a_sub)
+    check("subfolder-finds-fallback-project", "mine" in topics(a_sub), "topics=%r" % topics(a_sub))
+    p = run(["new-path", "g", REPO, "--json"], REPO)
+    check("new-path-git-position", "@" in json.loads(p.stdout).get("git", ""),
+          "stdout=%r" % p.stdout[:300])
 
     print()
     if failures:
