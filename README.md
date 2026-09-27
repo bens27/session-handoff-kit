@@ -206,7 +206,8 @@ Other variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CONTEXT_WATCH_PENDING` | on | Adds an estimate (~4 chars/token) for the tool result or prompt already in the hook's stdin but not yet in any usage entry; set `0` to disable |
+| `CONTEXT_WATCH_RESERVE` | `20000` | When the host reports the window (Codex), caps the threshold at window − reserve so there is room to write the handoff |
+| `CONTEXT_WATCH_PENDING` | on | Adds an estimate (~4 chars/token, images/audio a flat 1,600 each) for the tool result or prompt already in the hook's stdin but not yet in any usage entry; set `0` to disable |
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Per-trigger analytics (model, occupancy, cache-read share, threshold); `0` disables. Summarize with `python3 context_watch.py stats` |
 | `CONTEXT_WATCH_WINDOW` | `200000` | Used only by the PERCENT path; Codex reports its own window |
 | `CONTEXT_WATCH_SKILL` | `session-handoff` | Skill named in the injected instruction |
@@ -240,15 +241,21 @@ references from `references:` front matter. `handoff_ledger.py supersede
 written, using `<dir>/.handoffs` when present and otherwise the per-project
 fallback under `~/.claude/handoffs/<project-basename>/` (the project is the
 nearest ancestor holding `.handoffs/`, so subdirectories share one ledger).
-`claim <path>` hides a handoff from other sessions for two hours while one
-session resumes it; `abandon <path>` closes one for good. The announcer lists
+`claim <path> [--owner X]` hides a handoff from other sessions for two hours
+while one session resumes it. An owned claim refuses other owners, and
+`release <path>` drops the claim. `abandon <path>` closes a handoff for good.
+Status changes are atomic writes that refuse if the file changed underneath.
+`list`/`resolve` flag malformed front matter as `problems` (an unknown status
+is listed as open). `resolve` caps must-also-read at 8 references / 256 KB and
+lists the rest as `unresolved_references`. The announcer lists
 at most five handoffs ("and N more"), and says how many open ones are hidden
 as too old. New handoffs record `project:` and `git: <branch>@<sha>` so the
 resuming session can check what has changed since.
 `handoff_ledger.py new-path <topic> [dir] [--json]` uses one clock read and
 returns the `directory`, `filename`, `path`, and `created` values for a new
 handoff, with the same directory choice as `save-path`, filename format
-`<YYYYMMDD-HHMM>-<topic>.md`, and `created` format `%Y-%m-%dT%H:%M`.
+`<YYYYMMDD-HHMM>-<topic>.md` (plus `-2`, `-3`, … if that name is taken),
+and `created` format `%Y-%m-%dT%H:%M`.
 
 Deliberate ceiling: the announcer informs and offers, it does not hijack — if
 the session opens with an unrelated explicit task, open handoffs get one

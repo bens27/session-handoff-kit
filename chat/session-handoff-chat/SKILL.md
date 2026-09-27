@@ -12,7 +12,7 @@ description: >
   HANDOFF.md — and whenever a memory file listing open handoffs exists and the
   user's request plausibly relates to one of them.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
 ---
 
 # Session Handoff (chat)

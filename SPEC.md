@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.8.1 · `session-handoff-chat` skill 0.5.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.9.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -147,6 +147,17 @@ early — the correct direction for a quality guard. Disable with
 is rejected by design: a hook cannot reconstruct the request payload, and the
 early-biased estimate achieves the same protection with no network call.
 
+Media is priced per item, not by length: each image or audio item counts a
+flat 1,600 tokens. Recognized forms are `data:image|audio/...;base64,` URLs
+inside strings, values under image/audio URL keys, MCP/Claude envelopes
+(`{type: image|audio, data, mimeType}` or `source: {type: base64, data}`),
+OpenAI `input_audio: {data}`, and a bare string that really looks like
+base64. That means it has no spaces, uses `+/` or `-_`, and mixes upper
+case, lower case and digits. A long word such as `'T'*520000` is text, not
+media. A string that holds JSON is decoded before counting. Keys that are
+hook metadata and never enter context (an Edit's full original file) are
+skipped. The whole pending estimate is capped at 25,000 tokens.
+
 ### 4.4 Cross-agent semantics
 
 The two measures are not identical: Claude Code counts input-side plus last
@@ -172,9 +183,21 @@ message *replaces* a tool result, making that path token-neutral or better.
 The watcher runs on `PostToolUse` (covers long agentic turns, where context
 actually burns) and `UserPromptSubmit` (per-turn check). On first threshold
 crossing it writes a latch file
-(`$TMPDIR/context-watch-<sanitized session_id>.fired`, containing
-`occupancy/limit`) and emits; while the latch exists, all subsequent checks
-in that session exit silently.
+(`$TMPDIR/context-watch-<key>.fired`, containing `occupancy/limit`) and
+emits. The key is the sanitized `session_id`. When that is missing, the key
+is `t-` + sha1(transcript_path)[:16], so sessions without an id never share
+a latch. Nothing is latched when neither is known.
+
+One SECOND NOTICE follows if the first is not acted on. It needs a model turn
+after the first notice, and occupancy at or above
+max(1.25 × threshold, first occupancy + 0.25 × threshold). It stays quiet
+if an open handoff was written after the first notice. After that, checks
+exit silently until occupancy falls below half the threshold, which means a
+compaction happened. That re-arms both notices. Usage recorded before a
+`compact_boundary` transcript entry is ignored. On `SessionStart` with
+source `compact` the announcer adds a one-line note: context was just
+compacted, so check the work against the handoff or the files instead of
+relying on memory.
 
 ### 5.2 Injection channels
 
@@ -192,7 +215,15 @@ invoke the skill, write the handoff, stop, begin no new work. When
 autoresume is active (§7.3), the message additionally instructs the agent
 to tell the user to type `/clear` after the handoff is written — the
 cleared session's announcer then resumes the handoff automatically,
-closing the loop with a single user keystroke.
+closing the loop with a single user keystroke. When the newest usage entry
+is more than 600 s older than the event, the message says the telemetry may
+be stale.
+
+Codex contract note: `PostToolUse` stays on exit 2 + stderr. A
+JSON-`additionalContext` channel that keeps the tool result has been claimed
+for Codex 0.157 but not verified here, because headless Codex will not run
+untrusted hooks. Revisit after checking it in an interactive, trusted Codex
+session.
 
 ## 6. Threshold resolution
 
@@ -208,6 +239,12 @@ substring key ("claude-opus" beats "claude"):
 6. `"default"` key in the config files
 7. `CONTEXT_WATCH_PERCENT` × window — only when PERCENT is explicitly set
 8. Built-in default: **130,000 tokens**
+
+When the host reports the model's context window (Codex does), the
+resolved threshold is then capped at window − `CONTEXT_WATCH_RESERVE`
+(default 20,000), which leaves room to write the handoff. The resolution
+source records the cap. An assumed window is never used for this cap. An
+assumed 200k would clamp every 1M-context model to 180k.
 
 Config files are flat JSON; user-global loads first and project-local
 overrides on key collision:
@@ -254,6 +291,7 @@ deliberately rather than by accident:
 topic: auth-refactor
 created: 2026-08-11T14:30
 status: open
+reason: context-pressure
 description: JWT refresh rotation half-built; middleware done, tests failing on expiry edge.
 skills: tdd, diagnosing-bugs
 references: docs/auth-notes.md, tests/auth_refresh_test.py
@@ -261,7 +299,12 @@ references: docs/auth-notes.md, tests/auth_refresh_test.py
 # Session Handoff — auth-refactor — 2026-08-11
 ```
 
-Body sections, in order: Objective; Current state; Decisions and rationale;
+`reason:` records why the handoff was written (`context-pressure` from the
+trigger, `user-request`, `end-of-session`). It is optional and informational.
+
+Body sections, in order: Objective; User request and constraints (the ask
+verbatim, constraints, approval scope, pending decisions); Current state,
+split into verified-with-evidence and unverified/unknown; Decisions and rationale;
 Files touched; In flight; Next steps (ordered, concrete, with paths and
 commands); Gotchas (including approaches tried and abandoned). Target under
 1,500 words, facts a fresh session can verify, no conversational narration.
@@ -288,7 +331,7 @@ by the next one.
 | `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path>` flips status and stamps `resumed:` |
 | `superseded` | Replaced by a newer handoff of the same thread; silent forever | `handoff_ledger.py supersede <path>`, run by the skill on re-handoff |
 | `abandoned` | Dropped, never to be resumed; silent forever | `handoff_ledger.py abandon <path>` |
-| claimed | Still `open`, but a session is resuming it; hidden for 2 hours | `handoff_ledger.py claim <path>` stamps `claimed:` |
+| claimed | Still `open`, but a session is resuming it; hidden for 2 hours | `handoff_ledger.py claim <path> [--owner X]` stamps `claimed:` (and `claim_owner:`); `release` drops it |
 | aged out | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); not announced | Time |
 
 Announced ≠ transferred; listed ≠ transferred. Only an explicit `resume` — run
@@ -313,6 +356,27 @@ handoffs it already wrote to the fallback. `HANDOFF.md` carries topic
 `directory`, `filename`, `path`, and `created` for a new handoff, using the
 same directory as `save-path`, a filename of
 `<YYYYMMDD-HHMM>-<topic>.md`, and `created` formatted `%Y-%m-%dT%H:%M`.
+If that name is taken (same topic within a minute), the ledger adds `-2`,
+`-3`, and so on.
+
+Claims and owners: `claim <path> --owner X` also stamps `claim_owner: X`.
+A live owned claim refuses `claim`, `release` and `resume --owner` from
+any other owner, and an owner-less caller counts as a different owner.
+Bare `resume <path>` stays permissive. The announcer passes
+`--owner <session_id>` in the commands it prints.
+
+Writes: every status change goes through one atomic write (temp file,
+fsync, rename). The write is refused with a conflict error if the file's
+mtime or size changed since it was read. Rerun the command.
+
+Problems: `list` and `resolve` report `problems` for malformed front matter:
+a missing closing fence, an unknown status, or a non-ISO `created`. An
+unknown status is listed as open, never silently dropped.
+
+Reference caps: `resolve` puts at most 8 references into `must_also_read`,
+up to 256 KB combined across the existing files. The rest go into
+`unresolved_references` with a reason, and missing files go into
+`missing_references`.
 
 ### 7.3 Session-start announcer
 
@@ -436,6 +500,7 @@ Each trigger appends one JSON line to `~/.context-watch/events.jsonl`
  "threshold_source": "TOKENS_MAP:gpt-5.5",
  "breakdown": {"input": 155000, "cache_read": 120000, "output": 4000,
                "reasoning": 1000, "occupancy": 160000},
+ "window": 272000, "window_source": "reported", "usage_age_s": 4,
  "session_id": "c1", "cwd": "/repo"}
 ```
 
@@ -501,6 +566,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_SKILL` | `session-handoff` | Skill named in the injected instruction |
 | `CONTEXT_WATCH_MODE` | `warn` | `warn` = additionalContext; `block` = blocking channel on PostToolUse |
 | `CONTEXT_WATCH_AGENT` | auto | Force `claude` or `codex` |
+| `CONTEXT_WATCH_RESERVE` | `20000` | Tokens kept free below a host-reported window; the threshold is capped at window − reserve (§6) |
 | `CONTEXT_WATCH_PENDING` | on | `0` disables the pending-content estimate |
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Analytics path; `0` disables |
 | `CONTEXT_WATCH_DISABLE` | — | `1` = no-op without uninstalling |

@@ -16,8 +16,9 @@ handoff ledger.
   requests are deferred to, so the announcer informs without hijacking.
 - **Ledger** (`hooks/handoff_ledger.py`): `list` prints open handoffs
   newest-first; `resolve <topic>` returns the full chain for a topic plus
-  must-also-read references (and any that are missing); `claim <path>` hides
-  a handoff from parallel sessions for two hours while one resumes it;
+  must-also-read references (and any that are missing or over the caps);
+  `claim <path> [--owner X]` hides a handoff from parallel sessions for two
+  hours while one resumes it, and `release <path>` drops the claim;
   `abandon <path>` closes it for good; `resume <path>` marks a handoff transferred;
   `supersede <path> [--by <new-path>]` marks it replaced by a newer one
   and can record the forward link, so future sessions stop announcing it;
