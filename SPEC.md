@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.10.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.10.1 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -464,6 +464,17 @@ fourth is classified, because the signal already exists on disk:
   At confidence ≥ 0.8 it injects one line telling the agent to claim that
   handoff or to leave them all alone; below it, or without a key, or with
   `CONTEXT_WATCH_JEV=0`, it stays silent and the skill's default (§4) applies.
+- **Template lint** — `_problems` also checks the body: `## Objective`,
+  `## Current state` and `## Next steps` must be present and the body must
+  stay within 1,500 words. `resolve` and `claim` print each defect as a
+  `problem:` line instead of leaving the resuming session to notice.
+- **`verify:`** — an optional front-matter line naming the command "Current
+  state" rests on; `claim` prints it back, so the resuming session runs that
+  command rather than guessing which check is relevant.
+- **`commits_since` / `dirty`** — when the front matter has `git: branch@sha`,
+  `claim` prints `git rev-list --count <sha>..HEAD` and the number of
+  `git status --short` lines for the handoff's `project:`, so "has the work
+  moved on" is a printed number, not a judgment.
 
 ### 7.4 Shared contract between the agent and chat skills
 

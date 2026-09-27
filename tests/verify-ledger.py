@@ -522,6 +522,35 @@ def main():
     p = run(["resolve", "weird", t12], t12)
     check("resolve-prints-problems", "problem: unknown status" in p.stdout, "stdout=%r" % p.stdout)
 
+    # 11b. Template lint + claim report: problems, verify:, commits_since/dirty.
+    t11b = tempfile.mkdtemp(prefix="ledger-verify11b-")
+    os.makedirs(os.path.join(t11b, ".handoffs"))
+    subprocess.run(["git", "-C", t11b, "init", "-q", "-b", "main"], check=True)
+    def commit11b(msg):
+        subprocess.run(["git", "-C", t11b, "-c", "user.email=v@v", "-c", "user.name=v",
+                        "commit", "-q", "--allow-empty", "-m", msg], check=True)
+    commit11b("base")
+    sha11b = subprocess.run(["git", "-C", t11b, "rev-parse", "--short", "HEAD"],
+                            capture_output=True, text=True).stdout.strip()
+    commit11b("moved on")
+    with open(os.path.join(t11b, "untracked.txt"), "w") as f:
+        f.write("x")
+    f11b = os.path.join(t11b, ".handoffs", "20260927-0900-lint.md")
+    with open(f11b, "w") as f:
+        f.write("---\ntopic: lint\nstatus: open\nproject: %s\ngit: main@%s\nverify: python3 -c 1\n---\n"
+                "## Objective\n%s\n## Next steps\n1. x\n" % (t11b, sha11b, "word " * 1600))
+    p = run(["claim", f11b], t11b)
+    check("claim-prints-missing-section", "problem: missing section '## Current state'" in p.stdout,
+          "stdout=%r" % p.stdout)
+    check("claim-prints-word-limit", "problem: body is 1" in p.stdout and "(limit 1500)" in p.stdout,
+          "stdout=%r" % p.stdout)
+    check("claim-prints-verify", "verify: python3 -c 1\n" in p.stdout, "stdout=%r" % p.stdout)
+    check("claim-prints-commits-since", "commits_since: 1\n" in p.stdout, "stdout=%r" % p.stdout)
+    check("claim-prints-dirty", "dirty: 2\n" in p.stdout, "stdout=%r" % p.stdout)
+    with open(f11b, "w") as f:
+        f.write("---\ntopic: lint\nstatus: open\n---\n## Objective\nx\n## Current state\nx\n## Next steps\nx\n")
+    check("complete-body-has-no-problems", hl.claim_report(f11b) == [], "%r" % hl.claim_report(f11b))
+
     refs = ["r%d.md" % i for i in range(10)]
     for ref in refs[:9]:
         with open(os.path.join(t12, ref), "w") as f:

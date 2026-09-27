@@ -11,7 +11,7 @@ description: >
   commit messages, or status updates while the session is continuing, and do
   not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.10.0"
+  version: "0.10.1"
 ---
 
 # Session Handoff
@@ -136,11 +136,14 @@ before continuing the work. Defaults:
   work does not depend on — that is what makes a `/clear` cycle come back
   with the right skills and only those.
 - Read `LESSONS.md` if the handoff references it.
-- If the front matter has `git: <branch>@<sha>`, run
-  `git log --oneline <sha>..HEAD` and `git status --short`, and reconcile
-  them against "Current state" — another session may have moved the work on.
-- If "Current state" claims tests or checks passed, run the project's
-  smallest relevant check before new work, so a stale claim is caught early.
+- `claim` prints `commits_since: N` and `dirty: N` when the front matter has
+  `git: <branch>@<sha>`; if either is non-zero, run `git log --oneline
+  <sha>..HEAD` and `git status --short` and reconcile them against "Current
+  state" — another session may have moved the work on.
+- If `claim` printed `verify: <command>`, run it before new work, so a stale
+  "Current state" claim is caught early; without one, run the project's
+  smallest relevant check. Treat any `problem:` lines it printed as parts of
+  the handoff that may be missing or unreliable.
 - If `resolve` printed `missing_references:`, say which referenced files are
   gone before relying on the handoff.
 

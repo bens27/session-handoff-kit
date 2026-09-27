@@ -56,6 +56,8 @@ DATED_NAME = re.compile(r"^(\d{8})-(\d{4}|\d{6})-(.+)$")
 STAMP = "%Y-%m-%dT%H:%M"
 CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
 KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
+REQUIRED_SECTIONS = ("Objective", "Current state", "Next steps")
+MAX_WORDS = 1500
 CLOSED_STATUSES = ("resumed", "superseded", "abandoned")
 MAX_REFS = 8              # references a resume is asked to read, at most
 MAX_REF_BYTES = 256_000   # combined size of the existing referenced files
@@ -191,6 +193,14 @@ def _problems(text, fm):
             datetime.fromisoformat(created)
         except ValueError:
             out.append("created %r is not ISO 8601" % created)
+    body = text.split("\n---\n", 1)[1] if fm and "\n---\n" in text else ""
+    if body.strip():
+        for section in REQUIRED_SECTIONS:
+            if not re.search(r"^## %s\s*$" % re.escape(section), body, re.M):
+                out.append("missing section '## %s'" % section)
+        words = len(body.split())
+        if words > MAX_WORDS:
+            out.append("body is %d words (limit %d)" % (words, MAX_WORDS))
     return out
 
 
@@ -526,6 +536,29 @@ def claim(path, owner=None):
     return stamp
 
 
+def claim_report(path):
+    """Lines a resuming session needs after claiming: template problems, the
+    handoff's `verify:` command, and how far the repository moved since `git:`."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    fm = parse_front_matter(text)
+    out = ["problem: %s" % p for p in _problems(text, fm)]
+    if fm.get("verify"):
+        out.append("verify: %s" % fm["verify"])
+    sha = fm.get("git", "").rpartition("@")[2]
+    root = fm.get("project") or project_root(os.path.dirname(path))
+    if sha and os.path.isdir(root):
+        def git(*args):
+            return subprocess.run(["git", "-C", root] + list(args), capture_output=True,
+                                  text=True, timeout=5).stdout
+        try:
+            out.append("commits_since: %s" % git("rev-list", "--count", "%s..HEAD" % sha).strip())
+            out.append("dirty: %d" % len(git("status", "--short").splitlines()))
+        except Exception:
+            pass
+    return out
+
+
 def release(path, owner=None):
     _check_owner(path, owner)
     _set_fields(path, [], ("claimed:", "claim_owner:"))
@@ -648,6 +681,8 @@ def _cli(argv):
         try:
             if cmd == "claim":
                 print("claimed (%s): %s" % (claim(path, owner), path))
+                for line in claim_report(path):
+                    print(line)
                 return 0
             if cmd == "release":
                 release(path, owner)

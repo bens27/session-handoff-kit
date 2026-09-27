@@ -22,6 +22,9 @@ file.
 when it printed nothing): `project:` keeps same-named projects' handoffs apart
 in the shared fallback directory, and `git:` lets the resuming session see what
 changed in the repository since this handoff was written.
+`verify:` names the one command whose success "Current state" rests on (the
+test suite, a build): `claim` prints it back so the resuming session runs it
+instead of guessing which check matters.
 Only this handoff's `references:` reach `must_also_read`; carry forward any
 earlier handoff's reference that is still needed.
 `reason:` tells the resuming session whether the user parked this work
@@ -44,6 +47,7 @@ skills: <optional comma-separated skill names the resuming session must load fir
 references: <optional comma-separated paths another resuming session must also read (feeds resolve's must_also_read list)>
 project: <verbatim from new-path>
 git: <verbatim from new-path: branch@sha, or blank>
+verify: <optional shell command that proves "Current state"; claim prints it for the resuming session>
 ---
 # Session Handoff — <topic> — <date>
 
