@@ -211,7 +211,7 @@ def main():
                   "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir})
         return json.loads(open(log_p).read().splitlines()[-1])
     rec = pending_for({"stdout": "word " * 80000})
-    check("pending-capped", rec["pending_estimate"] == 25000 and rec["pending_raw"] == 100000,
+    check("pending-capped", rec["pending_estimate"] == 25000 and rec["pending_raw"] == 133333,
           "record=%r" % rec)
     rec = pending_for({"filePath": "a.py", "originalFile": "y" * 400000, "newString": "z" * 400})
     check("pending-skips-originalFile", rec["pending_estimate"] < 200, "record=%r" % rec)
@@ -220,14 +220,14 @@ def main():
     # A long unbroken word is text, not media; real base64 is flat-priced.
     rec = pending_for("T" * 520000, key="prompt", event="UserPromptSubmit")
     check("pending-long-word-prompt-is-text",
-          rec["pending_estimate"] == 130000 and rec["pending_raw"] == 130000, "record=%r" % rec)
+          rec["pending_estimate"] == 173333 and rec["pending_raw"] == 173333, "record=%r" % rec)
     rec = pending_for({"stdout": "T" * 520000})
     check("pending-long-word-tool-is-text",
-          rec["pending_estimate"] == 25000 and rec["pending_raw"] == 130000, "record=%r" % rec)
+          rec["pending_estimate"] == 25000 and rec["pending_raw"] == 173333, "record=%r" % rec)
     rec = pending_for({"stdout": base64.b64encode(os.urandom(300000)).decode()})
     check("pending-real-base64-flat", rec["pending_raw"] == 1600, "record=%r" % rec)
     rec = pending_for({"stdout": "QUJD" * 50000})
-    check("pending-plain-alnum-is-text", rec["pending_raw"] == 50000, "record=%r" % rec)
+    check("pending-plain-alnum-is-text", rec["pending_raw"] == 66666, "record=%r" % rec)
     blob = "QUJD" * 50000
     for name, resp in (
             ("data-url", {"stdout": "see data:image/png;base64," + blob}),
@@ -319,14 +319,39 @@ def main():
                              "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir}, **extra))
         recs = open(log_u).read().splitlines() if os.path.exists(log_u) else []
         return p_u, json.loads(recs[-1]) if recs else {}  # logged only when it fires
-    p_u, rec = unrec_run("B", {"stdout": "ok"}, 50000)  # 40k + 15k unrecorded
+    p_u, rec = unrec_run("B", {"stdout": "ok"}, 50000)  # 40k + 20k unrecorded
     check("unrecorded-results-fire", "[context-watch]" in p_u.stdout
-          and rec.get("unrecorded_results") == 15000, "record=%r" % rec)
-    p_u, rec = unrec_run("A", {"stdout": "word " * 12000}, 65000)  # 55k, not 70k
+          and rec.get("unrecorded_results") == 20000, "record=%r" % rec)
+    p_u, rec = unrec_run("A", {"stdout": "word " * 12000}, 70000)  # 60k, not 80k
     check("unrecorded-results-skip-current", p_u.stdout.strip() == "", "stdout=%r" % p_u.stdout[:200])
     p_u, rec = unrec_run("B", {"stdout": "ok"}, 50000, CONTEXT_WATCH_PENDING="0")
     check("unrecorded-results-off-with-pending", p_u.stdout.strip() == "",
           "stdout=%r" % p_u.stdout[:200])
+
+    # 5i. The response that issued the current call (its thinking included) is
+    #     not on disk yet: assume the session's largest response so far, capped.
+    think = os.path.join(tmp, "claude-thinking.jsonl")
+    with open(think, "w") as f:
+        f.write(STARTUP_CLAUDE)
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 30000, "output_tokens": 36000}}}) + "\n")
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 70000, "output_tokens": 100}}}) + "\n")
+    def think_run(limit, **extra):
+        log_t = os.path.join(tmp, "events-think-%s.jsonl" % uuid.uuid4().hex[:6])
+        p_t = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                        "transcript_path": think, "cwd": tmp, "tool_response": {"stdout": "ok"}},
+                       dict({"HANDOFF_AT": str(limit), "CONTEXT_WATCH_LOG": log_t,
+                             "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir}, **extra))
+        recs = open(log_t).read().splitlines() if os.path.exists(log_t) else []
+        return p_t, json.loads(recs[-1]) if recs else {}
+    p_t, rec = think_run(90000)  # 70,100 + 25k capped allowance = 95,100
+    check("thinking-allowance-fire", "[context-watch]" in p_t.stdout
+          and rec.get("thinking_allowance") == 25000, "record=%r" % rec)
+    p_t, rec = think_run(90000, CONTEXT_WATCH_THINKING="0")
+    check("thinking-allowance-env-off", p_t.stdout.strip() == "", "stdout=%r" % p_t.stdout[:200])
+    p_t, rec = think_run(90000, CONTEXT_WATCH_PENDING="0")
+    check("thinking-allowance-off-with-pending", p_t.stdout.strip() == "", "stdout=%r" % p_t.stdout[:200])
 
     # 6. stats CLI honors CONTEXT_WATCH_LOG=0 as 'disabled', not a path
     env = dict(os.environ)

@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.9.2 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.9.3 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -137,17 +137,25 @@ totals in the rollout are never used.
 ### 4.3 Pending-content estimate (lag closure)
 
 The last usage entry lags the hook: on Codex by one call, on Claude by
-one call plus every tool result of the current assistant turn (see below).
-The first missing piece is what the hook is already holding on stdin: the just-produced tool
+one call plus every tool result of the current assistant turn (see below),
+and on both by the response that issued the call, thinking included: that
+message and its usage are written only after the hook returns (measured on
+Claude Code; the statusline refreshes ~300 ms after PostToolUse too, so no
+earlier source exists). The first missing piece is what the hook is already
+holding on stdin: the just-produced tool
 result (`PostToolUse`) or the new prompt (`UserPromptSubmit`). The watcher
-estimates its weight at ~4 characters per token from the first present key
+estimates its weight at ~3 characters per token (measured ~3.2 on
+line-numbered code; 4 undershot by ~30%) from the first present key
 among `tool_response`, `tool_output`, `tool_result`, `prompt`, and adds it to
 occupancy before the comparison. The estimate deliberately biases the trigger
 early — the correct direction for a quality guard. Claude Code writes an
 assistant message and its usage only after that call's PostToolUse hook
 runs, so on Claude the estimate also adds tool results already in the
 transcript after the last usage entry (each capped, the current call's
-excluded). Disable with
+excluded), plus a thinking allowance for the not-yet-written current
+response: the session's largest `output_tokens` so far, capped at 25k
+(`CONTEXT_WATCH_THINKING` overrides it; a single 36k-token thinking block was
+observed moving occupancy 52k → 105k in one call). Disable everything with
 `CONTEXT_WATCH_PENDING=0`. Exact pre-flight counting via a token-counting API
 is rejected by design: a hook cannot reconstruct the request payload, and the
 early-biased estimate achieves the same protection with no network call.

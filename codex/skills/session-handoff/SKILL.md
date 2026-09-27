@@ -11,7 +11,7 @@ description: >
   commit messages, or status updates while the session is continuing, and do
   not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.9.2"
+  version: "0.9.3"
 ---
 
 # Session Handoff

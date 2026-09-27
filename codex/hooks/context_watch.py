@@ -44,6 +44,9 @@ Other environment variables:
   CONTEXT_WATCH_AGENT         claude | codex (default: auto-detect)
   CONTEXT_WATCH_DISABLE       1 to no-op
   CONTEXT_WATCH_PENDING       0 to disable the pending-content estimate
+  CONTEXT_WATCH_THINKING      tokens assumed for the not-yet-written current
+                              response (default: session's largest response,
+                              capped at 25000; Claude only)
   CONTEXT_WATCH_LOG           analytics path (default ~/.context-watch/events.jsonl;
                               0 to disable)
   CONTEXT_WATCH_MAX_AGE_DAYS  announcer: ignore open handoffs older than this (14)
@@ -87,6 +90,7 @@ DEFAULT_TOKENS = 130_000  # built-in fallback; quality degradation commonly ~120
 # it enters context and Codex truncates harder, so a larger "pending" figure is
 # hook-payload metadata (full original files, base64 images), not context.
 PENDING_CAP = 25_000
+CHARS_PER_TOKEN = 3       # measured ~3.2 on line-numbered code; 4 undershot by ~30%
 IMAGE_TOKENS = 1_600      # an image/audio item costs ~1.6k tokens, not len(base64)/4
 DATA_MEDIA_URL = re.compile(r"data:(?:image|audio)/[\w.+-]+(?:;[\w.+-]+)*;base64,[\w+/=-]+",
                             re.IGNORECASE)
@@ -211,7 +215,7 @@ def detect_agent(evt, entries):
 
 def claude_usage(entries):
     """(breakdown, model) from the last main-chain API call."""
-    last, model = None, None
+    last, model, max_output = None, None, 0
     for e in entries:
         if e.get("isSidechain"):
             continue
@@ -225,6 +229,7 @@ def claude_usage(entries):
             if isinstance(usage, dict) and "input_tokens" in usage:
                 last = usage
                 model = msg.get("model") or model
+                max_output = max(max_output, usage.get("output_tokens") or 0)
     if not last:
         return None, model
     breakdown = {
@@ -232,6 +237,7 @@ def claude_usage(entries):
         "cache_creation": last.get("cache_creation_input_tokens") or 0,
         "cache_read": last.get("cache_read_input_tokens") or 0,
         "output": last.get("output_tokens") or 0,
+        "max_output": max_output,  # largest single response so far: thinking allowance
     }
     breakdown["occupancy"] = (breakdown["input"] + breakdown["cache_creation"]
                               + breakdown["cache_read"] + breakdown["output"])
@@ -339,7 +345,7 @@ def _is_media_block(d):
 
 def _context_tokens(obj):
     """~tokens the model will actually see from a hook payload value: string
-    content at ~4 chars/token, media (base64 blobs, data: URLs, image/audio
+    content at ~3 chars/token, media (base64 blobs, data: URLs, image/audio
     envelopes) at a flat cost each, and keys that are hook metadata (an Edit's
     full original file) skipped. A JSON-encoded string is decoded first."""
     if isinstance(obj, str):
@@ -354,8 +360,8 @@ def _context_tokens(obj):
                 pass
         media = len(DATA_MEDIA_URL.findall(obj))
         if media:
-            return media * IMAGE_TOKENS + len(DATA_MEDIA_URL.sub("", obj)) // 4
-        return len(obj) // 4
+            return media * IMAGE_TOKENS + len(DATA_MEDIA_URL.sub("", obj)) // CHARS_PER_TOKEN
+        return len(obj) // CHARS_PER_TOKEN
     if isinstance(obj, dict):
         if _is_media_block(obj):
             return IMAGE_TOKENS
@@ -858,7 +864,16 @@ def main():
     # ponytail: Claude only; Codex rollouts' write order around hooks is unverified.
     unrecorded = unrecorded_results(entries, evt.get("tool_use_id")) \
         if agent == "claude" and env("CONTEXT_WATCH_PENDING", "1") != "0" else 0
-    pending += unrecorded
+    # The response that issued this call (thinking included) is written only
+    # after the hook runs; assume it is as large as the session's largest so far.
+    thinking = min(breakdown.get("max_output", 0), PENDING_CAP) \
+        if agent == "claude" and env("CONTEXT_WATCH_PENDING", "1") != "0" else 0
+    if env("CONTEXT_WATCH_THINKING") is not None:
+        try:
+            thinking = int(env("CONTEXT_WATCH_THINKING"))
+        except ValueError:
+            pass
+    pending += unrecorded + thinking
     occupancy = breakdown["occupancy"] + pending
 
     cwd = evt.get("cwd") or os.getcwd()
@@ -933,6 +948,7 @@ def main():
         "pending_estimate": pending,
         "pending_raw": pending_raw,
         "unrecorded_results": unrecorded,
+        "thinking_allowance": thinking,
         "threshold": limit,
         "threshold_source": source,
         "window": window,
