@@ -28,6 +28,7 @@ Subcommands:
   resolve <topic-or-path> [dir] [--json]   print every handoff for a topic
                                             oldest first, across all statuses
   new-path <topic> [dir] [--json]          print deterministic path data for a new handoff
+                                           (--json adds the handoff template)
   claim <path> [--owner X]                 stamp a handoff as being resumed now, so a
                                             parallel session start does not announce it;
                                             refuses a live claim held by another owner
@@ -431,6 +432,19 @@ def supersede_candidates(root, git_position, topic):
             if h["topic"] != topic and (h.get("git") or "").split("@")[0] == branch]
 
 
+def read_template():
+    """handoff-template.md from the skill installed beside these hooks (plugin
+    and Codex layouts alike), so the agent never has to read a file outside
+    its working directory. "" when absent: the agent reads the file itself."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills",
+                        "session-handoff", "handoff-template.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def new_path(topic, root):
     now = datetime.now()
     abs_root = project_root(root)
@@ -644,7 +658,7 @@ def _cli(argv):
         root = args[1] if len(args) > 1 else "."
         result = new_path(args[0], root)
         if as_json:
-            print(json.dumps(result, indent=2))
+            print(json.dumps(dict(result, template=read_template()), indent=2))
         else:
             for key in ("directory", "filename", "path", "created", "project", "git",
                         "reason", "skills"):

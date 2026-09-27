@@ -11,7 +11,7 @@ description: >
   commit messages, or status updates while the session is continuing, and do
   not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.10.1"
+  version: "0.10.2"
 ---
 
 # Session Handoff
@@ -80,8 +80,9 @@ line — so announcements can order handoffs newest first.
 ## §3 Document structure
 
 The shape of the handoff document — front matter, body outline, length rules —
-lives in `handoff-template.md`, beside this file. Read it and write the handoff
-to that template.
+lives in `handoff-template.md`, beside this file. `new-path --json` prints it
+as its `template` field: write the handoff to that template. Read the file
+only if the field is empty.
 
 ## §4 Resuming
 

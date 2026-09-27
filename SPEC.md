@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.10.1 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.10.2 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -381,6 +381,11 @@ handoffs it already wrote to the fallback. `HANDOFF.md` carries topic
 `directory`, `filename`, `path`, and `created` for a new handoff, using the
 same directory as `save-path`, a filename of
 `<YYYYMMDD-HHMM>-<topic>.md`, and `created` formatted `%Y-%m-%dT%H:%M`.
+With `--json` it also returns `template`, the text of the skill's
+`handoff-template.md` (found at `../skills/session-handoff/` from the hooks
+directory, `""` when absent), so writing a handoff needs no file read outside
+the working directory — in auto mode such a read raises a permission prompt
+that stalls an unattended session.
 If that name is taken (same topic within a minute), the ledger adds `-2`,
 `-3`, and so on.
 

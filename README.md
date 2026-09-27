@@ -90,6 +90,8 @@ measured occupancy, the watcher sends one note suggesting a minimum
 threshold instead of a handoff notice, since a handoff would free nothing.
 Both notices re-arm once occupancy drops below half the threshold, for
 example after a compaction.
+An unattended run still stops at Claude Code's own first-launch dialogs (folder
+trust, project MCP servers): answer them once before leaving it running.
 
 ### Claude Cowork
 
@@ -260,7 +262,8 @@ resuming session can check what has changed since.
 returns the `directory`, `filename`, `path`, and `created` values for a new
 handoff, with the same directory choice as `save-path`, filename format
 `<YYYYMMDD-HHMM>-<topic>.md` (plus `-2`, `-3`, … if that name is taken),
-and `created` format `%Y-%m-%dT%H:%M`.
+and `created` format `%Y-%m-%dT%H:%M`; with `--json` it also returns the
+handoff template's text, so the agent needs no read outside the project.
 
 Deliberate ceiling: the announcer informs and offers, it does not hijack — if
 the session opens with an unrelated explicit task, open handoffs get one

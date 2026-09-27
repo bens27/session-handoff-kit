@@ -264,8 +264,12 @@ def main():
         check("new-path-json-parses", True)
     check("new-path-json-exact-keys",
           set(generated.keys()) == set(["directory", "filename", "path", "created", "project", "git",
-                                        "reason", "skills", "supersedes"]),
+                                        "reason", "skills", "supersedes", "template"]),
           "keys=%r" % sorted(generated.keys()))
+    with open(os.path.join(REPO, "plugins", "session-handoff", "skills", "session-handoff",
+                           "handoff-template.md"), encoding="utf-8") as f:
+        check("new-path-json-template-is-skill-file", generated.get("template") == f.read(),
+              "template=%r" % (generated.get("template") or "")[:80])
     check("new-path-json-directory-matches-save-path",
           generated.get("directory") == expected_directory,
           "directory=%r want=%r" % (generated.get("directory"), expected_directory))
