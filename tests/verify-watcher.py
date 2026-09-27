@@ -21,6 +21,9 @@ PY = sys.executable
 
 failures = []
 
+STARTUP_CLAUDE = json.dumps({"message": {"model": "claude-opus-4", "usage": {"input_tokens": 20000}}}) + "\n"
+STARTUP_CODEX = json.dumps({"payload": {"type": "token_count", "info": {"last_token_usage": {"total_tokens": 20000}}}}) + "\n"
+
 
 def check(name, ok, detail=""):
     print("%s %s%s" % ("PASS" if ok else "FAIL", name, (" — " + detail) if detail and not ok else ""))
@@ -62,6 +65,7 @@ def main():
     #    cache-read SHARE (percentage), and analytics logs the event.
     transcript = os.path.join(tmp, "claude.jsonl")
     with open(transcript, "w") as f:
+        f.write(STARTUP_CLAUDE)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"message": {"model": "claude-opus-4",
                                         "usage": {"input_tokens": 30000,
                                                   "cache_creation_input_tokens": 5000,
@@ -93,6 +97,7 @@ def main():
     # 3. HANDOFF_AT precedence: beats CONTEXT_WATCH_TOKENS
     transcript_ha = os.path.join(tmp, "claude-handoff-at.jsonl")
     with open(transcript_ha, "w") as f:
+        f.write(STARTUP_CLAUDE)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"message": {"model": "claude-opus-4",
                                         "usage": {"input_tokens": 30000,
                                                   "cache_creation_input_tokens": 5000,
@@ -118,6 +123,7 @@ def main():
     # 4. Autoresume trigger message: /clear instruction is present only when enabled
     transcript_ar = os.path.join(tmp, "claude-autoresume.jsonl")
     with open(transcript_ar, "w") as f:
+        f.write(STARTUP_CLAUDE)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"message": {"model": "claude-opus-4",
                                         "usage": {"input_tokens": 30000,
                                                   "cache_creation_input_tokens": 5000,
@@ -194,6 +200,7 @@ def main():
     # 5c. Pending estimate: capped, skips hook-only metadata, flat cost for base64.
     small_t = os.path.join(tmp, "claude-small.jsonl")
     with open(small_t, "w") as f:
+        f.write(STARTUP_CLAUDE)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"message": {"model": "claude-opus-4",
                                         "usage": {"input_tokens": 90000}}}) + "\n")
     def pending_for(response, key="tool_response", event="PostToolUse"):
@@ -248,6 +255,7 @@ def main():
     # 5e. Window-minus-reserve cap applies to a host-reported window only.
     cap_roll = os.path.join(tmp, "codex-cap.jsonl")
     with open(cap_roll, "w") as f:
+        f.write(STARTUP_CODEX)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"payload": {"type": "token_count",
                                         "info": {"last_token_usage": {"total_tokens": 145000},
                                                  "model_context_window": 160000}}}) + "\n")
@@ -272,6 +280,7 @@ def main():
     # 5f. A usage entry older than 10 minutes is flagged as possibly stale.
     old_t = os.path.join(tmp, "claude-old.jsonl")
     with open(old_t, "w") as f:
+        f.write(STARTUP_CLAUDE)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"timestamp": "2020-01-01T00:00:00Z",
                             "message": {"model": "claude-opus-4",
                                         "usage": {"input_tokens": 137000}}}) + "\n")
@@ -301,6 +310,7 @@ def main():
     # 7. Codex: model comes from turn_context, NOT from other payloads' model field
     rollout = os.path.join(tmp, "codex.jsonl")
     with open(rollout, "w") as f:
+        f.write(STARTUP_CODEX)  # startup context: keeps the floor below the threshold
         f.write(json.dumps({"type": "turn_context", "payload": {"model": "gpt-right"}}) + "\n")
         f.write(json.dumps({"payload": {"type": "token_count", "model": "gpt-wrong",
                                         "info": {"last_token_usage": {"total_tokens": 150000},
@@ -414,15 +424,61 @@ def main():
           and "tdd, dataviz" in p_skills.stdout,
           "rc=%d stdout=%r" % (p_skills.returncode, p_skills.stdout[:500]))
 
-    # 11. Codex: PostToolUse notice says it replaced the tool result; SessionStart
-    #     is JSON with the bracket-free label.
+    # 11. Codex: PostToolUse notice is JSON additionalContext with exit 0 (the
+    #     tool result is kept), block mode is decision:block; SessionStart is
+    #     JSON with the bracket-free label.
     evt_cx = {"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
               "transcript_path": rollout}
     p_cx = run_hook(evt_cx, envx2)
-    check("codex-posttooluse-exit2-notes-replaced-result",
-          p_cx.returncode == 2 and p_cx.stderr.startswith("context-watch:")
-          and "replaced the output" in p_cx.stderr,
-          "rc=%d stderr=%r" % (p_cx.returncode, p_cx.stderr[:300]))
+    try:
+        cx_msg = json.loads(p_cx.stdout)["hookSpecificOutput"]["additionalContext"]
+    except Exception:
+        cx_msg = ""
+    check("codex-posttooluse-json-exit0",
+          p_cx.returncode == 0 and cx_msg.startswith("context-watch:") and p_cx.stderr == "",
+          "rc=%d stdout=%r" % (p_cx.returncode, p_cx.stdout[:300]))
+    p_cx_b = run_hook(dict(evt_cx, session_id="verify-" + uuid.uuid4().hex[:8]),
+                      dict(envx2, CONTEXT_WATCH_MODE="block"))
+    try:
+        cx_block = json.loads(p_cx_b.stdout)
+    except Exception:
+        cx_block = {}
+    check("codex-posttooluse-block-mode",
+          p_cx_b.returncode == 0 and cx_block.get("decision") == "block",
+          "rc=%d stdout=%r" % (p_cx_b.returncode, p_cx_b.stdout[:300]))
+    check("notice-names-ledger-path",
+          "handoff_ledger.py" in cx_msg and os.path.isabs(cx_msg.rsplit("python3 ", 1)[-1].split()[0]),
+          "message=%r" % cx_msg[-200:])
+
+    # 11b. Floor: a threshold below the session's startup context gets one
+    #      factual note instead of a handoff notice, then silence.
+    floor_t = os.path.join(tmp, "claude-floor.jsonl")
+    with open(floor_t, "w") as f:
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 37000}}}) + "\n")
+    log_fl = os.path.join(tmp, "events-floor.jsonl")
+    evt_fl = {"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
+              "transcript_path": floor_t, "cwd": tmp}
+    env_fl = dict(envx, CONTEXT_WATCH_TOKENS="25000", CONTEXT_WATCH_LOG=log_fl)
+    p_fl = run_hook(evt_fl, env_fl)
+    try:
+        rec_fl = json.loads(open(log_fl).read().splitlines()[-1])
+    except Exception:
+        rec_fl = {}
+    check("floor-note-instead-of-notice",
+          "startup context" in p_fl.stdout and "47,000" in p_fl.stdout
+          and "reason: context-pressure" not in p_fl.stdout
+          and rec_fl.get("notice") == "floor" and rec_fl.get("floor") == 37000,
+          "stdout=%r record=%r" % (p_fl.stdout[:400], rec_fl))
+    with open(floor_t, "a") as f:
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 90000}}}) + "\n")
+    p_fl2 = run_hook(evt_fl, env_fl)
+    check("floor-note-once-no-handoff", p_fl2.stdout.strip() == "", "stdout=%r" % p_fl2.stdout[:200])
+    p_fl3 = run_hook(dict(evt_fl, session_id="verify-" + uuid.uuid4().hex[:8]),
+                     dict(env_fl, CONTEXT_WATCH_TOKENS="60000"))
+    check("floor-clear-threshold-fires", "reason: context-pressure" in p_fl3.stdout,
+          "stdout=%r" % p_fl3.stdout[:200])
     p_cx_ss = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_skills,
                         "session_id": "verify-cx-ss"},
                        {"TMPDIR": latchdir, "CONTEXT_WATCH_AGENT": "codex"})

@@ -85,6 +85,9 @@ further quarter of the threshold past where the first fired (and at least
 10) automatic clears in a row, so a session that starts near the threshold
 cannot loop forever; set `HANDOFF_AT` well above a fresh session's starting
 context (about 50k in an interactive Claude Code session with many tools).
+If the threshold is not at least 10k (or 10%) above the session's first
+measured occupancy, the watcher sends one note suggesting a minimum
+threshold instead of a handoff notice, since a handoff would free nothing.
 Both notices re-arm once occupancy drops below half the threshold, for
 example after a compaction.
 
@@ -129,10 +132,10 @@ older builds used `codex_hooks = true`). The hook reads the session rollout's
   then silently skipped, not errored, until re-approved: either launch
   `codex` interactively once, or pass `--dangerously-bypass-hook-trust` to
   `codex exec` for headless/automated invocations.
-- On `PostToolUse`, the only documented injection channel is exit code 2 with
-  the message on stderr — which replaces that one tool's result. Acceptable,
-  since the instruction is to stop and hand off anyway. `UserPromptSubmit`
-  uses plain stdout and is non-destructive.
+- On `PostToolUse`, the notice goes out as JSON
+  `hookSpecificOutput.additionalContext` with exit 0, so the tool result is
+  kept (`CONTEXT_WATCH_MODE=block` sends `decision: block`, which replaces
+  it). `UserPromptSubmit` uses plain stdout. Both are non-destructive.
 - The watcher only runs on `PostToolUse`, so it can only act *after* a tool
   call completes. A model that does a large chunk of work in one big tool
   call (e.g. a single `apply_patch` touching many files) can cross the
@@ -282,13 +285,14 @@ session-handoff-kit/
 │   ├── hooks/handoff_ledger.py          # tracks handoff state and chains
 │   ├── hooks/thresholds.example.json    # sample per-model threshold config
 │   └── skills/session-handoff/
-│       ├── SKILL.md                     # trigger, naming, resume, mechanics
-│       └── handoff-template.md          # the handoff's shape — edit this to experiment
+│       ├── SKILL.md                     # trigger, naming, resume
+│       ├── handoff-template.md          # the handoff's shape — edit this to experiment
+│       └── reference.md                 # customizing + mechanics, read on demand
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
 ├── codex/
 │   ├── install.sh                       # copies hook + skill, generates ~/.codex/hooks.json
 │   ├── hooks/context_watch.py           # same script
-│   └── skills/session-handoff/          # same two files (portable, byte-identical)
+│   └── skills/session-handoff/          # same three files (portable, byte-identical)
 ├── chat/session-handoff-chat/
 │   ├── SKILL.md                         # behavioral variant for claude.ai
 │   └── handoff-template.md              # chat handoff shape — edit this to experiment

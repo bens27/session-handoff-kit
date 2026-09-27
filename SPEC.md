@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.9.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.9.1 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -206,12 +206,16 @@ relying on memory.
 | Claude Code / Cowork | any watch event, `warn` mode | JSON `hookSpecificOutput.additionalContext`, exit 0 |
 | Claude Code / Cowork | `PostToolUse`, `block` mode | JSON `{"decision": "block", "reason": …}`, exit 0 |
 | Codex | `UserPromptSubmit` | plain stdout, exit 0 (becomes turn context) |
-| Codex | `PostToolUse` | message on stderr, exit 2 — the documented channel; it replaces that one tool result, acceptable since the instruction is to stop and hand off |
+| Codex | `PostToolUse`, `warn` mode | JSON `hookSpecificOutput.additionalContext`, exit 0 — added as developer context; the tool result is kept |
+| Codex | `PostToolUse`, `block` mode | JSON `{"decision": "block", "reason": …}`, exit 0 — replaces that one tool result |
 
-The injected message names the occupancy, the threshold and which rule
-selected it, the model, the cache-read share, any pending estimate, and the
-exact skill to invoke, ending with: finish only the action in progress,
-invoke the skill, write the handoff, stop, begin no new work. When
+The injected message is worded as factual statements, not system commands
+(hosts may treat command-framed injected text as prompt injection). It names
+the occupancy, the threshold and which rule selected it, the model, the
+cache-read share, any pending estimate, the skill that applies, what it
+implies (finish only the action in progress, write the handoff, stop; the
+remaining work stays authorized for the resuming session), and the absolute
+path of `handoff_ledger.py`, so the writer need not search for it. When
 autoresume is active (§7.3), the message additionally instructs the agent
 to tell the user to type `/clear` after the handoff is written — the
 cleared session's announcer then resumes the handoff automatically,
@@ -219,11 +223,19 @@ closing the loop with a single user keystroke. When the newest usage entry
 is more than 600 s older than the event, the message says the telemetry may
 be stale.
 
-Codex contract note: `PostToolUse` stays on exit 2 + stderr. A
-JSON-`additionalContext` channel that keeps the tool result has been claimed
-for Codex 0.157 but not verified here, because headless Codex will not run
-untrusted hooks. Revisit after checking it in an interactive, trusted Codex
-session.
+Floor check: when the whole transcript fits the scanned tail, the watcher
+takes the occupancy of the first usage entry as the session's startup floor.
+If the threshold is below `floor + max(10,000, 10% of the threshold)`, a
+handoff would free nothing, so instead of the notice it sends one factual
+note naming the floor and a suggested minimum threshold, occupies both
+latches (no handoff notice this session; a compaction re-arms) and logs
+`notice: "floor"` with `floor`.
+
+Codex contract note: the `PostToolUse` JSON channel is verified against the
+Codex hooks documentation (additionalContext is added as developer context;
+`decision: block` or exit 2 replaces the tool result; plain stdout is
+ignored), not in a live trusted Codex session, because headless Codex will
+not run untrusted hooks.
 
 ## 6. Threshold resolution
 

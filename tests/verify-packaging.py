@@ -65,7 +65,7 @@ def main():
         # structure to it, so a package without it installs a skill that points
         # at a file the user does not have.
         for art, member_needles, name in (
-                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md"), "artifact-plugin"),
+                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md", "reference.md"), "artifact-plugin"),
                 (skill_art, ("SKILL.md", "handoff-template.md"), "artifact-skill")):
             if not os.path.isfile(art):
                 check(name, False, "%s not produced" % os.path.relpath(art, REPO))

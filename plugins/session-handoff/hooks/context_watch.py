@@ -94,6 +94,8 @@ MEDIA_URL_KEYS = ("image_url", "audio_url")
 BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
 SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
+FLOOR_MARGIN = 10_000        # a threshold within this (or 10%) of startup context is useless
+LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff_ledger.py")
 REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
 DEFAULT_RESERVE = 20_000     # room kept free for writing the handoff (reported windows only)
 STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
@@ -265,6 +267,18 @@ def codex_usage(entries):
         "occupancy": total,
     }
     return breakdown, window, model
+
+
+def floor_occupancy(entries, agent):
+    """Occupancy at the session's first model call: the startup context a
+    handoff cannot free. Callers pass entries only when the whole transcript
+    was read, so the first usage entry really is the first."""
+    usage = claude_usage if agent == "claude" else codex_usage
+    for e in entries:
+        breakdown = usage([e])[0]
+        if breakdown and breakdown.get("occupancy", 0) > 0:
+            return breakdown["occupancy"]
+    return None
 
 
 def usage_age_seconds(entries):
@@ -717,15 +731,15 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill,
     if usage_age is not None and usage_age > STALE_USAGE_S:
         detail += "; usage entry is %d min old, telemetry may be stale" % (usage_age // 60)
     message = (
-        "%s %sContext occupancy ~%s tokens, over the %s-token threshold "
-        "for %s [%s] (%s). Finish only the action currently in progress, then "
-        "immediately invoke the `%s` skill: write the handoff document (with "
-        "`reason: context-pressure`) and stop. "
-        "Do not begin any new work."
+        "%s %sContext occupancy is ~%s tokens, over the %s-token handoff threshold "
+        "for %s [%s] (%s). The `%s` skill applies here: finish only the action "
+        "in progress, write the handoff (reason: context-pressure), then stop; "
+        "the remaining work stays authorized for the resuming session. "
+        "Ledger: python3 %s"
         % (LABEL.get(agent, LABEL["claude"]),
            "SECOND NOTICE, the first was not acted on: " if second else "",
            format(occupancy, ","), format(limit, ","), model or "unknown model",
-           source, detail, skill)
+           source, detail, skill, LEDGER)
     )
     if auto_mode_on():
         message += (" Fully automatic mode is active: after the handoff is written and "
@@ -738,8 +752,23 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill,
     return message
 
 
+def build_floor_message(floor, limit, model, agent):
+    # Smallest threshold that clears the floor by max(10k, 10% of itself).
+    suggest = -(-max(floor + 10000, floor / 0.9) // 1000) * 1000
+    return (
+        "%s The %s-token handoff threshold for %s is below this session's startup "
+        "context (~%s tokens at the first model call), so a handoff would free "
+        "nothing and no handoff notice will be sent this session. Tell the user: "
+        "set HANDOFF_AT (or CONTEXT_WATCH_TOKENS) to at least ~%s."
+        % (LABEL.get(agent, LABEL["claude"]), format(limit, ","),
+           model or "unknown model", format(floor, ","), format(int(suggest), ","))
+    )
+
+
 def emit(agent, event_name, message, mode):
-    if agent == "claude":
+    if agent == "claude" or event_name == "PostToolUse":
+        # Codex PostToolUse takes the same JSON: additionalContext is added as
+        # developer context and the tool result is kept; block replaces it.
         if mode == "block" and event_name == "PostToolUse":
             print(json.dumps({"decision": "block", "reason": message}))
         else:
@@ -750,16 +779,8 @@ def emit(agent, event_name, message, mode):
                 }
             }))
         sys.exit(0)
-    if event_name == "UserPromptSubmit":
-        print(message)  # Codex: stdout becomes extra context for the turn
-        sys.exit(0)
-    # Codex PostToolUse: exit 2 + stderr is the documented injection channel, and
-    # it replaces this one tool result, so say so: the handoff must not trust
-    # output the model never saw.
-    print(message + " Note: this notice replaced the output of the tool call that just "
-          "ran; if the handoff needs that output, re-run the call read-only.",
-          file=sys.stderr)
-    sys.exit(2)
+    print(message)  # Codex UserPromptSubmit: stdout becomes extra context for the turn
+    sys.exit(0)
 
 
 # ---------------------------------------------------------------- main
@@ -846,6 +867,15 @@ def main():
     if occupancy < need:
         sys.exit(0)
 
+    floor = None
+    if not fired:
+        try:
+            if os.path.getsize(transcript_path) <= TAIL_BYTES:
+                floor = floor_occupancy(entries, agent)
+        except OSError:
+            pass
+    below_floor = floor is not None and limit < floor + max(FLOOR_MARGIN, limit * 0.1)
+
     try:
         fd = os.open(second if fired else first, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
@@ -854,6 +884,13 @@ def main():
         sys.exit(0)
     except Exception:
         pass
+    if below_floor:
+        # One note per session: occupy the second-notice latch too, so the
+        # handoff never fires (and HANDOFF_AUTO cannot loop) until a compaction.
+        try:
+            open(second, "w").close()
+        except OSError:
+            pass
 
     usage_age = usage_age_seconds(entries)
     log_event({
@@ -868,7 +905,8 @@ def main():
         "window": window,
         "window_source": window_source,
         "usage_age_s": usage_age,
-        "notice": 2 if fired else 1,
+        "notice": "floor" if below_floor else (2 if fired else 1),
+        "floor": floor,
         "breakdown": breakdown,
         "session_id": session_id,
         "cwd": cwd,
@@ -876,6 +914,8 @@ def main():
 
     skill = env("CONTEXT_WATCH_SKILL", "session-handoff")
     mode = env("CONTEXT_WATCH_MODE", "warn").strip().lower()
+    if below_floor:
+        emit(agent, event_name, build_floor_message(floor, limit, model, agent), "warn")
     emit(agent, event_name,
          build_message(occupancy, pending, breakdown, limit, source, model, skill,
                        agent, second=fired, usage_age=usage_age),
