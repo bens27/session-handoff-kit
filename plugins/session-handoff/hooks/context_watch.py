@@ -55,6 +55,9 @@ Other environment variables:
                               after writing the handoff, and the Stop hook types
                               /clear + "resume" into the session's tmux pane
                               (or use the `auto` runner below for headless runs)
+  HANDOFF_AUTO_MAX            automatic clears in a row per project before the
+                              Stop hook stops and tells the user (default 10);
+                              a turn that ends without the trigger resets it
 
 CLI: `context_watch.py stats` summarizes the analytics log.
      `context_watch.py auto [--max N] [--prompt TEXT] -- <agent command...>`
@@ -63,8 +66,10 @@ CLI: `context_watch.py stats` summarizes the analytics log.
      fresh run given the prompt "resume"; the loop ends when a run leaves none.
 
 Stdlib only. Fails open: any error exits 0 so the watcher can never break a
-session. Fires at the threshold and once more at 125% of it (latch files in the
-temp directory); a drop below 50% of it (compaction) re-arms both.
+session. Fires at the threshold, and once more when occupancy has grown by a
+further 25% of it (and to at least 125% of it) AND the model has taken a turn
+since the first notice (latch files in the temp directory); a drop below 50%
+of it (compaction) re-arms both.
 """
 
 import json
@@ -83,7 +88,7 @@ PENDING_CAP = 25_000
 IMAGE_TOKENS = 1_600      # an image block costs ~1.6k tokens, not len(base64)/4
 BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
-SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold
+SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
 REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
 LABEL = {"claude": "[context-watch]",
          # Newer Codex parses stdout that starts with "[" or "{" as JSON, so the
@@ -119,6 +124,24 @@ def latch_path(session_id, stage=1):
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(session_id))
     return os.path.join(tempfile.gettempdir(),
                         "context-watch-%s.fired%s" % (safe, "" if stage == 1 else stage))
+
+
+def read_first_latch(path):
+    """(occupancy, transcript usage) recorded by the first notice; (0, None) if unknown."""
+    try:
+        occ, _limit, base = (int(x) for x in open(path).read().strip().split("/"))
+        return occ, base
+    except Exception:
+        return 0, None
+
+
+def auto_count_path(cwd):
+    try:
+        root = _ledger().project_root(cwd)
+    except Exception:
+        root = cwd
+    safe = "".join(c if c.isalnum() else "_" for c in os.path.realpath(root))[-80:]
+    return os.path.join(tempfile.gettempdir(), "context-watch-auto-%s.count" % safe)
 
 
 # ---------------------------------------------------------------- transcript
@@ -502,17 +525,45 @@ def handle_stop(evt):
     pane = env("TMUX_PANE")
     if not auto_mode_on() or not pane or env("HANDOFF_AUTO_RUNNER"):
         sys.exit(0)  # the headless runner starts fresh sessions itself
+    cwd = evt.get("cwd") or os.getcwd()
+    counter = auto_count_path(cwd)
     latch = latch_path(evt.get("session_id") or "unknown")
     if not os.path.exists(latch):
+        try:
+            os.remove(counter)  # a turn ended without the trigger: real progress
+        except OSError:
+            pass
         sys.exit(0)
     fired_at = os.path.getmtime(latch)
-    handoffs = _ledger().scan(evt.get("cwd") or os.getcwd(), 1)
+    handoffs = _ledger().scan(cwd, 1)
     if not any(os.path.getmtime(h["path"]) >= fired_at - 60 for h in handoffs):
         sys.exit(0)  # still writing it; the next Stop will check again
     try:
         os.close(os.open(latch + ".cleared", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except FileExistsError:
         sys.exit(0)
+    # Loop guard: a session that starts close to the threshold hands off again at
+    # once, so without a cap it would clear and resume forever.
+    try:
+        max_clears = int(env("HANDOFF_AUTO_MAX", "10"))
+    except ValueError:
+        max_clears = 10
+    try:
+        count = int(open(counter).read().strip() or 0)
+    except Exception:
+        count = 0
+    if count >= max_clears:
+        print(json.dumps({"systemMessage": (
+            "[context-watch] Fully automatic mode stopped after %d automatic clears in a "
+            "row in this project, so it cannot loop forever. The newest handoff is still "
+            "open. A fresh session may already start near the threshold: raise HANDOFF_AT "
+            "(or HANDOFF_AUTO_MAX), then type /clear and resume." % count)}))
+        sys.exit(0)
+    try:
+        with open(counter, "w") as f:
+            f.write("%d\n" % (count + 1))
+    except OSError:
+        pass
     # Detached, so this hook returns and the TUI goes idle before the keys arrive.
     script = ("sleep 2; tmux send-keys -t \"$P\" -l /clear; tmux send-keys -t \"$P\" Enter; "
               "sleep 4; tmux send-keys -t \"$P\" -l resume; tmux send-keys -t \"$P\" Enter")
@@ -666,13 +717,22 @@ def main():
         sys.exit(0)
     if os.path.exists(second):
         sys.exit(0)  # both notices given; only a compaction re-arms
-    if occupancy < (limit * SECOND_NOTICE_FACTOR if fired else limit):
+    need = limit
+    if fired:
+        first_occ, first_base = read_first_latch(first)
+        if breakdown["occupancy"] == first_base:
+            # No model turn since the first notice (e.g. parallel tool results
+            # landing together): it has not been seen yet, so it was not ignored.
+            sys.exit(0)
+        need = max(limit * SECOND_NOTICE_FACTOR,
+                   first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
+    if occupancy < need:
         sys.exit(0)
 
     try:
         fd = os.open(second if fired else first, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
-            f.write("%d/%d\n" % (occupancy, limit))
+            f.write("%d/%d/%d\n" % (occupancy, limit, breakdown["occupancy"]))
     except FileExistsError:
         sys.exit(0)
     except Exception:

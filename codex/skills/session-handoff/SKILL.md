@@ -11,7 +11,7 @@ description: >
   commit messages, or status updates while the session is continuing, and do
   not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.8.0"
+  version: "0.8.1"
 ---
 
 # Session Handoff
@@ -161,8 +161,9 @@ handoff's "Next steps".
 
 - The deterministic trigger is a lifecycle hook (`hooks/context_watch.py`)
   that reads the session's own transcript token usage and fires once per
-  session, with one SECOND NOTICE at 1.25x the threshold if the first is not
-  acted on (both re-arm once occupancy falls below half the threshold); a
+  session, with one SECOND NOTICE if the first is not acted on: only after
+  the model has taken a turn since the first, and once occupancy is a further
+  quarter of the threshold past it and at least 1.25x the threshold (both re-arm once occupancy falls below half the threshold); a
   `SessionStart` hook runs the announcer. `hooks/handoff_ledger.py`
   tracks open vs resumed vs superseded vs abandoned and can be run directly:
   `list`, `resolve <topic-or-path>`, `claim <path>`, `resume <path>`,

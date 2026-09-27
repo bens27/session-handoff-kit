@@ -50,5 +50,6 @@ highest precedence) and `AUTORESUME` (with `HANDOFF_AT`, makes the whole
 hand-off/`/clear`/resume cycle one keystroke), plus `CONTEXT_WATCH_TOKENS`,
 `_PERCENT`, `_WINDOW`, `_SKILL`, `_MODE`, `_AGENT`, `_DISABLE`,
 `_MAX_AGE_DAYS`, and `HANDOFF_AUTO` (fully automatic: resume the newest
-handoff and clear the session for you) — see the kit README. Fail-open by design: the watcher and
+handoff and clear the session for you, capped at `HANDOFF_AUTO_MAX` clears in
+a row, default 10) — see the kit README. Fail-open by design: the watcher and
 announcer can never block a session.

@@ -460,9 +460,10 @@ def _cli(argv):
                 return 1
             args = args[:i] + args[i + 2:]
         path = args[0]
-        if not os.path.isfile(path):
-            print("no such handoff: %s" % path, file=sys.stderr)
-            return 1
+        for p in (path, superseded_by):
+            if p is not None and not os.path.isfile(p):
+                print("no such handoff: %s" % p, file=sys.stderr)
+                return 1
         if cmd == "claim":
             print("claimed (%s): %s" % (claim(path), path))
             return 0

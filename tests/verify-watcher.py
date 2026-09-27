@@ -137,12 +137,34 @@ def main():
     check("autoresume-trigger-message-clear", p_ar.returncode == 0 and "/clear" in msg_ar,
           "rc=%d stdout=%r" % (p_ar.returncode, p_ar.stdout[:400]))
 
-    # 5. Latch: the same session fires once below 125% of the threshold, then a
-    #    second notice at 125%, then never again until a compaction re-arms it.
+    # 5. Latch: the same session fires once; a second notice needs a model turn
+    #    since the first AND occupancy 25% of the threshold past the first
+    #    (and >= 125%); then never again until a compaction re-arms it.
     p2 = run_hook(evt, dict(envx, CONTEXT_WATCH_TOKENS="120000"))  # 137k < 150k
     check("latch-fires-once", p2.returncode == 0 and p2.stdout.strip() == "",
           "stdout=%r" % p2.stdout[:200])
-    p2b = run_hook(evt, envx)  # 137k >= 125k
+    # Parallel tool results land before the model saw the first notice: the
+    # transcript usage is unchanged, so no second notice even far past 125%.
+    p2p = run_hook(dict(evt, hook_event_name="UserPromptSubmit", prompt="word " * 40000),
+                   dict(envx, CONTEXT_WATCH_PENDING="1"))  # 137k + ~50k pending
+    check("latch-no-second-before-model-turn", p2p.stdout.strip() == "",
+          "stdout=%r" % p2p.stdout[:200])
+    grown = os.path.join(tmp, "claude-grown.jsonl")
+    with open(grown, "w") as f:
+        f.write(open(transcript).read())
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 30000,
+                                                  "cache_read_input_tokens": 125000,
+                                                  "output_tokens": 2000}}}) + "\n")
+    p2g = run_hook(dict(evt, transcript_path=grown), envx)  # 157k: turn taken, < 137k+25k
+    check("latch-no-second-until-quarter-past-first", p2g.stdout.strip() == "",
+          "stdout=%r" % p2g.stdout[:200])
+    with open(grown, "a") as f:
+        f.write(json.dumps({"message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 30000,
+                                                  "cache_read_input_tokens": 140000,
+                                                  "output_tokens": 2000}}}) + "\n")
+    p2b = run_hook(dict(evt, transcript_path=grown), envx)  # 172k >= 162k
     check("latch-second-notice", "SECOND NOTICE" in p2b.stdout, "stdout=%r" % p2b.stdout[:200])
     check("latch-second-notice-logged",
           json.loads(open(log1).read().splitlines()[-1]).get("notice") == 2)
@@ -376,6 +398,9 @@ def main():
         f.write("---\ntopic: stopdemo\nstatus: open\n---\n# Session Handoff\n")
     run_hook(stop_evt, env_stop)
     run_hook(stop_evt, env_stop)  # second Stop must not type again
+    counter = os.path.join(latchdir, [n for n in os.listdir(latchdir)
+                                      if n.startswith("context-watch-auto-")][0])
+    check("auto-stop-counts-clear", open(counter).read().strip() == "1")
     deadline = time.time() + 15
     while time.time() < deadline and (not os.path.exists(keys)
                                       or "resume" not in open(keys).read()):
@@ -386,6 +411,17 @@ def main():
           typed.count("/clear") == 1 and typed.count("resume") == 1
           and typed.index("/clear") < typed.index("resume") and "-t %9" in typed,
           "typed=%r" % typed)
+
+    # 14b. Loop guard: after HANDOFF_AUTO_MAX clears in a row the Stop hook stops
+    #      typing and tells the user; a turn ending without the trigger resets it.
+    for i in range(3):
+        sid_loop = "verify-" + uuid.uuid4().hex[:8]
+        open(os.path.join(latchdir, "context-watch-%s.fired" % sid_loop), "w").close()
+        p_loop = run_hook(dict(stop_evt, session_id=sid_loop), dict(env_stop, HANDOFF_AUTO_MAX="2"))
+    check("auto-stop-loop-guard", "stopped after 2 automatic clears" in p_loop.stdout
+          and open(counter).read().strip() == "2", "stdout=%r" % p_loop.stdout[:300])
+    run_hook(dict(stop_evt, session_id="verify-" + uuid.uuid4().hex[:8]), env_stop)
+    check("auto-stop-counter-resets", not os.path.exists(counter))
 
     # 15. Headless runner: loops while each run leaves a new open handoff.
     proj_run = os.path.join(tmp, "proj-run")

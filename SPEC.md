@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.8.0 · `session-handoff-chat` skill 0.5.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.8.1 · `session-handoff-chat` skill 0.5.0 · browser extension 0.2.0
 
 ---
 
@@ -57,7 +57,10 @@ channel that was not available.
 
 **Fire once, remind once.** The threshold trigger fires at most once per
 session, enforced by a latch file keyed on session id. One SECOND NOTICE
-fires at 1.25x the threshold if the first was not acted on, and both latches
+fires if the first was not acted on: only after the model has taken a turn
+since the first (parallel tool results arriving together do not count), and
+once occupancy is a further 25% of the threshold past the first and at least
+1.25x the threshold. Both latches
 re-arm when occupancy falls below half the threshold (after a compaction or
 a clear).
 
@@ -504,6 +507,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
 | `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
 | `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## 12. Surface compatibility
 

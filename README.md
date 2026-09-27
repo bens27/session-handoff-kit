@@ -78,7 +78,13 @@ tmux, or for Codex, use the headless runner, which re-launches the agent with
 python3 plugins/session-handoff/hooks/context_watch.py auto --max 10 --prompt "build X" -- claude -p
 ```
 
-If the first notice is ignored, a SECOND NOTICE fires at 1.25x the threshold.
+If the first notice is ignored, a SECOND NOTICE fires. It waits until the
+model has taken a turn since the first notice, and until occupancy is a
+further quarter of the threshold past where the first fired (and at least
+1.25x the threshold). The Stop hook stops after `HANDOFF_AUTO_MAX` (default
+10) automatic clears in a row, so a session that starts near the threshold
+cannot loop forever; set `HANDOFF_AT` well above a fresh session's starting
+context (about 50k in an interactive Claude Code session with many tools).
 Both notices re-arm once occupancy drops below half the threshold, for
 example after a compaction.
 
@@ -210,6 +216,7 @@ Other variables:
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
 | `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## How automated does it get
 

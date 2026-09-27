@@ -285,6 +285,13 @@ def main():
     check("supersede-by-writes-link", ("superseded_by: " + new2) in old2_text,
           "content=%r" % old2_text[:400])
     check("supersede-by-still-marks-status", "status: superseded" in old2_text)
+    old3 = os.path.join(hd8, "20260809-0900-topic.md")
+    with open(old3, "w") as f:
+        f.write("---\ntopic: topic\nstatus: open\n---\n# older\n")
+    p = run(["supersede", old3, "--by", os.path.join(hd8, "missing.md")], tmp8)
+    check("supersede-by-refuses-missing-target",
+          p.returncode == 1 and "status: open" in open(old3).read(),
+          "rc=%d stderr=%r" % (p.returncode, p.stderr[:200]))
 
     # 9. Reads cover the fallback write location. A project with no local
     #    .handoffs/ has every handoff written to
