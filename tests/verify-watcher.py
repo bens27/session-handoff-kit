@@ -221,6 +221,20 @@ def main():
     check("pending-real-base64-flat", rec["pending_raw"] == 1600, "record=%r" % rec)
     rec = pending_for({"stdout": "QUJD" * 50000})
     check("pending-plain-alnum-is-text", rec["pending_raw"] == 50000, "record=%r" % rec)
+    blob = "QUJD" * 50000
+    for name, resp in (
+            ("data-url", {"stdout": "see data:image/png;base64," + blob}),
+            ("image_url", {"content": [{"type": "image_url",
+                                        "image_url": {"url": "data:image/png;base64," + blob}}]}),
+            ("input_audio", {"type": "input_audio", "input_audio": {"data": blob, "format": "wav"}}),
+            ("source-base64", {"type": "image", "source": {"type": "base64",
+                                                           "media_type": "image/png", "data": blob}}),
+            ("mcp-audio", [{"type": "audio", "data": blob, "mimeType": "audio/wav"}]),
+            ("json-encoded", {"stdout": json.dumps([{"type": "image", "data": blob,
+                                                     "mimeType": "image/png"}])})):
+        rec = pending_for(resp)
+        check("pending-media-" + name, 1600 <= rec["pending_raw"] < 1700, "record=%r" % rec)
+
     # 5d. Sessions without an id get a per-transcript latch, not one shared latch.
     id_less = []
     for n in ("a", "b"):
@@ -231,6 +245,51 @@ def main():
     check("idless-sessions-each-fire", all("[context-watch]" in q.stdout for q in id_less),
           "stdout=%r" % [q.stdout[:100] for q in id_less])
 
+    # 5e. Window-minus-reserve cap applies to a host-reported window only.
+    cap_roll = os.path.join(tmp, "codex-cap.jsonl")
+    with open(cap_roll, "w") as f:
+        f.write(json.dumps({"payload": {"type": "token_count",
+                                        "info": {"last_token_usage": {"total_tokens": 145000},
+                                                 "model_context_window": 160000}}}) + "\n")
+    log_cap = os.path.join(tmp, "events-cap.jsonl")
+    p_cap = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "verify-" + uuid.uuid4().hex[:8],
+                      "transcript_path": cap_roll},
+                     dict(CONTEXT_WATCH_TOKENS="200000", CONTEXT_WATCH_LOG=log_cap,
+                          CONTEXT_WATCH_PENDING="0", CONTEXT_WATCH_AGENT="codex", TMPDIR=latchdir))
+    try:
+        rec_cap = json.loads(open(log_cap).read().splitlines()[-1])
+    except Exception:
+        rec_cap = {}
+    check("reserve-cap-reported-window",
+          p_cap.stdout.startswith("context-watch:") and rec_cap.get("threshold") == 140000
+          and rec_cap.get("window_source") == "reported" and "capped" in rec_cap.get("threshold_source", ""),
+          "record=%r stdout=%r" % (rec_cap, p_cap.stdout[:200]))
+    p_nocap = run_hook(dict(evt, session_id="verify-" + uuid.uuid4().hex[:8]),
+                       dict(envx, CONTEXT_WATCH_TOKENS="140000", CONTEXT_WATCH_WINDOW="150000"))
+    check("reserve-cap-not-on-assumed-window", p_nocap.stdout.strip() == "",
+          "stdout=%r" % p_nocap.stdout[:200])
+
+    # 5f. A usage entry older than 10 minutes is flagged as possibly stale.
+    old_t = os.path.join(tmp, "claude-old.jsonl")
+    with open(old_t, "w") as f:
+        f.write(json.dumps({"timestamp": "2020-01-01T00:00:00Z",
+                            "message": {"model": "claude-opus-4",
+                                        "usage": {"input_tokens": 137000}}}) + "\n")
+    p_old = run_hook(dict(evt, session_id="verify-" + uuid.uuid4().hex[:8], transcript_path=old_t), envx)
+    check("stale-usage-note", "telemetry may be stale" in p_old.stdout, "stdout=%r" % p_old.stdout[:400])
+
+    # 5g. Second notice stays quiet once a handoff was written after the first.
+    proj_q = os.path.join(tmp, "proj-quiet")
+    os.makedirs(os.path.join(proj_q, ".handoffs"))
+    evt_q = dict(evt, session_id="verify-" + uuid.uuid4().hex[:8], cwd=proj_q)
+    first_q = run_hook(evt_q, envx)
+    time.sleep(0.05)
+    with open(os.path.join(proj_q, ".handoffs", "20260927-0900-quiet.md"), "w") as f:
+        f.write("---\ntopic: quiet\nstatus: open\n---\n# Session Handoff\n")
+    p_q = run_hook(dict(evt_q, transcript_path=grown), envx)  # 172k: would be a SECOND NOTICE
+    check("second-notice-quiet-after-handoff",
+          "[context-watch]" in first_q.stdout and p_q.stdout.strip() == "",
+          "stdout=%r" % p_q.stdout[:200])
 
     # 6. stats CLI honors CONTEXT_WATCH_LOG=0 as 'disabled', not a path
     env = dict(os.environ)
@@ -273,6 +332,9 @@ def main():
         announced = "demo-topic" in p5.stdout
         check("announcer-source-%s" % src, p5.returncode == 0 and announced == expect_announce,
               "rc=%d stdout=%r" % (p5.returncode, p5.stdout[:200]))
+        if src == "compact":
+            check("compaction-note", "evidence, not the live state" in p5.stdout,
+                  "stdout=%r" % p5.stdout[:300])
     p_single_ended = run_hook({"hook_event_name": "SessionStart", "source": "startup",
                                "cwd": proj, "session_id": "verify-ss-ended"},
                               {"TMPDIR": latchdir})

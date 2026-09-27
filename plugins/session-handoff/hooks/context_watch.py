@@ -75,6 +75,7 @@ of it (compaction) re-arms both.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -86,11 +87,16 @@ DEFAULT_TOKENS = 130_000  # built-in fallback; quality degradation commonly ~120
 # it enters context and Codex truncates harder, so a larger "pending" figure is
 # hook-payload metadata (full original files, base64 images), not context.
 PENDING_CAP = 25_000
-IMAGE_TOKENS = 1_600      # an image block costs ~1.6k tokens, not len(base64)/4
+IMAGE_TOKENS = 1_600      # an image/audio item costs ~1.6k tokens, not len(base64)/4
+DATA_MEDIA_URL = re.compile(r"data:(?:image|audio)/[\w.+-]+(?:;[\w.+-]+)*;base64,[\w+/=-]+",
+                            re.IGNORECASE)
+MEDIA_URL_KEYS = ("image_url", "audio_url")
 BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
 SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
 REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
+DEFAULT_RESERVE = 20_000     # room kept free for writing the handoff (reported windows only)
+STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
 LABEL = {"claude": "[context-watch]",
          # Newer Codex parses stdout that starts with "[" or "{" as JSON, so the
          # Codex label must not start with a bracket (see handle_session_start).
@@ -261,6 +267,34 @@ def codex_usage(entries):
     return breakdown, window, model
 
 
+def usage_age_seconds(entries):
+    """Seconds since the newest usage-bearing entry's timestamp, or None."""
+    from datetime import datetime, timezone
+    for e in reversed(entries):
+        payload = e.get("payload")
+        msg = e.get("message")
+        if (isinstance(msg, dict) and isinstance(msg.get("usage"), dict)
+                and not e.get("isSidechain")) or (
+                isinstance(payload, dict) and payload.get("type") == "token_count"):
+            try:
+                dt = datetime.fromisoformat(str(e.get("timestamp")).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return max(0, int(time.time() - dt.timestamp()))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def handoff_written_since(cwd, since):
+    """True when an open handoff for cwd's project was written at or after
+    `since`: the checkpoint the first notice asked for already happened."""
+    try:
+        return any(os.path.getmtime(h["path"]) >= since for h in _ledger().scan(cwd, 1))
+    except Exception:
+        return False
+
+
 def _looks_base64(s):
     """Real base64 (standard or URL-safe) of binary data, not merely a long
     unbroken word: it mixes upper, lower and digits and uses the non-alnum
@@ -291,14 +325,29 @@ def _is_media_block(d):
 
 def _context_tokens(obj):
     """~tokens the model will actually see from a hook payload value: string
-    content at ~4 chars/token, images at a flat cost, and keys that are hook
-    metadata (an Edit's full original file) skipped."""
+    content at ~4 chars/token, media (base64 blobs, data: URLs, image/audio
+    envelopes) at a flat cost each, and keys that are hook metadata (an Edit's
+    full original file) skipped. A JSON-encoded string is decoded first."""
     if isinstance(obj, str):
-        return IMAGE_TOKENS if _looks_base64(obj) else len(obj) // 4
+        if _looks_base64(obj):
+            return IMAGE_TOKENS
+        if len(obj) > BASE64_MIN and obj.lstrip()[:1] in ("{", "["):
+            try:
+                decoded = json.loads(obj)
+                if not isinstance(decoded, str):
+                    return _context_tokens(decoded)
+            except ValueError:
+                pass
+        media = len(DATA_MEDIA_URL.findall(obj))
+        if media:
+            return media * IMAGE_TOKENS + len(DATA_MEDIA_URL.sub("", obj)) // 4
+        return len(obj) // 4
     if isinstance(obj, dict):
         if _is_media_block(obj):
             return IMAGE_TOKENS
-        return sum(_context_tokens(v) for k, v in obj.items() if k not in NOT_IN_CONTEXT_KEYS)
+        return sum(IMAGE_TOKENS if k in MEDIA_URL_KEYS and isinstance(v, (str, dict))
+                   else _context_tokens(v)
+                   for k, v in obj.items() if k not in NOT_IN_CONTEXT_KEYS)
     if isinstance(obj, list):
         return sum(_context_tokens(v) for v in obj)
     return 0
@@ -459,7 +508,17 @@ ANNOUNCE_CAP = 5  # handoffs listed by name; the rest are counted
 
 def handle_session_start(evt, agent):
     """Announce open (untransferred) handoffs; enumerate and offer a choice when several exist."""
-    if (evt.get("source") or "") in ("resume", "compact", "fork"):
+    source = evt.get("source") or ""
+    if source == "compact":
+        note = (LABEL.get(agent, LABEL["claude"]) + " Context was just compacted in this "
+                "session. The summary above is evidence, not the live state: re-verify the "
+                "workspace, revision and test results before relying on it. Compaction is "
+                "automatic pressure, not the user parking the work: if the user had "
+                "authorized a task that was in progress, continue it.")
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                 "additionalContext": note}}))
+        sys.exit(0)
+    if source in ("resume", "fork"):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
     here = os.path.dirname(os.path.abspath(__file__))
@@ -646,12 +705,14 @@ def auto_cli(argv):
 # ---------------------------------------------------------------- emit
 
 def build_message(occupancy, pending, breakdown, limit, source, model, skill,
-                  agent="claude", second=False):
+                  agent="claude", second=False, usage_age=None):
     cache_read = breakdown.get("cache_read", 0)
     cache_share = (cache_read / occupancy * 100.0) if occupancy else 0.0
     detail = "cache-read %s of it (%.0f%%)" % (format(cache_read, ","), cache_share)
     if pending:
         detail += "; incl. ~%s pending" % format(pending, ",")
+    if usage_age is not None and usage_age > STALE_USAGE_S:
+        detail += "; usage entry is %d min old, telemetry may be stale" % (usage_age // 60)
     message = (
         "%s %sContext occupancy ~%s tokens, over the %s-token threshold "
         "for %s [%s] (%s). Finish only the action currently in progress, then "
@@ -726,6 +787,7 @@ def main():
         window = int(env("CONTEXT_WATCH_WINDOW", "200000"))
     except ValueError:
         window = 200000
+    window_source = "assumed"
 
     model = evt.get("model")  # Codex includes it in hook input; Claude Code does not
     if agent == "claude":
@@ -733,7 +795,7 @@ def main():
     else:
         breakdown, reported, tmodel = codex_usage(entries)
         if reported:
-            window = reported
+            window, window_source = reported, "reported"
     model = model or tmodel
 
     if not breakdown or breakdown.get("occupancy", 0) <= 0:
@@ -744,6 +806,18 @@ def main():
 
     cwd = evt.get("cwd") or os.getcwd()
     limit, source = resolve_threshold(model, window, cwd)
+    if window_source == "reported":
+        # Only a host-reported window is trusted for this cap: an assumed 200k
+        # would clamp every 1M-context model's threshold to 180k.
+        try:
+            reserve = int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE)))
+        except ValueError:
+            reserve = DEFAULT_RESERVE
+        cap = window - reserve
+        if 0 < cap < limit:
+            source = "%s, capped from %s to window %s - reserve %s" % (
+                source, format(limit, ","), format(window, ","), format(reserve, ","))
+            limit = cap
     fired = os.path.exists(first)
     if fired and occupancy < limit * REARM_FACTOR:
         for path in (first, second, first + ".cleared"):
@@ -761,6 +835,8 @@ def main():
             # No model turn since the first notice (e.g. parallel tool results
             # landing together): it has not been seen yet, so it was not ignored.
             sys.exit(0)
+        if handoff_written_since(cwd, os.path.getmtime(first)):
+            sys.exit(0)  # the handoff was written; the notice was acted on
         need = max(limit * SECOND_NOTICE_FACTOR,
                    first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
     if occupancy < need:
@@ -775,6 +851,7 @@ def main():
     except Exception:
         pass
 
+    usage_age = usage_age_seconds(entries)
     log_event({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "agent": agent,
@@ -784,6 +861,9 @@ def main():
         "pending_raw": pending_raw,
         "threshold": limit,
         "threshold_source": source,
+        "window": window,
+        "window_source": window_source,
+        "usage_age_s": usage_age,
         "notice": 2 if fired else 1,
         "breakdown": breakdown,
         "session_id": session_id,
@@ -794,7 +874,7 @@ def main():
     mode = env("CONTEXT_WATCH_MODE", "warn").strip().lower()
     emit(agent, event_name,
          build_message(occupancy, pending, breakdown, limit, source, model, skill,
-                       agent, second=fired),
+                       agent, second=fired, usage_age=usage_age),
          mode)
 
 
