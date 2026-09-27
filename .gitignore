@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 dist/
+.mcp.json
+.agentsroom/handoff-transcript-*.txt
+.agentsroom/handoff-summary-*.md
+.agentsroom/fork-context-*.txt
