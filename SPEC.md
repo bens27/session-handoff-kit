@@ -136,8 +136,9 @@ totals in the rollout are never used.
 
 ### 4.3 Pending-content estimate (lag closure)
 
-The last usage entry is at most one call stale. The missing content is
-precisely what the hook is already holding on stdin: the just-produced tool
+The last usage entry lags the hook: on Codex by one call, on Claude by
+one call plus every tool result of the current assistant turn (see below).
+The first missing piece is what the hook is already holding on stdin: the just-produced tool
 result (`PostToolUse`) or the new prompt (`UserPromptSubmit`). The watcher
 estimates its weight at ~4 characters per token from the first present key
 among `tool_response`, `tool_output`, `tool_result`, `prompt`, and adds it to
