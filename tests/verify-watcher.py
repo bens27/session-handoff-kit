@@ -598,6 +598,16 @@ def main():
         f.write("---\ntopic: nudged\nstatus: open\n---\n# Session Handoff\n")
     p_n = run_hook(dict(nudge_evt, session_id=sid_n2), env_n)
     check("stop-nudge-silent-after-handoff", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+    sid_n5 = "verify-" + uuid.uuid4().hex[:8]
+    proj_n5 = os.path.join(tmp, "proj-nudge-resumed")
+    os.makedirs(os.path.join(proj_n5, ".handoffs"))
+    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n5), "w") as f:
+        f.write("150000/130000/140000\n")
+    time.sleep(0.05)
+    with open(os.path.join(proj_n5, ".handoffs", "20260927-0900-finished-here.md"), "w") as f:
+        f.write("---\ntopic: finished-here\nstatus: resumed\n---\n# Session Handoff\n")
+    p_n = run_hook(dict(nudge_evt, session_id=sid_n5, cwd=proj_n5), env_n)
+    check("stop-nudge-silent-after-handoff-resumed", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
     sid_n3 = "verify-" + uuid.uuid4().hex[:8]
     with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n3), "w") as f:
         f.write("30000/25000/28000\n")

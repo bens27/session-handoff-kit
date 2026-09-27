@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.10.2 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.10.3 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 

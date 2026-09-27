@@ -326,10 +326,14 @@ def usage_age_seconds(entries):
 
 
 def handoff_written_since(cwd, since):
-    """True when an open handoff for cwd's project was written at or after
-    `since`: the checkpoint the first notice asked for already happened."""
+    """True when a handoff for cwd's project, in any status, was written at or
+    after `since`: the checkpoint the first notice asked for already happened,
+    even if this session has since resumed it and finished the work itself."""
+    # ponytail: mtime, so resuming an unrelated old handoff after the notice also
+    # silences the one-time nudge; compare `created` if that ever matters.
     try:
-        return any(os.path.getmtime(h["path"]) >= since for h in _ledger().scan(cwd, 1))
+        ledger = _ledger()
+        return any(r["mtime"] >= since for r in ledger._records(ledger.project_root(cwd)))
     except Exception:
         return False
 
