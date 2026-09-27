@@ -229,11 +229,12 @@ def main():
     check("new-path-default-exit0", p.returncode == 0,
           "rc=%d stderr=%r" % (p.returncode, p.stderr[:200]))
     check("new-path-default-fields-present",
-          set(fields.keys()) == set(["directory", "filename", "path", "created", "project", "git"]),
+          set(fields.keys()) == set(["directory", "filename", "path", "created", "project", "git",
+                                     "reason", "skills"]),
           "stdout=%r" % p.stdout[:500])
     check("new-path-default-line-order",
           [line.partition(":")[0] for line in lines] == ["directory", "filename", "path", "created",
-                                                     "project", "git"],
+                                                     "project", "git", "reason", "skills"],
           "stdout=%r" % p.stdout[:500])
     check("new-path-directory-matches-save-path",
           fields.get("directory") == expected_directory,
@@ -262,11 +263,53 @@ def main():
     else:
         check("new-path-json-parses", True)
     check("new-path-json-exact-keys",
-          set(generated.keys()) == set(["directory", "filename", "path", "created", "project", "git"]),
+          set(generated.keys()) == set(["directory", "filename", "path", "created", "project", "git",
+                                        "reason", "skills", "supersedes"]),
           "keys=%r" % sorted(generated.keys()))
     check("new-path-json-directory-matches-save-path",
           generated.get("directory") == expected_directory,
           "directory=%r want=%r" % (generated.get("directory"), expected_directory))
+
+    # 7b. new-path reads the session note context_watch.py leaves in TMPDIR:
+    #     reason from whether the trigger fired, skills from the transcript's
+    #     Skill tool calls, and supersede candidates from the same git branch.
+    check("new-path-reason-default-user-parked", fields.get("reason") == "user-parked"
+          and fields.get("skills") == "", "fields=%r" % fields)
+    tmp7b = tempfile.mkdtemp(prefix="ledger-verify7b-")
+    os.makedirs(os.path.join(tmp7b, ".handoffs"))
+    subprocess.run(["git", "-C", tmp7b, "init", "-q", "-b", "feat-x"], check=True)
+    subprocess.run(["git", "-C", tmp7b, "-c", "user.email=v@v", "-c", "user.name=v",
+                    "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    with open(os.path.join(tmp7b, ".handoffs", "20260927-0800-same-branch.md"), "w") as f:
+        f.write("---\ntopic: same-branch\nstatus: open\ngit: feat-x@abc1234\n---\n# Session Handoff\n")
+    with open(os.path.join(tmp7b, ".handoffs", "20260927-0801-other-branch.md"), "w") as f:
+        f.write("---\ntopic: other-branch\nstatus: open\ngit: main@abc1234\n---\n# Session Handoff\n")
+    tr = os.path.join(tmp7b, "transcript.jsonl")
+    with open(tr, "w") as f:
+        f.write(json.dumps({"message": {"content": [{"type": "tool_use", "name": "Skill",
+                                                     "input": {"skill": "ponytail"}}]}}) + "\n")
+        f.write(json.dumps({"message": {"content": [{"type": "tool_use", "name": "Read",
+                                                     "input": {"file_path": "x"}}]}}) + "\n")
+        f.write(json.dumps({"message": {"content": [{"type": "tool_use", "name": "Skill",
+                                                     "input": {"skill": "tdd"}}]}}) + "\n")
+        f.write(json.dumps({"message": {"content": [{"type": "tool_use", "name": "Skill",
+                                                     "input": {"skill": "ponytail"}}]}}) + "\n")
+    sys.path.insert(0, os.path.dirname(PLUGIN))
+    import handoff_ledger as hl
+    notedir = tempfile.mkdtemp(prefix="ledger-verify7b-tmp-")
+    env7b = {"TMPDIR": notedir}
+    with open(os.path.join(notedir, os.path.basename(hl.session_note_path(tmp7b))), "w") as f:
+        json.dump({"session_id": "s1", "cwd": tmp7b, "transcript_path": tr, "fired": True,
+                   "ts": time.time()}, f)
+    p7b = run(["new-path", "new-thread", tmp7b, "--json"], tmp7b, env7b)
+    j7b = json.loads(p7b.stdout or "{}")
+    check("new-path-reason-context-pressure", j7b.get("reason") == "context-pressure", "out=%r" % j7b)
+    check("new-path-skills-from-transcript", j7b.get("skills") == "ponytail, tdd", "out=%r" % j7b)
+    check("new-path-supersedes-same-branch",
+          [os.path.basename(x) for x in j7b.get("supersedes", [])] == ["20260927-0800-same-branch.md"],
+          "out=%r" % j7b)
+    p7b = run(["new-path", "new-thread", tmp7b], tmp7b, env7b)
+    check("new-path-supersedes-text-line", "supersedes: " in p7b.stdout, "out=%r" % p7b.stdout)
 
     # 8. supersede --by: bidirectional link, backward compatible with plain
     #    supersede (already covered above).

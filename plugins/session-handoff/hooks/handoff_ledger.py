@@ -266,6 +266,7 @@ def scan(root, max_age_days=14, stats=None):
             "ended": r["ended"],
             "description": fm.get("description") or "",
             "skills": fm.get("skills") or "",
+            "git": fm.get("git") or "",
             "age_days": round(age_days, 1),
             "problems": r["problems"],
             "_claimed": _claimed_recently(fm, datetime.now()),
@@ -363,10 +364,69 @@ def _git_position(root):
         return ""
 
 
+def session_note_path(root):
+    """Where context_watch.py leaves this project's live session facts
+    (session id, transcript, whether the trigger fired), so ledger commands
+    run from the agent's shell can read them without hook stdin."""
+    import hashlib
+    import tempfile
+    key = hashlib.sha1(project_root(root).encode("utf-8", "replace")).hexdigest()[:12]
+    # ponytail: keyed by project, so parallel sessions in one project see the
+    # last writer's note; key by session id if that ever matters.
+    return os.path.join(tempfile.gettempdir(), "context-watch-session-%s.json" % key)
+
+
+def read_session_note(root, max_age_s=86400):
+    try:
+        with open(session_note_path(root), encoding="utf-8") as f:
+            note = json.load(f)
+        if time.time() - float(note.get("ts") or 0) <= max_age_s:
+            return note
+    except Exception:
+        pass
+    return {}
+
+
+def transcript_skills(path):
+    """Skill names this Claude session loaded, in first-use order, read from
+    the Skill tool calls in its transcript."""
+    seen = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:  # ponytail: full scan; tail-only if transcripts get huge
+                if '"Skill"' not in line:
+                    continue
+                try:
+                    msg = json.loads(line).get("message") or {}
+                except ValueError:
+                    continue
+                for block in msg.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use" \
+                            and block.get("name") == "Skill":
+                        name = str((block.get("input") or {}).get("skill") or "").strip()
+                        if name and name not in seen:
+                            seen.append(name)
+    except OSError:
+        pass
+    return seen
+
+
+def supersede_candidates(root, git_position, topic):
+    """Open handoffs written on the same git branch: the thread this handoff
+    most likely continues, so the agent supersedes instead of forking."""
+    branch = git_position.split("@")[0] if git_position else ""
+    if not branch:
+        return []
+    return [h["path"] for h in scan(root, 9999)
+            if h["topic"] != topic and (h.get("git") or "").split("@")[0] == branch]
+
+
 def new_path(topic, root):
     now = datetime.now()
     abs_root = project_root(root)
     directory = save_path(abs_root)
+    note = read_session_note(abs_root)
+    git_position = _git_position(abs_root)
     stem = "%s-%s" % (now.strftime("%Y%m%d-%H%M"), topic)
     filename, n = stem + ".md", 2
     while os.path.exists(os.path.join(directory, filename)):
@@ -377,7 +437,11 @@ def new_path(topic, root):
         "path": os.path.join(directory, filename),
         "created": now.strftime(STAMP),
         "project": abs_root,
-        "git": _git_position(abs_root),
+        "git": git_position,
+        "reason": "context-pressure" if note.get("fired") else "user-parked",
+        "skills": ", ".join(transcript_skills(note["transcript_path"]))
+                  if note.get("transcript_path") else "",
+        "supersedes": supersede_candidates(abs_root, git_position, topic),
     }
 
 
@@ -549,8 +613,11 @@ def _cli(argv):
         if as_json:
             print(json.dumps(result, indent=2))
         else:
-            for key in ("directory", "filename", "path", "created", "project", "git"):
+            for key in ("directory", "filename", "path", "created", "project", "git",
+                        "reason", "skills"):
                 print("%s: %s" % (key, result[key]))
+            if result["supersedes"]:
+                print("supersedes: %s" % ", ".join(result["supersedes"]))
         return 0
     if cmd in ("resume", "supersede", "abandon", "claim", "release"):
         owner = None

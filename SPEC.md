@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.9.3 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` plugin 0.10.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -434,6 +434,36 @@ Every announcement includes the exact mark-transferred command and the defer
 clause: if the user's opening request is an unrelated explicit task, mention
 the open handoff(s) in one sentence and proceed with their task; the ledger
 is untouched.
+
+### 7.3b Decisions taken off the agent
+
+Three judgments the skill used to leave to the model are now computed, and a
+fourth is classified, because the signal already exists on disk:
+
+- **`reason`** — `new-path` prints `context-pressure` when this session's
+  trigger latch exists, else `user-parked`. It knows the session because the
+  watcher leaves a *session note* (`$TMPDIR/context-watch-session-<project
+  hash>.json`: session id, transcript path, fired flag) on every
+  PostToolUse/UserPromptSubmit; ledger commands run from the agent's shell
+  with no hook stdin.
+- **`skills`** — `new-path` reads the Claude transcript named in the session
+  note and lists every `Skill` tool call's name in first-use order. Codex has
+  no skill tool; the field is empty there.
+- **`supersedes`** — `new-path` lists open handoffs of other topics whose
+  `git:` branch equals the current one: the thread this handoff most likely
+  continues. The agent supersedes them unless told it is a separate thread.
+- **Unwritten handoff at turn end** — in warn mode on Claude, the Stop hook
+  blocks the stop once (`decision: block`) when the latch exists, no handoff
+  was written since it, and the latch is not a floor note. A `.nudged` file
+  beside the latch makes it fire once per session; `stop_hook_active` guards
+  the re-entry. Codex Stop hooks cannot block, so nothing happens there.
+- **Opening prompt vs open handoffs** — on the first UserPromptSubmit of a
+  session (no usage entry yet) with open handoffs, the watcher asks Jev
+  (TypeSafe System One, `TYPESAFE_API_KEY`, 3 s timeout, fail-open) a single
+  choice question: which handoff does the prompt continue, or `unrelated`.
+  At confidence ≥ 0.8 it injects one line telling the agent to claim that
+  handoff or to leave them all alone; below it, or without a key, or with
+  `CONTEXT_WATCH_JEV=0`, it stays silent and the skill's default (§4) applies.
 
 ### 7.4 Shared contract between the agent and chat skills
 

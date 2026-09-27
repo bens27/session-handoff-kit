@@ -47,6 +47,9 @@ Other environment variables:
   CONTEXT_WATCH_THINKING      tokens assumed for the not-yet-written current
                               response (default: session's largest response,
                               capped at 25000; Claude only)
+  CONTEXT_WATCH_JEV           0 to skip asking Jev (TypeSafe System One,
+                              TYPESAFE_API_KEY) whether a session's opening
+                              prompt continues an open handoff
   CONTEXT_WATCH_LOG           analytics path (default ~/.context-watch/events.jsonl;
                               0 to disable)
   CONTEXT_WATCH_MAX_AGE_DAYS  announcer: ignore open handoffs older than this (14)
@@ -147,6 +150,22 @@ def latch_path(session_id, stage=1):
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(session_id))
     return os.path.join(tempfile.gettempdir(),
                         "context-watch-%s.fired%s" % (safe, "" if stage == 1 else stage))
+
+
+def write_session_note(cwd, evt, fired):
+    """Leave this session's facts where handoff_ledger.py new-path (run from
+    the agent's shell, no hook stdin) can read them: reason and skills."""
+    try:
+        note = {"session_id": evt.get("session_id") or "", "cwd": cwd,
+                "transcript_path": evt.get("transcript_path") or "",
+                "fired": bool(fired), "ts": time.time()}
+        path = _ledger().session_note_path(cwd)
+        tmp = "%s.%d" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(note, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
 
 
 def read_first_latch(path):
@@ -660,6 +679,108 @@ def handle_session_start(evt, agent):
     sys.exit(0)
 
 
+# ---------------------------------------------------------------- stop nudge
+
+def nudge_unwritten_handoff(evt):
+    """Warn mode: the trigger fired this session, the turn is ending, and no
+    handoff was written since. Block the stop once so the agent writes it now
+    instead of the notice being lost with the turn. Claude only (Codex Stop
+    hooks cannot block)."""
+    if evt.get("stop_hook_active") or detect_agent(evt, []) != "claude":
+        return
+    key = session_key(evt)
+    latch = latch_path(key) if key else None
+    if not latch or not os.path.exists(latch):
+        return
+    second = latch_path(key, 2)
+    if os.path.exists(second) and os.path.getsize(second) == 0:
+        return  # floor note: no handoff was asked for
+    cwd = evt.get("cwd") or os.getcwd()
+    if handoff_written_since(cwd, os.path.getmtime(latch) - 60):
+        return
+    try:
+        os.close(os.open(latch + ".nudged", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except OSError:
+        return  # nudged once already, or unwritable temp dir
+    print(json.dumps({"decision": "block", "reason": (
+        "[context-watch] The handoff notice fired in this session and no handoff has "
+        "been written since. Write it now per the `%s` skill: python3 %s new-path "
+        "<topic-slug> --json, fill the template, verify with resolve, then stop."
+        % (env("CONTEXT_WATCH_SKILL", "session-handoff"), LEDGER))}))
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------- opening-prompt routing
+
+JEV_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_MIN = 0.8  # confidence below which the router stays silent (skill default applies)
+
+
+def jev_handoff_route(prompt, handoffs, ask=None):
+    """Ask Jev whether the session's opening prompt continues one of the open
+    handoffs or is unrelated work. Returns (topic | "unrelated", confidence)
+    or None. ask(body) -> response dict is injectable for tests; the default
+    posts to TypeSafe with a 3 s timeout and fails open."""
+    key = env("TYPESAFE_API_KEY")
+    if env("CONTEXT_WATCH_JEV", "1") == "0" or not prompt.strip() or not (ask or key):
+        return None
+    criteria = {h["topic"]: (h.get("description") or h["topic"])[:200] for h in handoffs}
+    criteria["unrelated"] = "The prompt is a different, explicit task; it continues none of these."
+    body = {"model": "jev-latest", "state": {"user_prompt": prompt[:4000]},
+            "questions": {"route": {"type": "choice", "criteria": criteria, "instructions":
+                          "Which parked handoff does the user's opening prompt clearly continue "
+                          "or ask to resume? Choose unrelated unless one clearly matches."}}}
+    try:
+        if ask:
+            resp = ask(body)
+        else:
+            import urllib.request
+            req = urllib.request.Request(JEV_URL, json.dumps(body).encode(),
+                                         {"Authorization": "Bearer " + key,
+                                          "Content-Type": "application/json",
+                                          "User-Agent": "context-watch/1"})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                resp = json.load(r)
+        answer = resp["answers"]["route"]
+        choice, conf = answer["choice"], float(answer["confidence"])
+        if conf < JEV_MIN or choice not in criteria:
+            return None
+        return choice, conf
+    except Exception:  # ponytail: no network, 401, timeout, odd shape -> silent
+        return None
+
+
+def route_opening_prompt(evt, agent):
+    """First prompt of a session with open handoffs: tell the agent whether to
+    claim one or leave them alone, so it neither resumes unrelated work nor
+    asks which of one."""
+    cwd = evt.get("cwd") or os.getcwd()
+    try:
+        max_age = int(env("CONTEXT_WATCH_MAX_AGE_DAYS", "14"))
+    except ValueError:
+        max_age = 14
+    try:
+        handoffs = _ledger().scan(cwd, max_age)
+    except Exception:
+        return
+    if not handoffs:
+        return
+    hit = jev_handoff_route(str(evt.get("prompt") or ""), handoffs)
+    if not hit:
+        return
+    label = LABEL.get(agent, LABEL["claude"])
+    choice, conf = hit
+    if choice == "unrelated":
+        message = ("%s The opening request is unrelated to the open handoff(s) (%.2f): "
+                   "mention them in one sentence and do the user's task; do not claim or "
+                   "resume any of them." % (label, conf))
+    else:
+        message = ("%s The opening request continues open handoff `%s` (%.2f): claim and "
+                   "resume that one per the session-handoff skill without asking which."
+                   % (label, choice, conf))
+    emit(agent, "UserPromptSubmit", message, "warn")
+
+
 # ---------------------------------------------------------------- auto mode
 
 def handle_stop(evt):
@@ -667,6 +788,8 @@ def handle_stop(evt):
     trigger has fired and a handoff was written after it, type /clear and then
     "resume" into the pane, so the cleared session picks the handoff up."""
     pane = env("TMUX_PANE")
+    if not auto_mode_on():
+        nudge_unwritten_handoff(evt)
     if not auto_mode_on() or not pane or env("HANDOFF_AUTO_RUNNER"):
         sys.exit(0)  # the headless runner starts fresh sessions itself
     cwd = evt.get("cwd") or os.getcwd()
@@ -858,6 +981,8 @@ def main():
     model = model or tmodel
 
     if not breakdown or breakdown.get("occupancy", 0) <= 0:
+        if event_name == "UserPromptSubmit":
+            route_opening_prompt(evt, agent)  # no API call yet: the opening prompt
         sys.exit(0)
 
     pending, pending_raw = estimate_pending(evt)
@@ -877,6 +1002,7 @@ def main():
     occupancy = breakdown["occupancy"] + pending
 
     cwd = evt.get("cwd") or os.getcwd()
+    write_session_note(cwd, evt, os.path.exists(first))
     limit, source = resolve_threshold(model, window, cwd)
     if window_source == "reported":
         # Only a host-reported window is trusted for this cap: an assumed 200k
@@ -931,6 +1057,7 @@ def main():
         sys.exit(0)
     except Exception:
         pass
+    write_session_note(cwd, evt, not below_floor)
     if below_floor:
         # One note per session: occupy the second-notice latch too, so the
         # handoff never fires (and HANDOFF_AUTO cannot loop) until a compaction.

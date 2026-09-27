@@ -573,6 +573,83 @@ def main():
     check("auto-trigger-ends-turn", "end your turn" in p_auto_t.stdout
           and "type /clear" not in p_auto_t.stdout, "stdout=%r" % p_auto_t.stdout[:500])
 
+    # 13b. Stop nudge (warn mode): the trigger fired, the turn ends, no handoff
+    #      written -> block the stop once with a reminder; never twice, never
+    #      after the handoff exists, never for a floor note, never for Codex.
+    proj_n = os.path.join(tmp, "proj-nudge")
+    os.makedirs(os.path.join(proj_n, ".handoffs"))
+    sid_n = "verify-" + uuid.uuid4().hex[:8]
+    env_n = {"TMPDIR": latchdir, "CONTEXT_WATCH_AGENT": "claude"}
+    nudge_evt = {"hook_event_name": "Stop", "session_id": sid_n, "cwd": proj_n}
+    p_n = run_hook(nudge_evt, env_n)
+    check("stop-nudge-silent-before-fire", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n), "w") as f:
+        f.write("150000/130000/140000\n")
+    p_n = run_hook(nudge_evt, env_n)
+    check("stop-nudge-blocks-once", '"decision": "block"' in p_n.stdout
+          and "new-path" in p_n.stdout, "stdout=%r" % p_n.stdout[:300])
+    p_n = run_hook(nudge_evt, env_n)
+    check("stop-nudge-not-twice", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+    sid_n2 = "verify-" + uuid.uuid4().hex[:8]
+    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n2), "w") as f:
+        f.write("150000/130000/140000\n")
+    time.sleep(0.05)
+    with open(os.path.join(proj_n, ".handoffs", "20260927-0900-nudged.md"), "w") as f:
+        f.write("---\ntopic: nudged\nstatus: open\n---\n# Session Handoff\n")
+    p_n = run_hook(dict(nudge_evt, session_id=sid_n2), env_n)
+    check("stop-nudge-silent-after-handoff", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+    sid_n3 = "verify-" + uuid.uuid4().hex[:8]
+    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n3), "w") as f:
+        f.write("30000/25000/28000\n")
+    open(os.path.join(latchdir, "context-watch-%s.fired2" % sid_n3), "w").close()
+    p_n = run_hook(dict(nudge_evt, session_id=sid_n3, cwd=os.path.join(tmp, "proj-nudge-floor")), env_n)
+    check("stop-nudge-silent-floor-note", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+    sid_n4 = "verify-" + uuid.uuid4().hex[:8]
+    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n4), "w") as f:
+        f.write("150000/130000/140000\n")
+    p_n = run_hook(dict(nudge_evt, session_id=sid_n4), dict(env_n, CONTEXT_WATCH_AGENT="codex"))
+    check("stop-nudge-silent-codex", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+
+    # 13c. Opening-prompt routing through Jev: injectable ask(), confidence
+    #      floor, unknown choice, fail-open; and the hook is silent with
+    #      CONTEXT_WATCH_JEV=0 or no key.
+    sys.path.insert(0, os.path.dirname(PLUGIN))
+    import context_watch as cw
+    hs = [{"topic": "late-trigger", "description": "watcher fires late"},
+          {"topic": "startup-ctx", "description": "reduce startup context"}]
+    def fake(choice, conf):
+        return lambda body: {"answers": {"route": {"choice": choice, "confidence": conf}}}
+    check("jev-route-match", cw.jev_handoff_route("resume the late trigger work", hs, fake("late-trigger", 0.93))
+          == ("late-trigger", 0.93))
+    check("jev-route-unrelated", cw.jev_handoff_route("add a README badge", hs, fake("unrelated", 0.9))
+          == ("unrelated", 0.9))
+    check("jev-route-low-confidence", cw.jev_handoff_route("hmm", hs, fake("late-trigger", 0.5)) is None)
+    check("jev-route-unknown-choice", cw.jev_handoff_route("x", hs, fake("nope", 0.99)) is None)
+    def boom(body):
+        raise RuntimeError("down")
+    check("jev-route-fail-open", cw.jev_handoff_route("x", hs, boom) is None)
+    body_seen = {}
+    def capture(body):
+        body_seen.update(body); return {"answers": {"route": {"choice": "unrelated", "confidence": 0.9}}}
+    cw.jev_handoff_route("x", hs, capture)
+    check("jev-route-criteria", set(body_seen["questions"]["route"]["criteria"]) ==
+          {"late-trigger", "startup-ctx", "unrelated"}, "body=%r" % body_seen)
+    proj_j = os.path.join(tmp, "proj-jev")
+    os.makedirs(os.path.join(proj_j, ".handoffs"))
+    with open(os.path.join(proj_j, ".handoffs", "20260927-0900-late-trigger.md"), "w") as f:
+        f.write("---\ntopic: late-trigger\nstatus: open\ndescription: watcher fires late\n---\n# Session Handoff\n")
+    empty_tr = os.path.join(tmp, "empty-transcript.jsonl")
+    open(empty_tr, "w").close()
+    p_j = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "verify-jev", "cwd": proj_j,
+                    "transcript_path": empty_tr, "prompt": "resume the late trigger work"},
+                   {"TMPDIR": latchdir, "CONTEXT_WATCH_AGENT": "claude", "TYPESAFE_API_KEY": "k",
+                    "CONTEXT_WATCH_JEV": "0"})
+    check("jev-hook-off-silent", p_j.stdout.strip() == "", "stdout=%r" % p_j.stdout[:200])
+    p_j = run_hook({"hook_event_name": "UserPromptSubmit", "session_id": "verify-jev", "cwd": proj_j,
+                    "transcript_path": empty_tr, "prompt": "resume the late trigger work"},
+                   {"TMPDIR": latchdir, "CONTEXT_WATCH_AGENT": "claude", "TYPESAFE_API_KEY": ""})
+    check("jev-hook-no-key-silent", p_j.stdout.strip() == "", "stdout=%r" % p_j.stdout[:200])
+
     # 14. Stop hook (auto mode, tmux): after the trigger fired and a handoff was
     #     written, types /clear then "resume" into the pane, exactly once.
     bindir = os.path.join(tmp, "bin")
