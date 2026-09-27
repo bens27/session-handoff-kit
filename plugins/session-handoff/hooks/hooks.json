@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_watch.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py\"",
             "timeout": 20
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_watch.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py\"",
             "timeout": 20
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_watch.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py\"",
             "timeout": 10
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_watch.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py\"",
             "timeout": 10
           }
         ]

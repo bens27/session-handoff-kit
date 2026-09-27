@@ -9,8 +9,7 @@ import tempfile
 import time
 
 REPO = os.getcwd()
-PLUGIN = os.path.join(REPO, "plugins/session-handoff/hooks/handoff_ledger.py")
-CODEX = os.path.join(REPO, "codex/hooks/handoff_ledger.py")
+PLUGIN = os.path.join(REPO, "skills/session-handoff/hooks/handoff_ledger.py")
 PY = sys.executable
 
 failures = []
@@ -32,13 +31,12 @@ def run(args, cwd, env=None):
 
 
 def main():
-    for path in (PLUGIN, CODEX):
+    for path in (PLUGIN,):
         try:
             ast.parse(open(path).read())
             check("parse:" + os.path.relpath(path, REPO), True)
         except Exception as e:
             check("parse:" + os.path.relpath(path, REPO), False, str(e))
-    check("copies-identical", open(PLUGIN, "rb").read() == open(CODEX, "rb").read())
 
     tmp = tempfile.mkdtemp(prefix="ledger-verify-")
     hd = os.path.join(tmp, ".handoffs")
@@ -266,8 +264,7 @@ def main():
           set(generated.keys()) == set(["directory", "filename", "path", "created", "project", "git",
                                         "reason", "skills", "supersedes", "template"]),
           "keys=%r" % sorted(generated.keys()))
-    with open(os.path.join(REPO, "plugins", "session-handoff", "skills", "session-handoff",
-                           "handoff-template.md"), encoding="utf-8") as f:
+    with open(os.path.join(REPO, "skills", "session-handoff", "handoff-template.md"), encoding="utf-8") as f:
         check("new-path-json-template-is-skill-file", generated.get("template") == f.read(),
               "template=%r" % (generated.get("template") or "")[:80])
     check("new-path-json-directory-matches-save-path",

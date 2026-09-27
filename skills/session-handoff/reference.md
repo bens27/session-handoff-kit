@@ -1,7 +1,26 @@
 # Session Handoff — reference
 
-Loaded on demand by `SKILL.md`: read this when customizing the skill, or when
-running it without the hooks. Not needed for an ordinary handoff or resume.
+Loaded on demand by `SKILL.md`: read this when installing the hooks,
+customizing the skill, or running it without the hooks. Not needed for an
+ordinary handoff or resume.
+
+## Installing
+
+This folder is the whole product: put it wherever your agent loads skills
+(`~/.claude/skills/`, `~/.agents/skills/`, a project's skills folder; copy or
+symlink), then register the always-on hooks from that location:
+
+    python3 install.py              # Claude Code and Codex
+    python3 install.py claude       # or: codex
+    python3 install.py --uninstall  # remove them again
+
+It writes absolute paths to `hooks/context_watch.py` into
+`~/.claude/settings.json` and `~/.codex/hooks.json` (`$CLAUDE_CONFIG_DIR` /
+`$CODEX_HOME` respected), backs each file up first, leaves every other hook
+alone, and is safe to re-run; re-run it after moving this folder. Codex also
+needs hooks enabled and the changed hook re-approved: the installer prints
+those steps. Using the Claude Code plugin instead? It already registers the
+hooks; do not also run the installer, or the watcher runs twice.
 
 ## How SKILL.md is organized
 
@@ -50,8 +69,6 @@ Two things to know before you rewrite it:
   SPEC §7.4 appear somewhere in this skill directory. Dropping a section that
   SPEC names as shared will fail that gate — change SPEC §7.4 in the same
   commit if the change is deliberate.
-- The agent copy of this file is byte-identical across
-  `plugins/session-handoff/` and `codex/`, and that too is asserted. Edit both.
 
 ## Mechanics
 
@@ -73,7 +90,7 @@ Two things to know before you rewrite it:
   fresh handoff exists; headless, `context_watch.py auto [--max N]
   [--prompt TEXT] -- <agent command>` re-runs the agent until no new handoff
   is left. Precedence and the full knob
-  list are owner configuration, documented in the plugin README — the trigger
+  list are owner configuration, documented in the repository README — the trigger
   notice already tells this skill whether autoresume is active (§1).
 - In environments without hooks, this skill still works: run
   `python3 <hooks-dir>/handoff_ledger.py list [dir] --json --max-age-days <N>`

@@ -433,11 +433,11 @@ def supersede_candidates(root, git_position, topic):
 
 
 def read_template():
-    """handoff-template.md from the skill installed beside these hooks (plugin
-    and Codex layouts alike), so the agent never has to read a file outside
-    its working directory. "" when absent: the agent reads the file itself."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "skills",
-                        "session-handoff", "handoff-template.md")
+    """handoff-template.md from the skill folder these hooks live in, so the
+    agent never has to read a file outside its working directory. "" when
+    absent: the agent reads the file itself."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                        "handoff-template.md")
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()

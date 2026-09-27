@@ -9,7 +9,7 @@ import re
 import sys
 
 REPO = os.getcwd()
-AGENT_SKILL = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/SKILL.md")
+AGENT_SKILL = os.path.join(REPO, "skills/session-handoff/SKILL.md")
 CHAT_SKILL = os.path.join(REPO, "chat/session-handoff-chat/SKILL.md")
 
 FILES = {

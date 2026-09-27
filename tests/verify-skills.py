@@ -6,14 +6,12 @@ import re
 import sys
 
 REPO = os.getcwd()
-AGENT = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/SKILL.md")
-CODEX = os.path.join(REPO, "codex/skills/session-handoff/SKILL.md")
+AGENT = os.path.join(REPO, "skills/session-handoff/SKILL.md")
 CHAT = os.path.join(REPO, "chat/session-handoff-chat/SKILL.md")
 # The handoff document's shape lives in a bundled template beside each SKILL.md
 # so it can be rewritten on its own. A "skill" is therefore its directory, not
 # one file: shared-contract literals are asserted against SKILL.md + template.
-AGENT_TEMPLATE = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff/handoff-template.md")
-CODEX_TEMPLATE = os.path.join(REPO, "codex/skills/session-handoff/handoff-template.md")
+AGENT_TEMPLATE = os.path.join(REPO, "skills/session-handoff/handoff-template.md")
 CHAT_TEMPLATE = os.path.join(REPO, "chat/session-handoff-chat/handoff-template.md")
 PLUGIN_JSON = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
 SPEC = os.path.join(REPO, "SPEC.md")
@@ -47,7 +45,6 @@ def shared_contract_literals(spec):
 
 def main():
     a = open(AGENT).read()
-    c = open(CODEX).read()
     chat = open(CHAT).read()
     spec = open(SPEC).read()
     plugin_version = json.load(open(PLUGIN_JSON))["version"]
@@ -55,22 +52,18 @@ def main():
     for path, name in ((AGENT_TEMPLATE, "agent"), (CHAT_TEMPLATE, "chat")):
         check("%s-template-file-present" % name, os.path.exists(path),
               "%s is missing; SKILL.md delegates the document structure to it" % path)
-    if not all(os.path.exists(p) for p in (AGENT_TEMPLATE, CODEX_TEMPLATE, CHAT_TEMPLATE)):
+    if not all(os.path.exists(p) for p in (AGENT_TEMPLATE, CHAT_TEMPLATE)):
         print()
         print("FAILED: %d assertion(s): %s" % (len(failures), ", ".join(failures)))
         return 1
 
     a_tpl = open(AGENT_TEMPLATE).read()
-    c_tpl = open(CODEX_TEMPLATE).read()
     chat_tpl = open(CHAT_TEMPLATE).read()
 
     # Contract literals may live in either half of a skill directory.
     agent_skill = a + "\n" + a_tpl
     chat_skill = chat + "\n" + chat_tpl
 
-    check("agent-copies-identical", a == c)
-    check("agent-template-copies-identical", a_tpl == c_tpl,
-          "the codex mirror of handoff-template.md must be byte-identical")
     for text, tpl_name, name in ((a, "handoff-template.md", "agent"),
                                  (chat, "handoff-template.md", "chat")):
         check("%s-skill-references-template" % name, tpl_name in text,

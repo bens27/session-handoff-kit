@@ -3,6 +3,12 @@
 Deterministic context-usage watcher + structured handoff skill + open/resumed
 handoff ledger.
 
+The plugin is a thin wrapper: `skills/session-handoff/` is a symlink to the
+repo's skill folder (installs copy the target), and `hooks/hooks.json`
+registers `skills/session-handoff/hooks/context_watch.py`. Script paths below
+are relative to that skill folder. Without the plugin, the same folder plus
+its `install.py` does the same job for Claude Code and Codex.
+
 - **Watcher** (`hooks/context_watch.py` on `PostToolUse` + `UserPromptSubmit`):
   reads the session transcript's latest token usage and, once per session past
   the threshold, injects an instruction to invoke the `session-handoff` skill.

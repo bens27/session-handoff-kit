@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` plugin 0.10.3 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.11.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -87,12 +87,12 @@ conversationally or by standing convention; file-ledger fallback checks run
 
 | Component | Role |
 | --- | --- |
-| `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, shared verbatim between Claude Code and Codex. |
+| `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, used by both Claude Code and Codex from the skill folder. |
 | `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `claim`, `resume`, `supersede`, `abandon`, `save-path`, `new-path`). |
-| `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. |
+| `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. The folder also holds `hooks/` and `install.py`. |
 | `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
 | `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
-| Packaging | `.claude-plugin/marketplace.json` (kit root), plugin manifest, `.plugin` (Cowork), `.skill` (chat), `codex/install.sh`. |
+| Packaging | `.claude-plugin/marketplace.json` (kit root), plugin manifest, `.plugin` (Cowork), `.skill` (chat), `skills/session-handoff/install.py` (hook registration for Claude Code `settings.json` and Codex `hooks.json`). |
 
 ## 4. Measurement specification
 
@@ -489,8 +489,7 @@ asserts each literal appears in both skills. A skill here is its *directory* —
 structure was split out so it can be experimented with independently (§7.1);
 a literal satisfied by either half passes. The test additionally asserts that
 each `SKILL.md` still references its template (so an extracted template cannot
-be orphaned) and that the agent template is byte-identical across
-`plugins/session-handoff/` and `codex/`. The `session-handoff-chat` skill
+be orphaned). The `session-handoff-chat` skill
 version bumps by patch whenever the contract list changes.
 
 **Both skills must contain**
@@ -693,17 +692,25 @@ hooks fire before trusting the threshold there.
 
 ## 13. Installation summary
 
-**Claude Code:** `/plugin marketplace add <repo-or-path>` →
-`/plugin install session-handoff@session-handoff-kit`. Plugin ships hooks
-(`PostToolUse`, `UserPromptSubmit`, `SessionStart` via
-`${CLAUDE_PLUGIN_ROOT}`), both scripts, and the skill.
+**Skill folder (Claude Code, Codex):** copy or symlink
+`skills/session-handoff/` into a skills directory, then run
+`python3 <skill>/install.py [claude|codex] [--uninstall]`. It writes
+absolute-path hook entries into `~/.claude/settings.json` (`PostToolUse`,
+`UserPromptSubmit`, `SessionStart`, `Stop`) and `~/.codex/hooks.json`
+(`SessionStart`, `UserPromptSubmit`, `PostToolUse`, fanned into the first
+group), backing each up once; idempotent, other hooks untouched. Skill-scoped
+`hooks` frontmatter is not used: it activates only after the skill is invoked,
+and the watcher must run from session start.
+**Claude Code plugin:** `/plugin marketplace add <repo-or-path>` →
+`/plugin install session-handoff@session-handoff-kit`. The plugin symlinks
+the skill folder (installs copy the target) and registers the same hooks via
+`${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py`. Use
+the plugin or the installer, not both.
 **Cowork:** open `session-handoff.plugin` (built from a checkout with
 `bash scripts/package.sh`), one-click install (shared plugin schema).
-**Codex:** `bash codex/install.sh` — copies both scripts to
-`~/.codex/hooks/`, the skill to `~/.codex/skills/session-handoff/`,
-generates `~/.codex/hooks.json` with absolute paths (wrapped shape; some
+**Codex:** after `install.py codex` (wrapped `hooks.json` shape; some
 builds expect event names at top level — remove the wrapper if hooks don't
-register), then enable `[features] hooks = true` (older builds:
+register), enable `[features] hooks = true` (older builds:
 `codex_hooks = true`).
 **Chat:** save `session-handoff-chat.skill` (built by the same
 `scripts/package.sh`; or upload in Settings → Capabilities).
@@ -734,22 +741,22 @@ session-handoff-kit/
 ├── .claude-plugin/marketplace.json      kit as a Claude Code marketplace
 ├── scripts/package.sh                   builds dist/session-handoff.plugin
 │                                        and dist/session-handoff-chat.skill
-├── plugins/session-handoff/             Claude Code + Cowork plugin
+├── skills/session-handoff/              the product (Claude Code + Codex)
+│   ├── SKILL.md                         trigger, naming, resume
+│   ├── handoff-template.md              the document's shape, swappable alone
+│   ├── reference.md                     install, customizing, mechanics
+│   ├── install.py                       registers/removes the hooks
+│   └── hooks/
+│       ├── context_watch.py             watcher + announcer + analytics
+│       ├── handoff_ledger.py            state and chain tracking
+│       └── thresholds.example.json      per-model starting values
+├── plugins/session-handoff/             Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json       manifest; no "hooks" field (hooks.json
 │   │                                    is auto-loaded; re-referencing it is a
 │   │                                    duplicate-hooks install error)
 │   ├── README.md                        plugin-level install notes
-│   ├── hooks/hooks.json                 PostToolUse, UserPromptSubmit, SessionStart
-│   ├── hooks/context_watch.py           watcher + announcer + analytics (shared)
-│   ├── hooks/handoff_ledger.py          state and chain tracking (shared)
-│   ├── hooks/thresholds.example.json    per-model starting values
-│   └── skills/session-handoff/
-│       ├── SKILL.md                     trigger, naming, resume, mechanics
-│       └── handoff-template.md          the document's shape, swappable alone
-├── codex/
-│   ├── install.sh
-│   ├── hooks/                           same two scripts + thresholds example
-│   └── skills/session-handoff/          same skill (both files, byte-identical)
+│   ├── hooks/hooks.json                 PostToolUse, UserPromptSubmit, SessionStart, Stop
+│   └── skills/session-handoff           symlink -> ../../../skills/session-handoff
 ├── chat/session-handoff-chat/
 │   ├── SKILL.md                         chat-surface skill
 │   └── handoff-template.md              chat document shape, swappable alone

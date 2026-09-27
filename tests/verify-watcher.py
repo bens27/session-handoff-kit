@@ -15,8 +15,7 @@ import time
 import uuid
 
 REPO = os.getcwd()
-PLUGIN = os.path.join(REPO, "plugins/session-handoff/hooks/context_watch.py")
-CODEX = os.path.join(REPO, "codex/hooks/context_watch.py")
+PLUGIN = os.path.join(REPO, "skills/session-handoff/hooks/context_watch.py")
 PY = sys.executable
 
 failures = []
@@ -48,14 +47,13 @@ def run_hook(event, env_extra, script=PLUGIN):
 
 
 def main():
-    # 1. Both copies parse and are byte-identical
-    for path in (PLUGIN, CODEX):
+    # 1. The script parses
+    for path in (PLUGIN,):
         try:
             ast.parse(open(path).read())
             check("parse:" + os.path.relpath(path, REPO), True)
         except Exception as e:
             check("parse:" + os.path.relpath(path, REPO), False, str(e))
-    check("copies-identical", open(PLUGIN, "rb").read() == open(CODEX, "rb").read())
 
     tmp = tempfile.mkdtemp(prefix="cw-verify-")
     latchdir = os.path.join(tmp, "latches")

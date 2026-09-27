@@ -23,15 +23,34 @@ job on request; file-ledger fallback conventions use
 
 | Environment | Install | Trigger |
 | --- | --- | --- |
-| **Claude Code** (CLI, VS Code, JetBrains) | Add this repo as a plugin marketplace, install the `session-handoff` plugin | Deterministic — hook fires at the token threshold |
+| **Claude Code** (CLI, VS Code, JetBrains) | Copy `skills/session-handoff/` into your skills folder and run its `install.py`, or install the `session-handoff` plugin from this repo's marketplace | Deterministic — hook fires at the token threshold |
 | **Claude Cowork** (desktop) | Open `session-handoff.plugin` and click install | Skill on request; hooks are in-schema but rarely exercised in Cowork — treat the threshold trigger as best-effort there |
-| **Codex CLI** (terminal, IDE extension) | Run `codex/install.sh` | Deterministic — same hook, behind Codex's experimental hooks feature flag |
+| **Codex CLI** (terminal, IDE extension) | Copy `skills/session-handoff/` into your skills folder and run `install.py codex` | Deterministic — same hook, behind Codex's experimental hooks feature flag |
 | **Claude chat** (claude.ai web, **Claude Desktop**, mobile apps) | Open `session-handoff-chat.skill` and click **Save skill** (or upload in Settings → Capabilities) | Conversational — no token feed exists in chat |
 | **Claude chat, before your first message** | Load `chrome-extension/` unpacked in Chrome/Edge (see its README) | Pre-fills — optionally auto-sends — the handoff-check prompt into every new chat |
 
-### Claude Code
+### Skill folder + installer (Claude Code and Codex)
 
-From a hosted copy (push this folder to GitHub first):
+`skills/session-handoff/` is the whole product: skill, template, and hook
+scripts. Put it where your agent loads skills, then register the always-on
+hooks from there:
+
+```
+cp -R skills/session-handoff ~/.agents/skills/     # or ~/.claude/skills/, or symlink
+python3 ~/.agents/skills/session-handoff/install.py            # Claude Code + Codex
+python3 ~/.agents/skills/session-handoff/install.py claude     # or: codex
+python3 ~/.agents/skills/session-handoff/install.py --uninstall
+```
+
+The installer writes absolute paths into `~/.claude/settings.json` and
+`~/.codex/hooks.json`, backs each up once, leaves other hooks alone, and is
+safe to re-run (re-run it after moving the folder). Use either this or the
+plugin below, not both: both would run the watcher twice.
+
+### Claude Code plugin
+
+The plugin is a thin wrapper around the same folder (it symlinks
+`skills/session-handoff/`; plugin installs copy the target). From a hosted copy (push this folder to GitHub first):
 
 ```
 /plugin marketplace add <your-github-user>/<repo>
@@ -75,7 +94,7 @@ tmux, or for Codex, use the headless runner, which re-launches the agent with
 `resume` for as long as each run leaves a new open handoff:
 
 ```
-python3 plugins/session-handoff/hooks/context_watch.py auto --max 10 --prompt "build X" -- claude -p
+python3 skills/session-handoff/hooks/context_watch.py auto --max 10 --prompt "build X" -- claude -p
 ```
 
 If the first notice is ignored, a SECOND NOTICE fires. It waits until the
@@ -111,7 +130,7 @@ threshold as a bonus if it fires.
 ### Codex CLI
 
 ```
-bash codex/install.sh
+python3 ~/.agents/skills/session-handoff/install.py codex
 ```
 
 Then enable hooks in `~/.codex/config.toml` (`[features]` → `hooks = true`;
@@ -124,13 +143,13 @@ older builds used `codex_hooks = true`). The hook reads the session rollout's
   `hooks.json` shape has varied across versions (see the installer's note).
 - **Codex only executes the FIRST hook group per event.** If `hooks.json`
   already has an entry for an event you care about (e.g. installed
-  alongside another tool), `install.sh` merges into that first group via a
-  stdin fan-out (`merge_hooks.py`) rather than appending a second group —
-  appending silently never runs.
+  alongside another tool), `install.py` merges into that first group via a
+  stdin fan-out rather than appending a second group — appending silently
+  never runs. `--uninstall` restores the original command.
 - **Hooks are trusted by command hash, not just installed.** Codex stores a
   `trusted_hash` per hook in `config.toml`'s `[hooks.state]`, keyed by
   `hooks.json path : event : group index : hook index`. Editing the command
-  text (including via `merge_hooks.py`) invalidates that hash — the hook is
+  text (including via `install.py`) invalidates that hash — the hook is
   then silently skipped, not errored, until re-approved: either launch
   `codex` interactively once, or pass `--dangerously-bypass-hook-trust` to
   `codex exec` for headless/automated invocations.
@@ -283,21 +302,20 @@ the tail of large transcripts so it stays fast on every tool call.
 ```
 session-handoff-kit/
 ├── .claude-plugin/marketplace.json      # makes this repo a Claude Code marketplace
-├── plugins/session-handoff/             # Claude Code + Cowork plugin
+├── skills/session-handoff/              # the product: one folder for Claude Code + Codex
+│   ├── SKILL.md                         # trigger, naming, resume
+│   ├── handoff-template.md              # the handoff's shape — edit this to experiment
+│   ├── reference.md                     # installing, customizing, mechanics; read on demand
+│   ├── install.py                       # registers/removes the hooks (settings.json, hooks.json)
+│   └── hooks/
+│       ├── context_watch.py             # the unified watcher
+│       ├── handoff_ledger.py            # tracks handoff state and chains
+│       └── thresholds.example.json      # sample per-model threshold config
+├── plugins/session-handoff/             # Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json
-│   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart
-│   ├── hooks/context_watch.py           # the unified watcher (also used by Codex)
-│   ├── hooks/handoff_ledger.py          # tracks handoff state and chains
-│   ├── hooks/thresholds.example.json    # sample per-model threshold config
-│   └── skills/session-handoff/
-│       ├── SKILL.md                     # trigger, naming, resume
-│       ├── handoff-template.md          # the handoff's shape — edit this to experiment
-│       └── reference.md                 # customizing + mechanics, read on demand
+│   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop
+│   └── skills/session-handoff -> ../../../skills/session-handoff
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
-├── codex/
-│   ├── install.sh                       # copies hook + skill, generates ~/.codex/hooks.json
-│   ├── hooks/context_watch.py           # same script
-│   └── skills/session-handoff/          # same three files (portable, byte-identical)
 ├── chat/session-handoff-chat/
 │   ├── SKILL.md                         # behavioral variant for claude.ai
 │   └── handoff-template.md              # chat handoff shape — edit this to experiment
@@ -318,9 +336,8 @@ Two constraints when you rewrite it:
 - **Keep the front matter.** The hooks parse it. `status: open` and the
   one-line `description:` are what the session-start announcer reads; drop them
   and your handoffs stop being announced.
-- **The agent template is mirrored.** `plugins/session-handoff/` and `codex/`
-  must stay byte-identical; `tests/verify-skills.py` asserts it, along with the
-  shared agent/chat section contract in SPEC §7.4. Run `python3
+- **Keep the shared sections.** `tests/verify-skills.py` asserts the shared
+  agent/chat section contract in SPEC §7.4. Run `python3
   tests/verify-skills.py` after editing.
 
 ## What "useful on any environment" means

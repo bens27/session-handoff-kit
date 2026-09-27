@@ -16,6 +16,49 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def check_installer():
+    """install.py against scratch config dirs: preserves foreign hooks, is
+    idempotent, fans into Codex's first group, and uninstall restores."""
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="install-verify-")
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=os.path.join(tmp, "claude"),
+               CODEX_HOME=os.path.join(tmp, "codex"))
+    os.makedirs(env["CLAUDE_CONFIG_DIR"]); os.makedirs(env["CODEX_HOME"])
+    claude_p = os.path.join(env["CLAUDE_CONFIG_DIR"], "settings.json")
+    codex_p = os.path.join(env["CODEX_HOME"], "hooks.json")
+    foreign = {"type": "command", "command": "echo other"}
+    claude_before = {"model": "x", "hooks": {"Stop": [{"hooks": [foreign]}], "StopFailure": []}}
+    codex_before = {"hooks": {"SessionStart": [{"hooks": [dict(foreign)]}]}}
+    json.dump(claude_before, open(claude_p, "w"))
+    json.dump(codex_before, open(codex_p, "w"))
+    inst = os.path.join(REPO, "skills/session-handoff/install.py")
+    watcher = os.path.join(REPO, "skills/session-handoff/hooks/context_watch.py")
+
+    def run(*args):
+        p = subprocess.run([sys.executable, inst] + list(args), env=env,
+                           capture_output=True, text=True, timeout=30)
+        check("install%s-exit0" % "".join(args), p.returncode == 0, p.stderr[:300])
+
+    run(); first = (open(claude_p).read(), open(codex_p).read())
+    run(); second = (open(claude_p).read(), open(codex_p).read())
+    check("install-idempotent", first == second)
+    c, x = json.loads(second[0]), json.loads(second[1])
+    cmds = [h["command"] for g in c["hooks"].values() for e in g for h in e["hooks"]]
+    check("install-claude-all-events", all(
+        any(watcher in h["command"] for e in c["hooks"].get(ev, []) for h in e["hooks"])
+        for ev in ("PostToolUse", "UserPromptSubmit", "SessionStart", "Stop")), repr(cmds))
+    check("install-claude-keeps-foreign", "echo other" in cmds and c.get("model") == "x")
+    ss = x["hooks"]["SessionStart"]
+    check("install-codex-fans-into-first-group",
+          len(ss) == 1 and "echo other" in ss[0]["hooks"][0]["command"]
+          and watcher in ss[0]["hooks"][0]["command"], repr(ss))
+    run("--uninstall")
+    check("uninstall-restores-claude", json.load(open(claude_p)) == claude_before)
+    # (the fanned-in hook keeps its raised timeout; harmless)
+    check("uninstall-restores-codex", json.load(open(codex_p))["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "echo other",
+          open(codex_p).read()[:300])
+
+
 def main():
     # 1. hooks.json: Claude Code plugin schema requires event maps nested under
     #    a top-level "hooks" key (docs: code.claude.com/docs/en/plugins-reference).
@@ -32,7 +75,7 @@ def main():
     if isinstance(inner, dict):
         for evt in ("PostToolUse", "UserPromptSubmit", "SessionStart"):
             entries = inner.get(evt) or []
-            ok = any("context_watch.py" in h.get("command", "") and "${CLAUDE_PLUGIN_ROOT}" in h.get("command", "")
+            ok = any("${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py" in h.get("command", "")
                      for e in entries for h in e.get("hooks", []))
             check("hooks-event-%s" % evt, ok, "missing or wrong command wiring for %s" % evt)
 
@@ -80,6 +123,15 @@ def main():
                       "zip %s lacks %s; members=%r" % (os.path.relpath(art, REPO), member_needle, names[:10]))
         gi = open(os.path.join(REPO, ".gitignore")).read() if os.path.isfile(os.path.join(REPO, ".gitignore")) else ""
         check("dist-gitignored", "dist" in gi, ".gitignore must exclude dist/")
+
+    # 3b. The plugin carries the skill folder by symlink (plugin installs copy
+    #     the target), so there is one source of truth for skill and hooks.
+    link = os.path.join(REPO, "plugins/session-handoff/skills/session-handoff")
+    check("plugin-skill-is-symlink-to-skill-folder",
+          os.path.islink(link) and os.path.realpath(link) == os.path.realpath(
+              os.path.join(REPO, "skills/session-handoff")))
+
+    check_installer()
 
     # 4. Root README layout must mention the actually-shipped files.
     readme = open(os.path.join(REPO, "README.md")).read()
