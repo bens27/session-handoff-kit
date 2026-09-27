@@ -72,6 +72,7 @@ since the first notice (latch files in the temp directory); a drop below 50%
 of it (compaction) re-arms both.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -118,6 +119,16 @@ def _ledger():
         sys.path.insert(0, here)
     import handoff_ledger
     return handoff_ledger
+
+
+def session_key(evt):
+    """The session id, else a hash of the transcript path, so sessions whose
+    host omits the id never share one latch; None when neither is known."""
+    sid = str(evt.get("session_id") or "").strip()
+    if sid:
+        return sid
+    tp = evt.get("transcript_path") or ""
+    return "t-" + hashlib.sha1(tp.encode("utf-8", "replace")).hexdigest()[:16] if tp else None
 
 
 def latch_path(session_id, stage=1):
@@ -251,10 +262,31 @@ def codex_usage(entries):
 
 
 def _looks_base64(s):
-    if len(s) < BASE64_MIN or " " in s[:BASE64_MIN]:
+    """Real base64 (standard or URL-safe) of binary data, not merely a long
+    unbroken word: it mixes upper, lower and digits and uses the non-alnum
+    alphabet ('+/' or '-_') somewhere in the first kilobyte."""
+    if len(s) < BASE64_MIN:
         return False
-    head = s[:BASE64_MIN].replace("\n", "")
-    return all(c.isalnum() or c in "+/=" for c in head)
+    head = s[:BASE64_MIN].replace("\n", "").replace("\r", "")
+    if not all(c.isalnum() or c in "+/=-_" for c in head):
+        return False
+    return (any(c in "+/-_" for c in head) and any(c.isupper() for c in head)
+            and any(c.islower() for c in head) and any(c.isdigit() for c in head))
+
+
+def _is_media_block(d):
+    """A recognized media envelope: MCP/Claude {type: image|audio, data | source:
+    {type: base64, data}} with a matching mime, or OpenAI {input_audio: {data}}."""
+    kind = str(d.get("type") or "").lower()
+    if kind in ("image", "audio"):
+        mime = d.get("mimeType") or d.get("mime_type") or d.get("media_type") or ""
+        if isinstance(d.get("data"), str) and str(mime).split("/")[0].lower() in (kind, ""):
+            return True
+        src = d.get("source")
+        if isinstance(src, dict) and src.get("type") == "base64" and isinstance(src.get("data"), str):
+            return True
+    audio = d.get("input_audio")
+    return isinstance(audio, dict) and isinstance(audio.get("data"), str)
 
 
 def _context_tokens(obj):
@@ -264,6 +296,8 @@ def _context_tokens(obj):
     if isinstance(obj, str):
         return IMAGE_TOKENS if _looks_base64(obj) else len(obj) // 4
     if isinstance(obj, dict):
+        if _is_media_block(obj):
+            return IMAGE_TOKENS
         return sum(_context_tokens(v) for k, v in obj.items() if k not in NOT_IN_CONTEXT_KEYS)
     if isinstance(obj, list):
         return sum(_context_tokens(v) for v in obj)
@@ -527,8 +561,9 @@ def handle_stop(evt):
         sys.exit(0)  # the headless runner starts fresh sessions itself
     cwd = evt.get("cwd") or os.getcwd()
     counter = auto_count_path(cwd)
-    latch = latch_path(evt.get("session_id") or "unknown")
-    if not os.path.exists(latch):
+    key = session_key(evt)
+    latch = latch_path(key) if key else None
+    if not latch or not os.path.exists(latch):
         try:
             os.remove(counter)  # a turn ended without the trigger: real progress
         except OSError:
@@ -682,7 +717,9 @@ def main():
     if event_name not in ("PostToolUse", "UserPromptSubmit"):
         sys.exit(0)
 
-    session_id = str(evt.get("session_id") or "unknown")
+    session_id = session_key(evt)
+    if not session_id:
+        sys.exit(0)
     first, second = latch_path(session_id), latch_path(session_id, 2)
 
     try:

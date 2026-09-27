@@ -4,6 +4,7 @@
 Runs context_watch.py as a subprocess against synthetic transcripts and
 asserts the fixed behaviors. Run from the repo root (worktree)."""
 import ast
+import base64
 import json
 import os
 import shutil
@@ -195,10 +196,10 @@ def main():
     with open(small_t, "w") as f:
         f.write(json.dumps({"message": {"model": "claude-opus-4",
                                         "usage": {"input_tokens": 90000}}}) + "\n")
-    def pending_for(response):
+    def pending_for(response, key="tool_response", event="PostToolUse"):
         log_p = os.path.join(tmp, "events-pending-%s.jsonl" % uuid.uuid4().hex[:6])
-        run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
-                  "transcript_path": small_t, "cwd": tmp, "tool_response": response},
+        run_hook({"hook_event_name": event, "session_id": "verify-" + uuid.uuid4().hex[:8],
+                  "transcript_path": small_t, "cwd": tmp, key: response},
                  {"CONTEXT_WATCH_TOKENS": "90000", "CONTEXT_WATCH_LOG": log_p,
                   "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir})
         return json.loads(open(log_p).read().splitlines()[-1])
@@ -209,6 +210,27 @@ def main():
     check("pending-skips-originalFile", rec["pending_estimate"] < 200, "record=%r" % rec)
     rec = pending_for({"type": "image", "data": "QUJD" * 50000})
     check("pending-base64-flat", 1600 <= rec["pending_estimate"] < 1700, "record=%r" % rec)
+    # A long unbroken word is text, not media; real base64 is flat-priced.
+    rec = pending_for("T" * 520000, key="prompt", event="UserPromptSubmit")
+    check("pending-long-word-prompt-is-text",
+          rec["pending_estimate"] == 130000 and rec["pending_raw"] == 130000, "record=%r" % rec)
+    rec = pending_for({"stdout": "T" * 520000})
+    check("pending-long-word-tool-is-text",
+          rec["pending_estimate"] == 25000 and rec["pending_raw"] == 130000, "record=%r" % rec)
+    rec = pending_for({"stdout": base64.b64encode(os.urandom(300000)).decode()})
+    check("pending-real-base64-flat", rec["pending_raw"] == 1600, "record=%r" % rec)
+    rec = pending_for({"stdout": "QUJD" * 50000})
+    check("pending-plain-alnum-is-text", rec["pending_raw"] == 50000, "record=%r" % rec)
+    # 5d. Sessions without an id get a per-transcript latch, not one shared latch.
+    id_less = []
+    for n in ("a", "b"):
+        tp = os.path.join(tmp, "idless-%s.jsonl" % n)
+        shutil.copyfile(transcript, tp)
+        id_less.append(run_hook({"hook_event_name": "PostToolUse", "transcript_path": tp,
+                                 "cwd": tmp}, envx))
+    check("idless-sessions-each-fire", all("[context-watch]" in q.stdout for q in id_less),
+          "stdout=%r" % [q.stdout[:100] for q in id_less])
+
 
     # 6. stats CLI honors CONTEXT_WATCH_LOG=0 as 'disabled', not a path
     env = dict(os.environ)
