@@ -100,6 +100,13 @@ not impose a token, dollar or wall-time budget; use host limits for those.
 python3 skills/session-handoff/hooks/context_watch.py auto --max 10 --prompt "build X" -- claude -p
 ```
 
+For Codex, keep the final `--` so the runner's next `resume` prompt is text
+rather than Codex's `exec resume` subcommand:
+
+```sh
+python3 skills/session-handoff/hooks/context_watch.py auto --max 2 --prompt "build X" -- codex exec --sandbox workspace-write --
+```
+
 If the first notice is ignored, a SECOND NOTICE fires. It waits until the
 model has taken a turn since the first notice, and until occupancy is a
 further quarter of the threshold past where the first fired (and at least
