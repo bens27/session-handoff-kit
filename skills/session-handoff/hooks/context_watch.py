@@ -606,7 +606,14 @@ def handle_session_start(evt, agent):
     """Announce open (untransferred) handoffs; enumerate and offer a choice when several exist."""
     source = evt.get("source") or ""
     if source == "compact":
-        note = (LABEL.get(agent, LABEL["claude"]) + " Context was just compacted in this "
+        from handoff_protocol import receipt_path
+        sid = session_key(evt)
+        if sid:
+            try:
+                os.unlink(receipt_path(_ledger().project_root(evt.get('cwd') or os.getcwd()), sid) + '.delivery')
+            except FileNotFoundError:
+                pass
+        note = ("handoff-status: Context was just compacted in this "
                 "session. The summary above is evidence, not the live state: re-verify the "
                 "workspace, revision and test results before relying on it. Compaction is "
                 "automatic pressure, not the user parking the work: if the user had "
@@ -621,8 +628,8 @@ def handle_session_start(evt, agent):
     from handoff_protocol import lookup, opening_action
     result = lookup(cwd)
     policy = opening_action('', result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
-    label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' else 'handoff-status:'
-    note = label + ' ' + policy + (' This status requires no skill loading.' if result['outcome'] != 'available' else '')
+    label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' and autoresume_on() else 'handoff-status:'
+    note = label + ' ' + policy + (' This status requires no skill loading.' if label == 'handoff-status:' else '')
     print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
     sys.exit(0)
 
@@ -653,10 +660,10 @@ def nudge_unwritten_handoff(evt):
     import shlex
     print(json.dumps({"decision": "block", "reason": (
         "[context-watch] No published checkpoint matches this session's trigger. "
-        "Preserve the draft and publish with python3 %s save --session %s "
+        "For the JSON draft format run python3 %s save --template. Preserve the draft and publish with python3 %s save --session %s "
         "--request-id <stable-checkpoint-id> --input <draft.json>; stop after outcome saved. "
         "If blocked, report the failed location and keep this session; do not clear."
-        % (shlex.quote(LEDGER), shlex.quote(key)))}))
+        % (shlex.quote(LEDGER), shlex.quote(LEDGER), shlex.quote(key)))}))
     sys.exit(0)
 
 
@@ -711,6 +718,7 @@ def route_opening_prompt(evt, agent):
     direct = re.fullmatch(r'(resume|retrieve) ([a-z0-9-]+|/[^\n]+)', prompt.strip(), re.I)
     result = lookup(cwd, topic=direct[2] if direct else None)
     policy = opening_action(prompt, result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
+    actionable = result['outcome'] == 'available'
     if policy is None and direct:
         policy = result['action']
     if policy is None:
@@ -719,12 +727,13 @@ def route_opening_prompt(evt, agent):
             return
         choice, conf = hit
         if choice == 'unrelated':
+            actionable = False
             policy = 'The opening request is unrelated to the open handoff(s); continue the user task and leave them open.'
         else:
             # A classifier selects context, not authorization. Retrieval stays read-only.
             selected = dict(result, items=[h for h in result['items'] if h['topic'] == choice], total=1)
             policy = opening_action('retrieve', selected, session_key(evt))
-    label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' else 'handoff-status:'
+    label = LABEL.get(agent, LABEL['claude']) if actionable else 'handoff-status:'
     emit(agent, 'UserPromptSubmit', label + ' ' + policy, 'warn')
 
 
@@ -867,7 +876,7 @@ def build_floor_message(floor, limit, model, agent):
         "context (~%s tokens at the first model call), so a handoff would free "
         "nothing and no handoff notice will be sent this session. Tell the user: "
         "set HANDOFF_AT (or CONTEXT_WATCH_TOKENS) to at least ~%s."
-        % (LABEL.get(agent, LABEL["claude"]), format(limit, ","),
+        % ("handoff-status:", format(limit, ","),
            model or "unknown model", format(floor, ","), format(int(suggest), ","))
     )
 
@@ -1063,5 +1072,5 @@ if __name__ == "__main__":
         raise
     except Exception as exc:
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext':
-            'context-watch: Handoff service unavailable (%s). Continue the current task; explicit retrieval is blocked. Restore the installed skill files/access; do not infer that no handoff exists.' % type(exc).__name__}}))
+            'handoff-status: Handoff service unavailable (%s). Continue the current task; explicit retrieval is blocked. Restore the installed skill files/access; do not infer that no handoff exists.' % type(exc).__name__}}))
         sys.exit(0)  # report failure without breaking the host session

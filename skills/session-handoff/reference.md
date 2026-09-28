@@ -31,7 +31,8 @@ history dump. The importable legacy resolver still returns the chain.
 
 `save --session ID --request-id ID --input draft.json` validates a JSON draft,
 publishes a complete checkpoint atomically, and retries identical requests
-without creating another checkpoint. The draft shape is in `handoff-template.md`.
+without creating another checkpoint. `save --template` emits a valid JSON draft; the field/body guidance is in
+`handoff-template.md`. `save --help` documents the schema without source inspection.
 A published successor's `predecessor` is the committed lineage record; readers
 suppress the predecessor even if a crash happens before any later operation.
 Sharing a branch does not establish predecessor identity.
@@ -46,7 +47,16 @@ or approval denial cannot be bypassed by filesystem fallback.
 marks transfer only after successful preparation. Required dependencies are
 fingerprinted; changed files require preparation again. `release PATH --owner ID`
 makes failed or abandoned preparation immediately available again. Leases last
-two hours. State mutations use sidecar locks and atomic replacement, and all
+two hours. Preparation returns a `delivery_receipt`. When its body/references
+remain in the same session context, pass `--reuse-receipt TOKEN` on continuation.
+The server checks session, checkpoint and reference fingerprints and a two-hour
+expiry; invalid receipts cause a full reload. Compaction hooks invalidate the
+receipt. Without hooks, omit it after compaction or any context loss. Retrieval
+writes only an ephemeral delivery cache; checkpoint state remains read-only.
+Reused content still counts toward the full package budget. Execution additionally
+counts the phase-specific `continuation.md` instructions.
+
+State mutations use sidecar locks and atomic replacement, and all
 callers respect ownership, including those omitting an owner.
 
 The complete serialized package, workflow instructions, and declared already-loaded
@@ -71,6 +81,16 @@ Resume telemetry defaults to `~/.context-watch/resumes.jsonl`; override with
 also disables it). Events contain IDs, outcomes, component sizes, and available
 host input samples, never checkpoint or verification contents. Startup baseline
 and later input samples are separate; cached tokens still occupy context.
+Events carry protocol `version` and `origin` (`live` by default; fixture callers
+set `CONTEXT_WATCH_ORIGIN=test`). Tests disable the production sinks.
+`python3 hooks/handoff_ledger.py report` returns bounded aggregates, excluding
+known tests and separating old records with unknown origin. It reads at most
+the last 2 MB and reports when the window is partial. Byte counts are not billing.
+
+Startup without autoresume emits only a neutral availability hint. Explicit
+retrieval/resumption delivers the selection and command. Compaction, threshold
+configuration, unrelated routing and service failures use `handoff-status:`;
+only actionable save/retrieve/resume messages activate the skill.
 
 Session notes are scoped to project plus session. Automatic completion uses
 session plus trigger identity on a validated publication. The headless runner

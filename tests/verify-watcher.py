@@ -18,6 +18,11 @@ REPO = os.getcwd()
 PLUGIN = os.path.join(REPO, "skills/session-handoff/hooks/context_watch.py")
 PY = sys.executable
 
+# All child processes, including fake runners, inherit an isolated telemetry policy.
+os.environ['CONTEXT_WATCH_RESUME_LOG'] = '0'
+os.environ['CONTEXT_WATCH_LOG'] = '0'
+os.environ['CONTEXT_WATCH_ORIGIN'] = 'test'
+
 failures = []
 
 STARTUP_CLAUDE = json.dumps({"message": {"model": "claude-opus-4", "usage": {"input_tokens": 20000}}}) + "\n"
@@ -411,13 +416,13 @@ def main():
         ev = {"hook_event_name": "SessionStart", "source": src, "cwd": proj,
               "session_id": "verify-ss"}
         p5 = run_hook(ev, {"TMPDIR": latchdir})
-        announced = "demo-topic" in p5.stdout
+        announced = "open handoff(s) available" in p5.stdout
         check("announcer-source-%s" % src, p5.returncode == 0 and announced == expect_announce,
               "rc=%d stdout=%r" % (p5.returncode, p5.stdout[:200]))
         if src == "compact":
             check("compaction-note", "evidence, not the live state" in p5.stdout,
                   "stdout=%r" % p5.stdout[:300])
-    p_single_ended = run_hook({"hook_event_name": "SessionStart", "source": "startup",
+    p_single_ended = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "retrieve",
                                "cwd": proj, "session_id": "verify-ss-ended"},
                               {"TMPDIR": latchdir})
     check("announcer-ended-single",
@@ -431,7 +436,7 @@ def main():
         f.write("---\ntopic: first\ncreated: 2026-08-10T08:30\nstatus: open\n---\n# Session Handoff — first\n")
     with open(os.path.join(proj_multi, ".handoffs", "second.md"), "w") as f:
         f.write("---\ntopic: second\ncreated: 2026-08-11T14:45\nstatus: open\n---\n# Session Handoff — second\n")
-    p_multi_ended = run_hook({"hook_event_name": "SessionStart", "source": "startup",
+    p_multi_ended = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "retrieve",
                               "cwd": proj_multi, "session_id": "verify-multi-ended"},
                              {"TMPDIR": latchdir})
     check("announcer-ended-multi",
@@ -473,7 +478,8 @@ def main():
           "rc=%d stdout=%r" % (p_desc_ar.returncode, p_desc_ar.stdout[:500]))
     p_desc = run_hook(ev_desc, {"TMPDIR": latchdir})
     check("announcer-description-no-autoresume",
-          p_desc.returncode == 0 and "descdemo" in p_desc.stdout
+          p_desc.returncode == 0 and "1 open handoff(s) available" in p_desc.stdout
+          and "unmistakable demo description" not in p_desc.stdout
           and "without asking" not in p_desc.stdout
           and "First load exactly these skills" not in p_desc.stdout,
           "rc=%d stdout=%r" % (p_desc.returncode, p_desc.stdout[:500]))
@@ -485,7 +491,7 @@ def main():
         f.write("---\ntopic: skillsdemo\nstatus: open\nskills: tdd, dataviz\n---\n# Session Handoff — skillsdemo\n")
     ev_skills = {"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_skills,
                  "session_id": "verify-skills"}
-    p_skills = run_hook(ev_skills, {"TMPDIR": latchdir})
+    p_skills = run_hook(dict(ev_skills, hook_event_name="UserPromptSubmit", prompt="retrieve"), {"TMPDIR": latchdir})
     check("announcer-claim-owner", "prepare" in p_skills.stdout
           and "--session verify-skills" in p_skills.stdout,
           "stdout=%r" % p_skills.stdout[:900])
@@ -556,7 +562,7 @@ def main():
         cx_note = json.loads(p_cx_ss.stdout)["hookSpecificOutput"]["additionalContext"]
     except Exception:
         cx_note = ""
-    check("codex-sessionstart-json-label", cx_note.startswith("context-watch:"),
+    check("codex-sessionstart-json-label", cx_note.startswith("handoff-status:"),
           "stdout=%r" % p_cx_ss.stdout[:300])
 
     # 12. Announcer: cap at 5 listed, count the rest, mention hidden stale ones.
@@ -569,7 +575,7 @@ def main():
     with open(stale, "w") as f:
         f.write("---\ntopic: ancient\nstatus: open\n---\n# Session Handoff\n")
     os.utime(stale, (time.time() - 90 * 86400.0,) * 2)
-    p_many = run_hook({"hook_event_name": "SessionStart", "source": "startup", "cwd": proj_many,
+    p_many = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "retrieve", "cwd": proj_many,
                        "session_id": "verify-many"}, {"TMPDIR": latchdir})
     check("announcer-caps-listing", "8 open handoffs" in p_many.stdout and "5) t3" in p_many.stdout
           and "6)" not in p_many.stdout and "and 3 more" in p_many.stdout,

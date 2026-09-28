@@ -641,11 +641,11 @@ def mark_superseded(path):
 
 def _cli(argv):
     if not argv or argv[0] in ('--help', '-h'):
-        print('Preferred workflow: lookup | save | prepare | verify | acknowledge | history.\nRun a command with --help for arguments. Legacy interfaces below:')
+        print('Preferred workflow: lookup | save | prepare | verify | acknowledge | history | report.\nRun a command with --help for arguments. Legacy interfaces below:')
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
-    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history"):
+    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history", "report"):
         from handoff_protocol import cli
         return cli(argv)
     if cmd == "list":

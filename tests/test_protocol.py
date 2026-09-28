@@ -20,7 +20,7 @@ class ProtocolTests(unittest.TestCase):
         self.root.mkdir()
         self.hd = self.root / '.handoffs'
         self.hd.mkdir()
-        self.env = dict(os.environ, HOME=self.tmp.name, CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
+        self.env = dict(os.environ, HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
 
     def cli(self, *args, input=None, ok=True):
         p = subprocess.run([sys.executable, str(LEDGER), *map(str, args)],
@@ -49,6 +49,79 @@ class ProtocolTests(unittest.TestCase):
         doc.update(extra)
         return self.cli('save', '--session', 'one', '--request-id', request,
                         input=json.dumps(doc))
+
+    def test_informational_hooks_do_not_activate_handoff_skill(self):
+        self.put()
+        compact = json.dumps(self.hook('SessionStart', source='compact'))
+        startup = json.dumps(self.hook('SessionStart', source='startup'))
+        for response in (compact, startup):
+            self.assertNotIn('[context-watch]', response)
+            self.assertNotIn('context-watch:', response)
+        self.assertNotIn(' prepare ', startup)
+        routed = json.dumps(self.hook('UserPromptSubmit', prompt='retrieve'))
+        self.assertIn(' prepare ', routed)
+        self.assertIn('[context-watch]', routed)
+        trace = self.root / 'floor.jsonl'
+        trace.write_text(json.dumps({'message': {'model': 'test', 'usage': {'input_tokens': 40000}}}) + '\n')
+        self.env['HANDOFF_AT'] = '20000'
+        floor = json.dumps(self.hook('PostToolUse', session='floor-neutral', transcript_path=str(trace)))
+        self.assertIn('startup', floor)
+        self.assertNotIn('[context-watch]', floor)
+        self.assertNotIn('context-watch:', floor)
+
+    def test_resume_reuses_only_valid_same_context_delivery(self):
+        ref = self.root / 'required.md'
+        ref.write_text('Important constraint.\n')
+        p = self.put(fields='references: required.md')
+        first = json.loads(self.cli('prepare', p, '--session', 'one').stdout)
+        token = first['delivery_receipt']
+        reused = json.loads(self.cli('prepare', p, '--session', 'one', '--execute',
+                                     '--reuse-receipt', token).stdout)
+        self.assertEqual(reused['outcome'], 'prepared')
+        self.assertNotIn('body', reused)
+        self.assertEqual(reused['references'], [])
+        self.assertGreater(reused['metrics']['reused_bytes'], 0)
+        self.cli('release', p, '--owner', 'one')
+        other = json.loads(self.cli('prepare', p, '--session', 'two', '--reuse-receipt', token).stdout)
+        self.assertIn('body', other)
+        ref.write_text('Changed constraint.\n')
+        changed = json.loads(self.cli('prepare', p, '--session', 'one', '--reuse-receipt', token).stdout)
+        self.assertIn('Changed constraint.', changed['references'][0]['text'])
+        fresh = changed['delivery_receipt']
+        self.hook('SessionStart', source='compact')
+        compacted = json.loads(self.cli('prepare', p, '--session', 'one', '--reuse-receipt', fresh).stdout)
+        self.assertIn('body', compacted)
+
+    def test_telemetry_report_separates_fixture_and_unknown_records(self):
+        log = self.root / 'metrics.jsonl'
+        records = [
+            {'operation': 'save', 'outcome': 'saved', 'session_id': 'verify-old'},
+            {'operation': 'prepare', 'outcome': 'retrieved', 'session_id': 'legacy'},
+            {'operation': 'save', 'outcome': 'saved', 'origin': 'test', 'version': '0.12.0'},
+            {'operation': 'prepare', 'outcome': 'prepared', 'origin': 'live', 'version': '0.12.0',
+             'metrics': {'package_bytes': 1000}},
+        ]
+        log.write_text(''.join(json.dumps(r) + '\n' for r in records))
+        result = json.loads(self.cli('report', '--log', log).stdout)
+        self.assertEqual(result['excluded_tests'], 2)
+        self.assertEqual(result['unclassified'], 1)
+        self.assertEqual(result['live_records'], 1)
+        self.assertEqual(result['groups'][0]['package_bytes'], 1000)
+        self.assertNotIn('session_id', json.dumps(result))
+
+    def test_report_without_a_log_returns_explicit_absence(self):
+        result = json.loads(self.cli('report', '--log', self.root / 'missing.jsonl').stdout)
+        self.assertEqual(result['outcome'], 'no-data')
+        self.assertIn('No telemetry', result['action'])
+
+    def test_save_help_and_template_are_sufficient_to_publish(self):
+        help_text = self.cli('save', '--help').stdout
+        self.assertIn('--template', help_text)
+        draft = json.loads(self.cli('save', '--template').stdout)
+        self.assertIn('## Objective', draft['body'])
+        saved = json.loads(self.cli('save', '--session', 'one', '--request-id', 'from-help',
+                                    input=json.dumps(draft)).stdout)
+        self.assertEqual(saved['outcome'], 'saved')
 
     def test_lookup_distinguishes_empty_closed_stale_and_claimed(self):
         self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'none')

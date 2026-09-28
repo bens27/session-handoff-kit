@@ -202,7 +202,7 @@ def reference(root, spec):
     return path + '#L%d-L%d' % (first, last), b''.join(parts).decode('utf-8')
 
 
-def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES):
+def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None):
     import time
     root = ledger.project_root(root)
     errors = []
@@ -240,10 +240,27 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             seen.add(canonical)
             dependencies[canonical] = hashlib.sha256(content.encode()).hexdigest()
             refs.append(dict(path=canonical, text=content))
+        # A server-stored receipt plus possession of its opaque token binds reuse
+        # to a previous delivery, this session, and unchanged content.
+        reference_fingerprints = dict(dependencies)
+        delivery_file = receipt_path(root, session) + '.delivery'
+        reused_bytes = 0
+        if reuse_receipt:
+            try:
+                delivered = json.loads(read_bounded(delivery_file))
+                if (delivered['token'] == reuse_receipt and delivered['path'] == path
+                        and delivered['fingerprint'] == fingerprint
+                        and delivered['references'] == reference_fingerprints
+                        and 0 <= time.time() - delivered['created'] < 7200):
+                    reused_bytes = len(body.encode()) + sum(len(r['text'].encode()) for r in refs)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass  # Missing, expired or changed delivery safely reloads in full.
         loaded = {os.path.realpath(p) for p in catalog.get('loaded', [])}
         # This workflow's loaded instruction file is part of the resume context budget.
         policy_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'SKILL.md'))
         policy_bytes = len(read_bounded(policy_path, PACKAGE_BYTES).encode())
+        if execute:
+            policy_bytes += len(read_bounded(os.path.join(os.path.dirname(policy_path), 'continuation.md'), PACKAGE_BYTES).encode())
         loaded.add(policy_path)
         omitted_skills = 0
         if execute:
@@ -272,14 +289,21 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                       verify_required=bool(fm.get('verify')) if execute else False,
                       workspace=ledger.claim_report(path) if execute else [],
                       optional_references=ledger._split_csv(fm.get('optional_references', ''))[:8])
+        import uuid
+        delivery_token = uuid.uuid4().hex
+        result['delivery_receipt'] = delivery_token
+        if reused_bytes:
+            del result['body']
+            result['references'] = []
+            result['reused_from'] = reuse_receipt
         # JSON overhead counts too. Loaded skills still consume context even though not re-emitted.
         existing_bytes = sum(len(read_bounded(p, PACKAGE_BYTES).encode()) for p in (loaded & seen) - {policy_path})
         result['metrics'] = dict(body_bytes=len(body.encode()), reference_bytes=sum(len(r['text'].encode()) for r in refs),
                                  skill_bytes=sum(len(s['text'].encode()) for s in skills),
-                                 already_loaded_bytes=existing_bytes, deduplicated_skills=omitted_skills,
+                                 already_loaded_bytes=existing_bytes, reused_bytes=reused_bytes, deduplicated_skills=omitted_skills,
                                  token_estimate_method='UTF-8 bytes / 4; estimate, not tokenizer measurement', budget_bytes=budget)
         result['metrics']['workflow_bytes'] = policy_bytes
-        size = len(json.dumps(result, ensure_ascii=False).encode()) + existing_bytes + policy_bytes + 128
+        size = len(json.dumps(result, ensure_ascii=False).encode()) + existing_bytes + reused_bytes + policy_bytes + 128
         result['metrics'].update(package_bytes=size, estimated_tokens=(size + 3) // 4)
         if size > budget:
             raise ValueError('Complete resume package exceeds %d bytes; use required excerpts and optional background or an explicitly approved larger --budget-bytes.' % budget)
@@ -295,6 +319,13 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                 except OSError:
                     ledger._set_fields(path, [], ('claimed:', 'claim_owner:'))
                     raise
+        # Cache delivery metadata only; retrieval never mutates checkpoint state.
+        # Failure to cache cannot invalidate an otherwise successful preparation.
+        try:
+            write_json(delivery_file, dict(token=delivery_token, path=path, fingerprint=fingerprint,
+                       references=reference_fingerprints, created=time.time()))
+        except OSError:
+            result.pop('delivery_receipt', None)
         return result
     except (OSError, ValueError) as exc:
         return dict(outcome='needs-context', action=str(exc)[:700] + ' Preserve the checkpoint. Resolve the named dependency or explicitly authorize a budget exception; do not acknowledge or search unrelated history.')
@@ -390,6 +421,8 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     if result['outcome'] != 'available':
         return result['action']
     items = result['items']
+    if not prompt and not auto:
+        return '%d open handoff(s) available. Continue the current request; retrieve or resume explicitly when relevant.' % result['total']
     if not selected and result['total'] > 1 and not newest:
         return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (ended %s, %.0fd old): %s' % (i+1,h['topic'][:80],h['ended'][:32],h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'
     selected = selected or items[0]
@@ -402,8 +435,6 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     if execute:
         command += ' --execute'
     suffix = ' Prepare and verify, then acknowledge before continuing the authorized work.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
-    if not prompt and not auto:
-        return 'Open handoff available: %s — %s. For a retrieval request run %s.%s For unrelated work continue the user task and leave this handoff open.' % (selected['topic'][:80] + ' (ended ' + selected['ended'][:32] + ', %.0fd old)' % selected['age_days'], selected['description'][:240], command, suffix)
     return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + ('Fully automatic: newest of %d; proceed without asking. ' % result['total'] if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
 
 
@@ -421,6 +452,53 @@ def history(root, topic=None, offset=0, limit=10):
                 action='History is inspection only. Closed records are not automatically adopted.')
 
 
+def protocol_version():
+    import re
+    path = os.path.join(os.path.dirname(__file__), '..', 'SKILL.md')
+    match = re.search(r'version:\s*"([^"\n]+)"', read_bounded(path))
+    return match[1] if match else 'unknown'
+
+
+def telemetry_report(path):
+    """Bounded aggregate; legacy evidence is explicitly unclassified."""
+    from collections import defaultdict
+    groups = defaultdict(lambda: dict(count=0, package_bytes=0, reused_bytes=0))
+    excluded = unknown = live = invalid = 0
+    with open(path, 'rb') as f:
+        size = os.fstat(f.fileno()).st_size
+        truncated = size > 2_000_000
+        if truncated:
+            f.seek(-2_000_000, os.SEEK_END)
+            f.readline()
+        for line in f:
+            try:
+                r = json.loads(line)
+                if not isinstance(r, dict):
+                    raise ValueError('invalid record')
+                sid = str(r.get('session_id') or '')
+                if r.get('origin') == 'test' or sid.startswith('verify-') or sid == 'runner':
+                    excluded += 1
+                    continue
+                if r.get('origin') != 'live':
+                    unknown += 1
+                    continue
+                key = tuple(str(r.get(k, 'unknown'))[:64] for k in ('version', 'operation', 'outcome'))
+                if key not in groups and len(groups) >= 40:
+                    key = ('other', 'other', 'other')
+                metrics = r.get('metrics') or {}
+                values = {k: max(0, int(metrics.get(k, 0))) for k in ('package_bytes', 'reused_bytes')}
+                live += 1
+                groups[key]['count'] += 1
+                for k, value in values.items():
+                    groups[key][k] += value
+            except (ValueError, TypeError, AttributeError):
+                invalid += 1
+    return dict(outcome='report', live_records=live, excluded_tests=excluded,
+                unclassified=unknown, malformed=invalid, tail_only=truncated,
+                groups=[dict(version=k[0], operation=k[1], outcome=k[2], **v) for k, v in sorted(groups.items())],
+                note='Bytes are not billed tokens. Legacy origin is unknown; absent preparation records cannot establish savings.')
+
+
 def telemetry(operation, root, session, result):
     """Only component sizes and outcomes; never copy handoff or verification content."""
     import time
@@ -430,11 +508,11 @@ def telemetry(operation, root, session, result):
     path = os.path.expanduser(raw or '~/.context-watch/resumes.jsonl')
     note = ledger.read_session_note(root, session=session)
     record = dict(operation=operation, outcome=result['outcome'], timestamp=time.time(),
+                  origin=os.environ.get('CONTEXT_WATCH_ORIGIN', 'live'), version=protocol_version(),
                   project_id=hashlib.sha256(ledger.project_root(root).encode()).hexdigest()[:16],
                   session_id=session, metrics=result.get('metrics', {}),
                   startup_input_tokens=note.get('startup_input_tokens'),
-                  observed_input_tokens=note.get('observed_input_tokens'),
-                  context_note='Host samples may lag tool results. Cached input still occupies context; byte estimates are not billed tokens.')
+                  observed_input_tokens=note.get('observed_input_tokens'))
     try:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, 'a') as f:
@@ -446,21 +524,25 @@ def telemetry(operation, root, session, result):
 def cli(argv):
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
+    report_p = sub.add_parser('report', description='Summarize live resume metrics, excluding tests and separating legacy origin.')
+    report_p.add_argument('--log', default=os.path.expanduser('~/.context-watch/resumes.jsonl'))
     lookup_p = sub.add_parser('lookup')
     lookup_p.add_argument('root', nargs='?', default='.')
     lookup_p.add_argument('--max-age-days', type=int, default=14)
     lookup_p.add_argument('--offset', type=int, default=0)
     lookup_p.add_argument('--topic')
-    save_p = sub.add_parser('save')
+    save_p = sub.add_parser('save', description='Publish a JSON draft: topic (kebab-case), description, body (Markdown with Objective, Current state and Next steps headings). Optional: predecessor, skills, references, optional_references, verify, reason. Metadata is generated. Use --template for a valid draft; edit its facts before saving.')
     save_p.add_argument('root', nargs='?', default='.')
-    save_p.add_argument('--session', required=True)
-    save_p.add_argument('--request-id', required=True)
+    save_p.add_argument('--session')
+    save_p.add_argument('--request-id')
+    save_p.add_argument('--template', action='store_true', help='Print a valid JSON draft without writing a checkpoint')
     save_p.add_argument('--input', help='JSON draft path; default stdin')
     prepare_p = sub.add_parser('prepare')
     prepare_p.add_argument('path')
     prepare_p.add_argument('--root', default='.')
     prepare_p.add_argument('--session', required=True)
     prepare_p.add_argument('--execute', action='store_true')
+    prepare_p.add_argument('--reuse-receipt', help='Receipt from content still in this session context; omit after context loss')
     prepare_p.add_argument('--catalog', help='JSON installed skills mapping plus already-loaded canonical paths')
     prepare_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES)
     ack_p = sub.add_parser('acknowledge')
@@ -478,6 +560,22 @@ def cli(argv):
     history_p.add_argument('--offset', type=int, default=0)
     history_p.add_argument('--limit', type=int, default=10)
     a = p.parse_args(argv)
+    if a.command == 'report':
+        try:
+            result = telemetry_report(a.log)
+        except FileNotFoundError:
+            result = dict(outcome='no-data', action='No telemetry log exists; no delivery measurements are available.')
+        except OSError as exc:
+            result = dict(outcome='unavailable', action='Cannot read telemetry: ' + str(exc)[:300])
+        print(json.dumps(result))
+        return 1 if result['outcome'] == 'unavailable' else 0
+    if a.command == 'save':
+        if a.template:
+            print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
+                body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action.\n')))
+            return 0
+        if not a.session or not a.request_id:
+            p.error('save requires --session and --request-id; use save --template for the JSON draft')
     try:
         if a.command == 'history':
             result = history(a.root, a.topic, a.offset, a.limit)
@@ -485,7 +583,7 @@ def cli(argv):
             result = verify(a.path, a.root, a.session, a.timeout)
         elif a.command == 'prepare':
             catalog = json.loads(read_bounded(a.catalog)) if a.catalog else None
-            result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes)
+            result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
         elif a.command == 'acknowledge':
             result = acknowledge(a.path, a.root, a.session)
         elif a.command == 'save':

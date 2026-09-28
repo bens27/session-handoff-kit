@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.12.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.13.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -408,6 +408,21 @@ Resume telemetry records component sizes, outcome, IDs and available startup/
 later host input samples without recording contents. Cached input still occupies
 context; startup baseline is not attributed to handoff waste. Configure
 CONTEXT_WATCH_RESUME_LOG (0 disables); CONTEXT_WATCH_LOG=0 disables it too.
+Events identify version/origin; tests disable production sinks. `report` excludes
+known tests, separates legacy unknown-origin records, and bounds its read window.
+
+Without autoresume, startup gives a neutral availability hint; only an explicit
+retrieval/resume request gets detailed selection and commands. Informational
+compaction, floor, unrelated-work and error notices do not activate the skill.
+Save help and `save --template` expose the draft contract directly.
+
+A preparation response includes an opaque delivery receipt. `--reuse-receipt`
+can omit an unchanged body/reference payload already present in the same context.
+The server validates session, checkpoint/reference fingerprints and a two-hour
+expiry. Invalid receipts reload in full; compaction invalidates delivery state.
+Without hooks, callers discard receipts after context loss. Reused bytes remain
+in the package budget, as do the phase-specific continuation instructions.
+Retrieval caches delivery metadata without claiming or mutating the checkpoint.
 
 ### 7.4 Shared contract between the agent and chat skills
 

@@ -259,16 +259,18 @@ The preferred workflow is:
 ```sh
 python3 skills/session-handoff/hooks/handoff_ledger.py lookup
 python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION
-# After continuation is authorized:
-python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION --execute
+# After continuation is authorized, reuse content still in this context:
+python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION --execute --reuse-receipt RECEIPT
 python3 skills/session-handoff/hooks/handoff_ledger.py verify PATH --session SESSION
 python3 skills/session-handoff/hooks/handoff_ledger.py acknowledge PATH --session SESSION
-# At the next checkpoint:
+# At the next checkpoint, generate a draft and replace its example facts:
+python3 skills/session-handoff/hooks/handoff_ledger.py save --template
 python3 skills/session-handoff/hooks/handoff_ledger.py save --session SESSION --request-id CHECKPOINT --input draft.json
 ```
 
 Use the session ID printed by the hook. Run verify only when preparation says
-it is required. Supply an installed skill catalog when the checkpoint names
+it is required. Omit `--reuse-receipt` unless the preceding retrieval content
+is still in this session context; compaction invalidates it. Supply an installed skill catalog when the checkpoint names
 execution dependencies; see [the protocol reference](skills/session-handoff/reference.md).
 
 Save validates and atomically publishes a checkpoint. Identical retries are
@@ -283,6 +285,8 @@ out of context. Checkpoints are limited to 1,500 words / 24,000 bytes, with no
 minimum length. Verification preserves pipeline failures while keeping full
 output in a log and returning only a bounded excerpt. Resume metrics distinguish
 package sizes from host startup/input samples and never record checkpoint text.
+`handoff_ledger.py report` summarizes live records separately from tests and
+legacy records with unknown origin.
 
 `resolve` returns compact authoritative metadata; `history` provides paginated
 historical inspection. Legacy commands remain available, but automatic clearing
