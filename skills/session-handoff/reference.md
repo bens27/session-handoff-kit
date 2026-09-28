@@ -112,3 +112,19 @@ the publication ID to its content fingerprint. Until that receipt is durable,
 lookup reports `incomplete` and automatic clearing is blocked. Retrying the same
 request completes an interrupted receipt. Legacy checkpoints without publication
 IDs remain readable. Keep receipt sidecars with generated checkpoint files.
+
+
+## Integrity and cost controls
+
+Continuing an existing topic requires its authoritative `predecessor` path;
+a conflicting save returns that path without replacing the current checkpoint.
+Empty legacy files cannot be acknowledged. `CONTEXT_WATCH_JEV=1` explicitly opts
+into semantic routing, at most once per project/session; the default is local
+routing only. The automatic runner stops on child failure and returns exit 75
+when its positive run limit is exhausted. It has no aggregate spending or
+wall-time guarantee; enforce those through the host.
+
+Codex installation uses separate hook groups (verified on 0.157.1), preserving
+other commands' outputs, matchers and failure statuses. Upgrade older Codex builds
+before relying on this registration. Reinstalling an old fan-out restores the
+original command and may require native `/hooks` trust review.

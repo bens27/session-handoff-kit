@@ -20,8 +20,8 @@ import sys
 WATCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "context_watch.py")
 CMD = "python3 " + shlex.quote(WATCHER)
 MARKER = "context_watch.py"
-# Codex runs only the FIRST hook group per event (verified 0.145.0), so the
-# watcher is fanned into an existing first command rather than appended.
+# Recognize fan-outs written by older installers so upgrades restore the
+# original command. Current Codex runs independent matching hook groups.
 FANOUT = re.compile(r'^payload=\$\(cat\); printf %s "\$payload" \| (?P<base>.*); '
                     r'printf %s "\$payload" \| [^;]*context_watch\.py\S*$', re.S)
 
@@ -108,14 +108,9 @@ def codex(uninstall):
     strip(hooks)
     if not uninstall:
         for event, timeout in CODEX_EVENTS.items():
-            groups = hooks.setdefault(event, [])
-            if groups and groups[0].get("hooks"):
-                first = groups[0]["hooks"][0]
-                first["command"] = ('payload=$(cat); printf %%s "$payload" | (%s); '
-                                    'printf %%s "$payload" | %s' % (first["command"], CMD))
-                first["timeout"] = max(first.get("timeout", 10), timeout)
-            else:
-                groups[:] = [{"hooks": [{"type": "command", "command": CMD, "timeout": timeout}]}]
+            # Preserve foreign commands, matchers, outputs and exit statuses.
+            hooks.setdefault(event, []).append({
+                "hooks": [{"type": "command", "command": CMD, "timeout": timeout}]})
     save(path, data)
     print("%s Codex hooks: %s" % ("Removed" if uninstall else "Registered", path))
     if not uninstall:
@@ -123,7 +118,7 @@ def codex(uninstall):
   - hooks enabled in %s/config.toml:  [features] hooks = true
   - the changed hook re-approved: Codex trusts hooks by command hash and
     silently skips a changed one. Launch `codex` once and approve it
-    (headless: `codex exec --dangerously-bypass-hook-trust`).
+    using its native hook review.
   - optional: model_auto_compact_token_limit above the watcher threshold,
     so the handoff fires before auto-compaction.""" % home)
 

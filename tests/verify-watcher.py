@@ -650,6 +650,8 @@ def main():
     #      CONTEXT_WATCH_JEV=0 or no key.
     sys.path.insert(0, os.path.dirname(PLUGIN))
     import context_watch as cw
+    previous_jev = os.environ.get("CONTEXT_WATCH_JEV")
+    os.environ["CONTEXT_WATCH_JEV"] = "1"
     hs = [{"topic": "late-trigger", "description": "watcher fires late"},
           {"topic": "startup-ctx", "description": "reduce startup context"}]
     def fake(choice, conf):
@@ -669,6 +671,10 @@ def main():
     cw.jev_handoff_route("x", hs, capture)
     check("jev-route-criteria", set(body_seen["questions"]["route"]["criteria"]) ==
           {"late-trigger", "startup-ctx", "unrelated"}, "body=%r" % body_seen)
+    if previous_jev is None:
+        os.environ.pop("CONTEXT_WATCH_JEV", None)
+    else:
+        os.environ["CONTEXT_WATCH_JEV"] = previous_jev
     proj_j = os.path.join(tmp, "proj-jev")
     os.makedirs(os.path.join(proj_j, ".handoffs"))
     with open(os.path.join(proj_j, ".handoffs", "20260927-0900-late-trigger.md"), "w") as f:

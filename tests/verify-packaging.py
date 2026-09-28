@@ -18,7 +18,7 @@ def check(name, ok, detail=""):
 
 def check_installer():
     """install.py against scratch config dirs: preserves foreign hooks, is
-    idempotent, fans into Codex's first group, and uninstall restores."""
+    idempotent, keeps Codex hook groups independent, and uninstall restores."""
     import tempfile
     tmp = tempfile.mkdtemp(prefix="install-verify-")
     env = dict(os.environ, CLAUDE_CONFIG_DIR=os.path.join(tmp, "claude"),
@@ -49,12 +49,11 @@ def check_installer():
         for ev in ("PostToolUse", "UserPromptSubmit", "SessionStart", "Stop")), repr(cmds))
     check("install-claude-keeps-foreign", "echo other" in cmds and c.get("model") == "x")
     ss = x["hooks"]["SessionStart"]
-    check("install-codex-fans-into-first-group",
-          len(ss) == 1 and "echo other" in ss[0]["hooks"][0]["command"]
-          and watcher in ss[0]["hooks"][0]["command"], repr(ss))
+    check("install-codex-independent-groups",
+          len(ss) == 2 and ss[0] == codex_before["hooks"]["SessionStart"][0]
+          and watcher in ss[1]["hooks"][0]["command"], repr(ss))
     run("--uninstall")
     check("uninstall-restores-claude", json.load(open(claude_p)) == claude_before)
-    # (the fanned-in hook keeps its raised timeout; harmless)
     check("uninstall-restores-codex", json.load(open(codex_p))["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "echo other",
           open(codex_p).read()[:300])
 

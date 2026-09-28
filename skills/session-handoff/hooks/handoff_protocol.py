@@ -88,6 +88,9 @@ def save(root, session, request_id, document):
                 write_json(record['path'] + '.published', dict(checkpoint_id=identity, fingerprint=snapshot(record['path'])))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity, action='Checkpoint is published and discoverable; stop when handing off.')
         predecessor = document.get('predecessor')
+        current = ledger.resolve(topic, root)['authoritative']
+        if current and (not predecessor or os.path.realpath(os.path.expanduser(predecessor)) != os.path.realpath(current)):
+            return dict(outcome='conflict', path=current, action='This topic already has a checkpoint. Supply its authoritative path as predecessor to continue that lineage, or use a distinct topic for independent work.')
         if predecessor:
             predecessor = os.path.realpath(os.path.expanduser(predecessor))
             record = next((r for r in records if os.path.realpath(r['path']) == predecessor), None)
@@ -403,12 +406,21 @@ def verify(path, root, session, timeout=60):
                 action='Acknowledge the transfer.' if receipt['verified'] else 'Inspect the bounded failure excerpt or log; fix and retry, or release the claim. The handoff remains recoverable.')
 
 
+RETRIEVE_COMMANDS = frozenset(('retrieve', 'retrieve your handoff', 'retrieve handoff', 'show handoff', 'show the handoff'))
+RESUME_COMMANDS = frozenset(('resume', 'resume handoff', 'resume the handoff', 'continue the handoff'))
+
+
+def generic_intent(prompt):
+    normalized = prompt.strip().lower().rstrip('.!')
+    return 'retrieve' if normalized in RETRIEVE_COMMANDS else 'resume' if normalized in RESUME_COMMANDS else None
+
+
 def opening_action(prompt, result, session, auto=False, newest=False):
     """One authorization policy shared by startup and explicit opening commands."""
     import re
     normalized = prompt.strip().lower().rstrip('.!')
-    retrieve = normalized in ('retrieve', 'retrieve your handoff', 'retrieve handoff', 'show handoff', 'show the handoff')
-    resume = normalized in ('resume', 'resume handoff', 'resume the handoff', 'continue the handoff')
+    intent = generic_intent(prompt)
+    retrieve, resume = intent == 'retrieve', intent == 'resume'
     selected = None
     for item in result['items']:
         if normalized in ('resume ' + item['topic'].lower(), 'retrieve ' + item['topic'].lower()) or prompt.strip() in ('resume ' + item['path'], 'retrieve ' + item['path']):

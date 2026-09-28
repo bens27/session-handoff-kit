@@ -222,7 +222,9 @@ def _problems(text, fm):
         except ValueError:
             out.append("created %r is not ISO 8601" % created)
     body = text.split("\n---\n", 1)[1] if fm and "\n---\n" in text else ""
-    if body.strip():
+    if not body.strip():
+        out.append("checkpoint body is empty; preserve the incomplete file and finish its content")
+    else:
         for section in REQUIRED_SECTIONS:
             if not re.search(r"^## %s\s*$" % re.escape(section), body, re.M):
                 out.append("missing section '## %s'" % section)

@@ -91,7 +91,10 @@ agent never guesses them independently.
 a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
 is written (Claude Code hooks cannot clear a session themselves). Outside
 tmux, or for Codex, use the headless runner, which re-launches the agent with
-`resume` for as long as each run leaves a new open handoff:
+`resume` while successful runs leave a new open handoff. A nonzero child exit
+stops immediately and preserves the checkpoint. `--max` must be positive;
+exhaustion returns exit 75 (unfinished work), not success. The run count does
+not impose a token, dollar or wall-time budget; use host limits for those.
 
 ```
 python3 skills/session-handoff/hooks/context_watch.py auto --max 10 --prompt "build X" -- claude -p
@@ -137,28 +140,22 @@ Then enable hooks in `~/.codex/config.toml` (`[features]` → `hooks = true`;
 older builds used `codex_hooks = true`). The hook reads the session rollout's
 `token_count` events (`last_token_usage`, with the window taken from
 `model_context_window` when reported). Codex-specific notes (verified against
-0.145.0):
+0.157.1; upgrade older builds before relying on multiple hook groups):
 
-- Hooks are experimental and have been unavailable on Windows; the accepted
-  `hooks.json` shape has varied across versions (see the installer's note).
-- **Codex only executes the FIRST hook group per event.** If `hooks.json`
-  already has an entry for an event you care about (e.g. installed
-  alongside another tool), `install.py` merges into that first group via a
-  stdin fan-out rather than appending a second group — appending silently
-  never runs. `--uninstall` restores the original command.
-- **Hooks are trusted by command hash, not just installed.** Codex stores a
-  `trusted_hash` per hook in `config.toml`'s `[hooks.state]`, keyed by
-  `hooks.json path : event : group index : hook index`. Editing the command
-  text (including via `install.py`) invalidates that hash — the hook is
-  then silently skipped, not errored, until re-approved: either launch
-  `codex` interactively once, or pass `--dangerously-bypass-hook-trust` to
-  `codex exec` for headless/automated invocations.
+- **Hook commands stay independent.** The installer adds a separate group,
+  preserving other hooks' matchers, outputs and exit statuses. It unwraps
+  fan-outs made by older kit installers. Current Codex executes matching groups;
+  the old 0.145.0 compatibility workaround is no longer used.
+- **Installed hooks still require trust.** Review new or changed definitions
+  through Codex's native `/hooks` UI. Reinstalling a legacy fan-out changes
+  definitions and may require review again. See the
+  [official hook documentation](https://developers.openai.com/codex/hooks).
 - On `PostToolUse`, the notice goes out as JSON
   `hookSpecificOutput.additionalContext` with exit 0, so the tool result is
   kept (`CONTEXT_WATCH_MODE=block` sends `decision: block`, which replaces
   it). `UserPromptSubmit` uses plain stdout. Both are non-destructive.
-- The watcher only runs on `PostToolUse`, so it can only act *after* a tool
-  call completes. A model that does a large chunk of work in one big tool
+- Threshold checks run on `PostToolUse` and `UserPromptSubmit`. A tool-triggered
+  notice can only act after that tool call completes. A model that does a large chunk of work in one big tool
   call (e.g. a single `apply_patch` touching many files) can cross the
   threshold and finish the work in the same step — the hook still fires and
   a handoff still gets written, just after the work is already done rather
@@ -233,7 +230,7 @@ Other variables:
 | `CONTEXT_WATCH_RESERVE` | `20000` | When the host reports the window (Codex), caps the threshold at window − reserve so there is room to write the handoff |
 | `CONTEXT_WATCH_PENDING` | on | Adds an estimate (~3 chars/token, images/audio a flat 1,600 each) for the tool result or prompt already in the hook's stdin but not yet in any usage entry; set `0` to disable |
 | `CONTEXT_WATCH_THINKING` | largest response so far, ≤25k | Tokens assumed for the current response (thinking included), which is written to the transcript only after the hook returns; Claude only |
-| `CONTEXT_WATCH_JEV` | on | Asks Jev (TypeSafe System One, needs `TYPESAFE_API_KEY`) whether a session's opening prompt continues an open handoff and tells the agent to claim it or leave them alone; `0` to skip |
+| `CONTEXT_WATCH_JEV` | off | `1` opts into semantic routing through Jev (requires `TYPESAFE_API_KEY`), at most one attempt per project/session, including failures. Classification selects read-only context, never execution permission. Exact commands always route locally. |
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Per-trigger analytics (model, occupancy, cache-read share, threshold); `0` disables. Summarize with `python3 context_watch.py stats` |
 | `CONTEXT_WATCH_WINDOW` | `200000` | Used only by the PERCENT path; Codex reports its own window |
 | `CONTEXT_WATCH_SKILL` | `session-handoff` | Skill named in the injected instruction |

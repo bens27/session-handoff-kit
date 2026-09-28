@@ -7,7 +7,7 @@ description: >
   and compaction summaries do not activate this skill. Do not use for ordinary
   progress summaries, commit messages, status updates, or general memory.
 metadata:
-  version: "0.13.0"
+  version: "0.14.0"
 ---
 
 # Session Handoff
@@ -22,6 +22,8 @@ For installation/customization only, read `reference.md`.
 1. Finish the atomic action in flight, then read `handoff-template.md`.
    `python3 <ledger> save --template` prints a valid JSON draft. Replace its
    facts with the authorized objective, constraints, evidence and exact next step.
+   Continuing an existing topic requires its authoritative `predecessor` path;
+   use a distinct topic for independent work.
 2. Run `python3 <ledger> save --session <id> --request-id <checkpoint-id>
    --input <draft.json>`. Reuse the request ID only for an identical retry.
    Success requires `outcome: saved` and a path; metadata and publication are

@@ -34,6 +34,9 @@ jobs:
       - name: Verify deterministic protocol
         run: python3 tests/test_protocol.py
 
+      - name: Verify integrity and cost regressions
+        run: python3 tests/test_safety.py
+
       - name: Verify watcher
         run: python3 tests/verify-watcher.py
 

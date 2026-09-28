@@ -1,7 +1,7 @@
 # JSON draft for save
 
 Supply `topic`, a one-line `description`, and `body` containing the Markdown
-sections below. Optional fields are `predecessor` (explicit adopted path),
+sections below. Optional fields are `predecessor` (authoritative path; required when continuing an existing topic),
 `skills` (only required execution dependencies), `references` (required files
 or `path#L10-L30` excerpts), `optional_references` (background, not loaded),
 and `verify` (one relevant command). Arrays are accepted for skills/references.

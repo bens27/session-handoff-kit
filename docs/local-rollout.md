@@ -1,5 +1,12 @@
 # Updating local projects
 
+v0.14.0 fixes six reproduced integrity/cost defects. Semantic routing now requires
+explicit `CONTEXT_WATCH_JEV=1`; continuing an existing topic requires its
+`predecessor`; the automatic runner stops on failure and returns exit 75 on
+run-limit exhaustion. Codex installation preserves other hooks in separate
+groups (verified on 0.157.1). Old fan-out registrations need reinstallation and
+native trust review if definitions change.
+
 A release updates its checkout and archives. Copied plugins, vendored source and separate runtime profiles have their own update paths.
 
 ## Shared installation

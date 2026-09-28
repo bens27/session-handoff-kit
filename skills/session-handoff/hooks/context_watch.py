@@ -679,7 +679,7 @@ def jev_handoff_route(prompt, handoffs, ask=None):
     or None. ask(body) -> response dict is injectable for tests; the default
     posts to TypeSafe with a 3 s timeout and fails open."""
     key = env("TYPESAFE_API_KEY")
-    if env("CONTEXT_WATCH_JEV", "1") == "0" or not prompt.strip() or not (ask or key):
+    if not _truthy(env("CONTEXT_WATCH_JEV", "0")) or not prompt.strip() or not (ask or key):
         return None
     criteria = {h["topic"]: (h.get("description") or h["topic"])[:200] for h in handoffs}
     criteria["unrelated"] = "The prompt is a different, explicit task; it continues none of these."
@@ -712,17 +712,28 @@ def route_opening_prompt(evt, agent):
     claim one or leave them alone, so it neither resumes unrelated work nor
     asks which of one."""
     cwd = evt.get("cwd") or os.getcwd()
-    from handoff_protocol import lookup, opening_action
+    from handoff_protocol import lookup, opening_action, generic_intent
     prompt = str(evt.get('prompt') or '')
     import re
-    direct = re.fullmatch(r'(resume|retrieve) ([a-z0-9-]+|/[^\n]+)', prompt.strip(), re.I)
+    direct = None if generic_intent(prompt) else re.fullmatch(r'(resume|retrieve) ([a-z0-9-]+|/[^\n]+)', prompt.strip(), re.I)
     result = lookup(cwd, topic=direct[2] if direct else None)
     policy = opening_action(prompt, result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
     actionable = result['outcome'] == 'available'
     if policy is None and direct:
         policy = result['action']
     if policy is None:
-        hit = jev_handoff_route(prompt, result['items']) if result['outcome'] == 'available' else None
+        # Optional inference is attempted once per project/session, including failures.
+        # A missing transcript is not evidence that every prompt is a new session.
+        sid = session_key(evt)
+        if (result['outcome'] != 'available' or not sid or not prompt.strip()
+                or not _truthy(env('CONTEXT_WATCH_JEV', '0')) or not env('TYPESAFE_API_KEY')):
+            return
+        try:
+            os.close(os.open(_ledger().session_note_path(cwd, sid) + '.routed',
+                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except OSError:
+            return  # Cannot reserve a unique attempt: stay local, without retries.
+        hit = jev_handoff_route(prompt, result['items'])
         if not hit:
             return
         choice, conf = hit
@@ -812,6 +823,9 @@ def auto_cli(argv):
     except (IndexError, ValueError):
         print(auto_cli.__doc__, file=sys.stderr)
         return 2
+    if max_runs < 1:
+        print("[auto] --max must be a positive run limit", file=sys.stderr)
+        return 2
     child_env = dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1")
     rc = 0
     for run in range(1, max_runs + 1):
@@ -820,6 +834,9 @@ def auto_cli(argv):
         child_env['HANDOFF_RUN_ID'] = run_id
         print("[auto] run %d: %s" % (run, " ".join(cmd + [prompt])), file=sys.stderr)
         rc = subprocess.run(cmd + [prompt], env=child_env).returncode
+        if rc != 0:
+            print("[auto] child failed (exit %d); stopped without retry. Preserve this session's checkpoint and inspect the failure." % rc, file=sys.stderr)
+            return rc if rc > 0 else 128 - rc
         fresh = [h for h in _ledger().scan(os.getcwd(), 1)
                  if _ledger()._read_fm(h['path']).get('runner_id') == run_id
                  and _ledger()._read_fm(h['path']).get('checkpoint_id')]
@@ -832,7 +849,7 @@ def auto_cli(argv):
         prompt = "resume"
     print("[auto] stopped after --max %d runs; the newest handoff is still open" % max_runs,
           file=sys.stderr)
-    return rc
+    return 75  # run budget exhausted; an open checkpoint is not completed work
 
 
 # ---------------------------------------------------------------- emit

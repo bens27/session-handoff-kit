@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.13.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.14.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -381,14 +381,19 @@ AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newes
 An unrelated live task takes precedence and leaves checkpoints open.
 
 Exact retrieval/resume commands, topics and paths route without a model call.
-Only ambiguous prose may use the optional Jev classifier. Classification can
+Only ambiguous prose may use the Jev classifier with explicit
+`CONTEXT_WATCH_JEV=1` opt-in and a key. Reserve at most one attempt per
+project/session, including failed calls; reservation failure stays local. Classification can
 select context but does not grant execution authorization. Both hook branches
 use the same opening-action policy.
 
 Session notes are keyed by canonical project plus session identity. A trigger
 is satisfied only by a validated publication with matching session/trigger IDs;
 mtime changes to old or unrelated files do not count. The headless auto runner
-matches its own run ID. Failed saves never authorize automatic clear.
+matches its own run ID and stops immediately on a nonzero child exit. Its
+positive run limit returns exit 75 on exhaustion, retaining open work. A run
+count is not a token, dollar or wall-time budget. Failed saves never authorize
+automatic clear.
 
 ### 7.3b Context budgets and measurement
 
@@ -639,8 +644,11 @@ hooks fire before trusting the threshold there.
 `python3 <skill>/install.py [claude|codex] [--uninstall]`. It writes
 absolute-path hook entries into `~/.claude/settings.json` (`PostToolUse`,
 `UserPromptSubmit`, `SessionStart`, `Stop`) and `~/.codex/hooks.json`
-(`SessionStart`, `UserPromptSubmit`, `PostToolUse`, fanned into the first
-group), backing each up once; idempotent, other hooks untouched. Skill-scoped
+(`SessionStart`, `UserPromptSubmit`, `PostToolUse`, as separate groups),
+backing each up once; idempotent, foreign outputs and exit statuses preserved.
+Current Codex multi-group behavior was verified with 0.157.1; older first-group
+compatibility fan-outs are unwrapped during migration and require native trust
+review when definitions change. Skill-scoped
 `hooks` frontmatter is not used: it activates only after the skill is invoked,
 and the watcher must run from session start.
 **Claude Code plugin:** `/plugin marketplace add <repo-or-path>` →
@@ -713,3 +721,16 @@ the publication ID to its content fingerprint. Until that receipt is durable,
 lookup reports `incomplete` and automatic clearing is blocked. Retrying the same
 request completes an interrupted receipt. Legacy checkpoints without publication
 IDs remain readable. Keep receipt sidecars with generated checkpoint files.
+
+### Integrity and cost safeguards (0.14.0)
+
+Saving over any existing topic requires its authoritative path as `predecessor`;
+publication serializes this check and enforces predecessor ownership. Independent
+work uses another topic. Empty legacy documents are incomplete evidence and
+cannot pass preparation or acknowledgment. Generic retrieval/resume phrases are
+recognized before named-topic filtering.
+
+The integrity/cost regressions run through public CLI, hook and installer
+interfaces in `tests/test_safety.py`. Their external HTTP boundary is stubbed:
+CI incurs no semantic-routing requests. The kit cannot validate the semantic
+accuracy of a summary or guarantee total host spend.
