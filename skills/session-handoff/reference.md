@@ -22,78 +22,73 @@ needs hooks enabled and the changed hook re-approved: the installer prints
 those steps. Using the Claude Code plugin instead? It already registers the
 hooks; do not also run the installer, or the watcher runs twice.
 
-## How SKILL.md is organized
+## Protocol and limits
 
-Each numbered section below is a self-contained policy, deliberately bounded
-so it can be customized on its own without touching the others:
+The public CLI is `hooks/handoff_ledger.py`; `--help` lists commands. `lookup`
+returns explicit outcomes and five bounded summaries per page. `history` is
+paginated inspection. `resolve` returns authoritative metadata, not a full
+history dump. The importable legacy resolver still returns the chain.
 
-- **§1 Wind-down protocol** — what to do the moment the trigger fires.
-- **§2 Naming and location** — where handoff files live and how they are
-  named. Swap in your own naming convention here.
-- **§3 Document structure** — delegates to `handoff-template.md`. Replace the
-  body outline with your own preferred structure there, not here.
-- **§4 Resuming** — how announced handoffs are retrieved and adopted.
-- **§5 After resuming** — the extension point for actions that should always
-  run right after retrieval (loading another skill, running a status
-  command, opening a tracker). Empty by default; add yours here.
-- **Mechanics** (below, in this file) — how the hooks and ledger work.
+`save --session ID --request-id ID --input draft.json` validates a JSON draft,
+publishes a complete checkpoint atomically, and retries identical requests
+without creating another checkpoint. The draft shape is in `handoff-template.md`.
+A published successor's `predecessor` is the committed lineage record; readers
+suppress the predecessor even if a crash happens before any later operation.
+Sharing a branch does not establish predecessor identity.
 
-**Invariants the hooks depend on — keep these through any customization:**
-handoff files end in `.md` and live in the directory
-`handoff_ledger.py save-path` prints (`./.handoffs/` when it exists, else the
-per-project fallback `~/.claude/handoffs/<project>/`) — the ledger reads both
-locations plus legacy `./HANDOFF.md`; front matter is fenced by `---` lines; new handoffs carry `status: open` plus a one-line
-`description:`; state changes go through the ledger commands
-(`handoff_ledger.py claim|resume|supersede|abandon <path>`), never by hand-editing status
-on a whim. Everything else — section names, body structure, naming pattern,
-post-resume actions — is yours to change.
+Save tries the established directory, then the other supported location:
+project `.handoffs/` and `~/.claude/handoffs/<project-basename>/`. Both are read,
+as is legacy `HANDOFF.md`. Failure returns an explicit action; host sandbox
+or approval denial cannot be bypassed by filesystem fallback.
 
-## Why the template is a separate file
+`prepare TOPIC --session ID` retrieves only. `--execute` claims for preparation;
+`verify PATH --session ID` runs the recorded check; `acknowledge PATH --session ID`
+marks transfer only after successful preparation. Required dependencies are
+fingerprinted; changed files require preparation again. `release PATH --owner ID`
+makes failed or abandoned preparation immediately available again. Leases last
+two hours. State mutations use sidecar locks and atomic replacement, and all
+callers respect ownership, including those omitting an owner.
 
-The structure of a handoff can be experimented with on its own: rewrite
-`handoff-template.md` and nothing in `SKILL.md` changes. The front matter is
-the load-bearing part (`status: open` plus a one-line `description:` are what
-the session-start announcer reads); the body outline under it is yours to
-replace.
+The complete serialized package, workflow instructions, and declared already-loaded
+skills share a default 32,000-byte budget. The estimated token count is bytes/4,
+not a tokenizer measurement or billing total. A user-authorized `--budget-bytes`
+exception may raise the total; individual required files remain bounded.
+Checkpoints are at most 1,500 words / 24,000 bytes. At most eight required
+references and sixteen skill names are accepted for preparation. Required
+references support `path#LSTART-LEND`; background belongs in `optional_references`.
+Skill catalogs are caller-supplied installed paths, never downloaded dependencies.
+Aliases and already-loaded skills are deduplicated by canonical path. There is
+no minimum checkpoint length.
 
-## Customizing the template
+Verification uses Bash pipefail, a default 60-second timeout (configurable to
+one hour), a durable full log in `.verification/`, and at most 2,000 bytes of
+failure excerpt. It runs only for authorized execution preparation. The logged
+command must be reviewed against live task authorization like any other shell
+command; checkpoint text does not expand permissions.
 
-The body outline above is a default, not a contract — projects may substitute
-their own section set (e.g. add "Open questions", drop "Decisions"). Only the
-front-matter block is load-bearing; everything below the second `---` is
-free-form.
+Resume telemetry defaults to `~/.context-watch/resumes.jsonl`; override with
+`CONTEXT_WATCH_RESUME_LOG`, or disable with `0` (global `CONTEXT_WATCH_LOG=0`
+also disables it). Events contain IDs, outcomes, component sizes, and available
+host input samples, never checkpoint or verification contents. Startup baseline
+and later input samples are separate; cached tokens still occupy context.
 
-Two things to know before you rewrite it:
+Session notes are scoped to project plus session. Automatic completion uses
+session plus trigger identity on a validated publication. The headless runner
+adds a run identity; unrelated file modification never counts as a checkpoint.
+The skill remains usable without hooks: create one session UUID, use `lookup`,
+and follow the same save/prepare/verify/acknowledge workflow. Automatic clearing
+requires installed hooks or the runner.
 
-- `tests/verify-skills.py` asserts that the shared-contract literals listed in
-  SPEC §7.4 appear somewhere in this skill directory. Dropping a section that
-  SPEC names as shared will fail that gate — change SPEC §7.4 in the same
-  commit if the change is deliberate.
+## Customizing
 
-## Mechanics
+Keep the required Objective, Current state and Next steps sections and the
+shared contract in SPEC section 7.4. Optional body sections may be omitted.
+Change the draft template rather than duplicating workflow policy. Run the
+skill and protocol checks after changes. Explicit authorization and actual
+workspace evidence take precedence over stored instructions.
 
-- The deterministic trigger is a lifecycle hook (`hooks/context_watch.py`)
-  that reads the session's own transcript token usage and fires once per
-  session, with one SECOND NOTICE if the first is not acted on: only after
-  the model has taken a turn since the first, and once occupancy is a further
-  quarter of the threshold past it and at least 1.25x the threshold (both re-arm once occupancy falls below half the threshold); a
-  `SessionStart` hook runs the announcer. `hooks/handoff_ledger.py`
-  tracks open vs resumed vs superseded vs abandoned and can be run directly:
-  `list`, `resolve <topic-or-path>`, `claim <path> [--owner <id>]`,
-  `release <path> [--owner <id>]`, `resume <path> [--owner <id>]`,
-  `supersede <path> [--by <new-path>]`, `abandon <path>`, `save-path [dir]`, and
-  `new-path <topic> [dir] [--json]`.
-- Thresholds are absolute tokens per model, set by the operator via `HANDOFF_AT`
-  (per-launch) or the `CONTEXT_WATCH_*` knobs; `AUTORESUME=1` resumes a single
-  open handoff at session start without asking. `HANDOFF_AUTO=1` is fully
-  automatic: inside tmux a Stop hook types `/clear` then `resume` once a
-  fresh handoff exists; headless, `context_watch.py auto [--max N]
-  [--prompt TEXT] -- <agent command>` re-runs the agent until no new handoff
-  is left. Precedence and the full knob
-  list are owner configuration, documented in the repository README — the trigger
-  notice already tells this skill whether autoresume is active (§1).
-- In environments without hooks, this skill still works: run
-  `python3 <hooks-dir>/handoff_ledger.py list [dir] --json --max-age-days <N>`
-  whenever beginning work in a folder, using the same 14-day default as
-  `CONTEXT_WATCH_MAX_AGE_DAYS`; announce the JSON entries it returns exactly
-  like the hooked announcer does, and follow the same resume procedure.
+Publication receipts: generated checkpoints carry a `.published` sidecar binding
+the publication ID to its content fingerprint. Until that receipt is durable,
+lookup reports `incomplete` and automatic clearing is blocked. Retrying the same
+request completes an interrupted receipt. Legacy checkpoints without publication
+IDs remain readable. Keep receipt sidecars with generated checkpoint files.

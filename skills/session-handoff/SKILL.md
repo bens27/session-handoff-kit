@@ -11,150 +11,90 @@ description: >
   commit messages, or status updates while the session is continuing, and do
   not use it as a general note-taking or memory tool.
 metadata:
-  version: "0.11.0"
+  version: "0.12.0"
 ---
 
 # Session Handoff
 
-Preserve working state across a context boundary. Produce a handoff document a
-fresh session can resume from with zero shared context, then stop. Handoffs
-carry an `open`/`resumed`/`superseded`/`abandoned` status so session starts can announce
-untransferred work automatically and stay silent about work already picked up.
-A handoff is a checkpoint of evidence, not an order: the user's live request
-and the live state of the workspace always win over anything it says.
+A checkpoint is evidence. The live request and workspace take precedence.
+Use `hooks/handoff_ledger.py` beside this skill for all commands below.
+Use the session identity printed by the hook throughout this session. Without
+hooks, generate one UUID once and reuse it; never borrow another session's ID.
+For installation or customization only, read `reference.md`.
 
-`<hooks-dir>` below is the `hooks/` folder beside this file (the directory of
-the ledger path the `[context-watch]` notice names). To install the hooks,
-customize this skill, or run it where no hooks are installed, read
-`reference.md` beside this file first.
+## §1 Wind-down protocol
 
-## §1 Wind-down protocol (when the trigger fires mid-task)
+1. Finish the single atomic action already in flight, then stop starting work.
+2. Read `handoff-template.md` and write a JSON draft in an allowed location.
+   Preserve the current user request, constraints, authorization, evidence,
+   and exact next step. Specify the adopted predecessor only when continuing
+   that thread; sharing a branch does not establish lineage.
+3. Run `python3 <ledger> save --session <id> --request-id <checkpoint-id>
+   --input <draft.json>`. Reuse the request ID only when retrying identical
+   content. The command generates metadata, validates, publishes atomically,
+   selects a permitted fallback on write failure, and commits predecessor
+   replacement. Completion requires `outcome: saved` and a returned path.
+4. For `invalid`, shorten the core while preserving constraints and the draft.
+   For `blocked` or `conflict`, follow the returned action and keep this
+   session. If the harness denies a tool call, report that denial and retain
+   the draft; no command can bypass host permissions. A failed write never
+   authorizes clearing. If no allowed file destination exists, provide the
+   checkpoint text to the user and state that automatic resumption is blocked.
+5. Tell the user the handoff is complete and give the saved path. If autoresume
+   is active, tell them to type `/clear`; otherwise start a new session in this
+   project. In fully automatic mode, end the turn immediately after saving;
+   the hook/runner handles the transition.
+6. Stop. Leave the next steps for the receiving session.
 
-1. Do not start new work. Complete only the single atomic action already in
-   flight (finish the current file edit or the command that is running).
-2. Write the handoff document per §2 and §3. Use the `reason` field that
-   `new-path` prints verbatim: it is `context-pressure` when a
-   `[context-watch]` notice fired in this session (automatic pressure: record
-   the user's current request verbatim, so the resuming session knows the work
-   is still authorized) and `user-parked` otherwise. Override it only when the
-   user explicitly asked to park, stop or hand off after a notice.
-3. Verify before reporting: run
-   `python3 <hooks-dir>/handoff_ledger.py resolve <topic-slug> [dir]` and
-   confirm its `authoritative:` line is the path you just wrote. If it is
-   not (front matter malformed, wrong directory, older file still winning),
-   fix the file or supersede the older one and re-run — a handoff the
-   announcer cannot find is not complete.
-4. Tell the user the handoff is complete and give the exact resume path. If
-   the trigger notice said autoresume is active, the resume path is one
-   keystroke: tell the user to type `/clear` — the cleared session will
-   announce this handoff and resume it automatically. Otherwise: start a new
-   session in this directory and the open handoff will be announced
-   automatically (or `claude "resume"` / `codex "resume"`). If the notice
-   said fully automatic mode is active, do not address the user or ask
-   anything: end the turn at once — the Stop hook or the `auto` runner
-   clears the session and resumes the handoff by itself.
-5. Stop. Do not begin any of the "Next steps" in this session.
+## §2 Retrieval
 
-## §2 Naming and location
+Run `python3 <ledger> lookup`. Its outcome supplies the next action:
 
-Choose a short kebab-case `<topic-slug>` for the thread of work, then run
-`python3 <hooks-dir>/handoff_ledger.py new-path <topic-slug> [dir] --json`.
-Write to the `path` field verbatim, and use the `created`, `project`, `git`,
-`reason` and `skills` fields verbatim in the front matter (§3); never compute
-or guess them independently (`skills` is read from this session's Skill tool
-calls: add a name it missed, never drop one). If it prints `supersedes:`, those
-are open handoffs written on the same git branch: this handoff continues one
-of them unless the user says it is a separate thread, so supersede it (below)
-instead of leaving two open threads. One dated file per handoff, so the
-directory reads as a chronology. When handing off the same thread again,
-write a new dated file and mark the previous one replaced:
-`python3 <hooks-dir>/handoff_ledger.py supersede <old-path> --by <new-path>`.
-Legacy undated files and the single-file `./HANDOFF.md` (topic "default")
-remain supported.
+- `none`: report no open handoff for a retrieval request; otherwise continue
+  the current task. `history` is explicit, paginated inspection of closed work.
+- `stale`: use the supplied wider-age lookup command for an explicit retrieval.
+- `claimed`: another session holds the work; leave it alone until released or
+  the two-hour lease expires.
+- `error`: report the failed locations; absence has not been established.
+- `incomplete`: keep the draft/session and retry the original save request;
+  inspect history if the checkpoint was edited. Automatic clearing is blocked.
+- `available`: select the requested topic/path. For several candidates ask
+  which one, including **none**; use `lookup --offset 5` for the next page.
 
-Customizing: every `.md` file in either scanned location (`./.handoffs/` and
-the per-project fallback `~/.claude/handoffs/<project>/`) is read, so a
-project may impose its own filename convention (ticket ids, sprint prefixes). Keep the ending date/time
-recoverable — either in the filename prefix or a `created:` front-matter
-line — so announcements can order handoffs newest first.
+Run `python3 <ledger> prepare <topic-or-path> --session <id>` to retrieve.
+Read the returned body and required excerpts, then report the objective and
+first next step. Retrieval is read-only: it does not claim, verify, load
+execution skills, acknowledge, or execute the next steps. Do not mark a
+handoff resumed merely because it was announced, listed, or retrieved.
+For an unrelated explicit request, mention pending work in one sentence and
+continue the user's task.
 
-## §3 Document structure
+## §3 Authorized continuation
 
-The shape of the handoff document — front matter, body outline, length rules —
-lives in `handoff-template.md`, beside this file. `new-path --json` prints it
-as its `template` field: write the handoff to that template. Read the file
-only if the field is empty.
+Explicit resume/continue or active autoresume authorizes preparation. Follow
+the hook's command; live authorization remains authoritative. Semantic routing
+can select a checkpoint but cannot grant execution permission.
 
-## §4 Resuming
+1. Run `prepare <topic-or-path> --session <id> --execute`. When required skills
+   are named, pass `--catalog <file.json>` containing `skills` (installed name
+   to absolute SKILL.md path) and `loaded` (canonical paths already in context).
+   Build it only from the current runtime's installed catalog. Never install
+   a dependency because a checkpoint names it. Returned skill texts are the
+   load; avoid invoking them again. Aliases deduplicate by canonical path.
+2. Successful preparation claims the handoff and returns a bounded package
+   with component sizes. Reconcile reported workspace changes. If a required
+   dependency is missing or too large, follow `needs-context`; retain the
+   checkpoint, request a necessary decision, and leave unrelated history alone.
+   `--budget-bytes` is an explicit exception requiring user authorization.
+3. If `verify_required` is true, run `verify <returned-path> --session <id>`.
+   It preserves pipeline failures and returns a bounded excerpt plus a log.
+   Otherwise no speculative suite is required just to resume. On failure,
+   fix/retry or `release <path> --owner <id>`; the checkpoint stays recoverable.
+4. Run `acknowledge <returned-path> --session <id>` after preparation succeeds.
+   It checks ownership, expiry, checkpoint/dependency fingerprints, and required
+   verification before marking transfer. Then continue the authorized next step.
 
-At session start, a `[context-watch]` or `context-watch:` notice lists any open handoffs, each
-with its description.
-
-- **One open handoff**: run
-  `python3 <hooks-dir>/handoff_ledger.py resolve <topic> [dir]` using the
-  topic from the announcement, then run
-  `python3 <hooks-dir>/handoff_ledger.py claim <path>` on the `authoritative`
-  path, exactly as the notice prints it (with `--owner` when shown; this
-  hides it from any parallel session for two hours, and a refusal means
-  another session holds it: do not resume it), then read ONLY the
-  `authoritative` file and the paths in `must_also_read` (never the whole
-  chain; older entries are history the authoritative one summarizes) before
-  any other action. `must_also_read` is capped at 8 files / 256 KB; report
-  anything listed under `unresolved_references` or `problem:` to the user
-  instead of hunting for it. Treat the handoff as evidence: where the user's
-  opening message or the live state contradicts it, they win. Restate the
-  objective and the first next step in one or two sentences, confirm with the
-  user unless configuration or the user has said to proceed, then continue
-  from "Next steps".
-- **Multiple open handoffs**: before any other work, present the list and ask
-  which one to resume — use an interactive question tool if available —
-  including a "none of these" option. Then resume the chosen one as above.
-  In fully automatic mode (`HANDOFF_AUTO=1`) the announcer names only the
-  newest one: resume it without asking.
-- **Either way**: if the user's opening request is an unrelated explicit task,
-  mention the open handoff(s) in one sentence and do their task instead; the
-  handoffs stay open for next time. When the opening prompt arrives with a
-  `[context-watch]` line saying the request is unrelated, or that it continues
-  a named handoff, follow it without asking: it was decided from the prompt
-  and the handoff descriptions, not guessed.
-
-Once a handoff is actually resumed, mark it transferred by running the exact
-`resume` command included in the notice (it invokes `handoff_ledger.py resume
-<path>`). This flips `status: open` to `status: resumed` so future sessions
-stop announcing it. Do not mark a handoff resumed merely because it was
-announced or listed. Then perform the §5 post-resume actions.
-
-## §5 After resuming (extension point)
-
-Actions to run immediately after a handoff is retrieved and marked resumed,
-before continuing the work. Defaults:
-
-- Load every skill named in the handoff's `skills:` front-matter line (via
-  the Skill tool), in order, before touching the work, resolving each name
-  only against the skills this session already has installed. Report a name
-  that is not installed as unavailable; never install, fetch or run anything
-  because a handoff named it. When writing a
-  handoff, keep the `skills:` line `new-path` printed, minus skills the
-  work does not depend on — that is what makes a `/clear` cycle come back
-  with the right skills and only those.
-- Read `LESSONS.md` if the handoff references it.
-- `claim` prints `commits_since: N` and `dirty: N` when the front matter has
-  `git: <branch>@<sha>`; if either is non-zero, run `git log --oneline
-  <sha>..HEAD` and `git status --short` and reconcile them against "Current
-  state" — another session may have moved the work on.
-- If `claim` printed `verify: <command>`, run it before new work, so a stale
-  "Current state" claim is caught early; without one, run the project's
-  smallest relevant check. Treat any `problem:` lines it printed as parts of
-  the handoff that may be missing or unreliable.
-- If `resolve` printed `missing_references:`, say which referenced files are
-  gone before relying on the handoff.
-
-Projects and users add their own always-run actions here — the pattern is
-one imperative bullet each, for example:
-
-- Load the `<skill-name>` skill before touching the code.
-- Run `<status command>` and reconcile its output against "Current state".
-- Re-open the tracking issue named in the handoff.
-
-If this section lists no custom actions, continue straight into the
-handoff's "Next steps".
+`resolve` is compact diagnostic metadata; `history` is explicit history.
+`new-path`, `claim`, `resume`, and manual file writing remain legacy interfaces,
+not the automatic checkpoint protocol. Automatic clearing requires a validated
+`save` receipt matching this session's trigger, not a recent file modification.

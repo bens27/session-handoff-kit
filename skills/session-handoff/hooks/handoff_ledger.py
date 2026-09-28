@@ -25,16 +25,16 @@ A session started in a subfolder therefore still finds the project's handoffs.
 
 Subcommands:
   list [dir] [--json] [--max-age-days N]   print open handoffs (default dir: .)
-  resolve <topic-or-path> [dir] [--json]   print every handoff for a topic
-                                            oldest first, across all statuses
+  resolve <topic-or-path> [dir] [--json]   compact authoritative metadata;
+                                            use history for older records
   new-path <topic> [dir] [--json]          print deterministic path data for a new handoff
                                            (--json adds the handoff template)
   claim <path> [--owner X]                 stamp a handoff as being resumed now, so a
                                             parallel session start does not announce it;
                                             refuses a live claim held by another owner
   release <path> [--owner X]               drop a claim without resuming
-  resume <path> [--owner X]                mark a handoff resumed (transferred); with
-                                            --owner, refuses a live claim by another owner
+  resume <path> [--owner X]                legacy direct transfer; all callers
+                                            respect a live claim's owner
   supersede <path> [--by <new-path>]       mark a handoff replaced by a newer one
   abandon <path>                           mark a handoff dropped (never to be resumed)
   save-path [dir]                          print where new handoffs should be saved
@@ -44,6 +44,8 @@ project_root(start), mark_resumed(path), mark_superseded(path).
 """
 
 import json
+import fcntl
+from contextlib import contextmanager
 import os
 import re
 import subprocess
@@ -59,13 +61,32 @@ CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
 KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
 REQUIRED_SECTIONS = ("Objective", "Current state", "Next steps")
 MAX_WORDS = 1500
-CLOSED_STATUSES = ("resumed", "superseded", "abandoned")
+CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished")
 MAX_REFS = 8              # references a resume is asked to read, at most
 MAX_REF_BYTES = 256_000   # combined size of the existing referenced files
 
 
 class ConflictError(RuntimeError):
     """The file changed between read and write, or a claim is held by another owner."""
+
+
+@contextmanager
+def locked(path):
+    """Stable sidecar lock: rename never changes the inode being locked."""
+    with open(str(path) + ".lock", "a") as f:
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ConflictError("busy; retry after the current operation finishes")
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def parse_front_matter(text):
@@ -148,7 +169,7 @@ def project_root(start):
     return start
 
 
-def _handoff_paths(root):
+def _handoff_paths(root, errors=None):
     """Every handoff readable for root, across BOTH locations a handoff can be
     written to: the local ./.handoffs convention and the per-project fallback.
     Reading only one of them silently hides whole projects' handoffs from
@@ -159,7 +180,13 @@ def _handoff_paths(root):
     for hdir in (os.path.join(root, ".handoffs"), fallback):
         if not os.path.isdir(hdir):
             continue
-        for name in sorted(os.listdir(hdir)):
+        try:
+            names = sorted(os.listdir(hdir))
+        except OSError as exc:
+            if errors is not None:
+                errors.append({"path": hdir, "error": type(exc).__name__})
+            continue
+        for name in names:
             if not name.endswith(".md"):
                 continue
             path = os.path.join(hdir, name)
@@ -185,10 +212,10 @@ def _problems(text, fm):
     lines = text.splitlines()
     if lines and lines[0].strip() == "---" and not fm:
         out.append("front matter has no closing --- fence")
-    status = (fm.get("status") or "open").lower()
+    status = (fm.get("status") or "open").lower()[:240]
     if status not in KNOWN_STATUSES:
         out.append("unknown status %r (treated as open)" % status)
-    created = fm.get("created")
+    created = (fm.get("created") or "")[:240]
     if created:
         try:
             datetime.fromisoformat(created)
@@ -213,20 +240,43 @@ def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _records(root):
+def content_fingerprint(text):
+    import hashlib
+    fm = parse_front_matter(text)
+    lines = text.splitlines()
+    if fm:
+        end = next(i for i in range(1, len(lines)) if lines[i].strip() == '---')
+        volatile = ('claimed:', 'claim_owner:', 'status:', 'resumed:', 'resumed_by:', 'superseded:', 'superseded_by:', 'abandoned:')
+        lines = [l for l in lines[1:end] if not l.startswith(volatile)] + lines[end + 1:]
+    return hashlib.sha256('\n'.join(lines).encode()).hexdigest()
+
+
+def publication_valid(path, text, fm):
+    try:
+        with open(path + '.published') as f:
+            receipt = json.loads(f.read(4096))
+        return (receipt.get('checkpoint_id') == fm.get('checkpoint_id')
+                and receipt.get('fingerprint') == content_fingerprint(text))
+    except (OSError, ValueError):
+        return False
+
+
+def _records(root, errors=None):
     """Every handoff belonging to root: {path, fm, text, mtime, topic, ended}.
     Fallback-dir files that name a different `project:` belong to another
     project sharing the same basename and are skipped."""
-    paths, legacy = _handoff_paths(root)
+    paths, legacy = _handoff_paths(root, errors)
     out = []
     for path, in_fallback in paths:
         try:
             mtime = os.path.getmtime(path)
             with open(path, encoding="utf-8", errors="replace") as f:
-                text = f.read()
+                text = f.read(64_001)
             fm = parse_front_matter(text)
             if in_fallback and fm.get("project") and not _same_dir(fm["project"], root):
                 continue
+            if fm.get('checkpoint_id') and not publication_valid(path, text, fm):
+                fm['status'] = 'unpublished'
             name_ended, name_topic = _name_parts(path)
             topic = fm.get("topic") or name_topic
             if _is_legacy_single_file(path, legacy) and "topic" not in fm:
@@ -234,12 +284,18 @@ def _records(root):
             out.append({
                 "path": path, "fm": fm, "text": text, "mtime": mtime, "topic": topic,
                 "legacy": _is_legacy_single_file(path, legacy),
-                "problems": _problems(text, fm),
-                "ended": (name_ended or fm.get("created")
+                "problems": _problems(text, fm) + (["document exceeds bounded read limit"] if len(text) > 64_000 else []),
+                "ended": (fm.get("created") if fm.get("checkpoint_id") else name_ended or fm.get("created")
                           or datetime.fromtimestamp(mtime).strftime(STAMP)),
             })
-        except Exception:
-            continue
+        except OSError as exc:
+            if errors is not None:
+                errors.append({"path": path, "error": type(exc).__name__})
+    replaced = {os.path.realpath(r["fm"]["predecessor"]) for r in out
+                if r["fm"].get("checkpoint_id") and r["fm"].get("predecessor") and not r["problems"]}
+    for r in out:
+        if os.path.realpath(r["path"]) in replaced:
+            r["fm"]["status"] = "superseded"
     return out
 
 
@@ -257,44 +313,39 @@ def scan(root, max_age_days=14, stats=None):
     open handoffs hidden for age, and older open handoffs of a newer one's topic."""
     now = time.time()
     root = project_root(root)
-    stale = 0
-    found = []
-    for r in _records(root):
+    errors = []
+    records = _records(root, errors)
+    latest = {}
+    duplicates = 0
+    for r in sorted(records, key=lambda r: (r["ended"], r["path"])):
+        if r["legacy"] and not r["fm"] and "handoff" not in "\n".join(r["text"].splitlines()[:5]).lower():
+            continue
+        if r["topic"] in latest and _is_open(latest[r["topic"]]["fm"]) and _is_open(r["fm"]):
+            duplicates += 1
+        latest[r["topic"]] = r
+    found, stale, claimed, incomplete = [], 0, 0, 0
+    for r in latest.values():
         fm = r["fm"]
+        if fm.get('status') == 'unpublished':
+            incomplete += 1
+            continue
         if not _is_open(fm):
             continue
-        # A bare root HANDOFF.md is only a handoff if it says so near the top.
-        if r["legacy"] and not fm and "handoff" not in "\n".join(
-                r["text"].splitlines()[:5]).lower():
+        if _claimed_recently(fm, datetime.now()):
+            claimed += 1
             continue
-        age_days = (now - r["mtime"]) / 86400.0
-        if age_days > max_age_days:
+        age = (now - r["mtime"]) / 86400
+        if age > max_age_days:
             stale += 1
             continue
-        found.append({
-            "path": r["path"],
-            "topic": r["topic"],
-            "ended": r["ended"],
-            "description": fm.get("description") or "",
-            "skills": fm.get("skills") or "",
-            "git": fm.get("git") or "",
-            "age_days": round(age_days, 1),
-            "problems": r["problems"],
-            "_claimed": _claimed_recently(fm, datetime.now()),
-        })
-    found.sort(key=lambda h: h["ended"], reverse=True)
-    newest, seen = [], set()
-    for h in found:
-        if h["topic"] not in seen:
-            seen.add(h["topic"])
-            newest.append(h)
-    # A claimed topic is being resumed by another session right now: hide it,
-    # and (having collapsed first) hide its older open handoffs with it.
-    newest = [h for h in newest if not h.pop("_claimed")]
+        found.append(dict(path=r["path"], topic=r["topic"], ended=r["ended"][:64],
+                          description=(fm.get("description") or "")[:240],
+                          skills=(fm.get("skills") or "")[:240], git=(fm.get("git") or "")[:240],
+                          age_days=round(age, 1), problems=r["problems"][:8]))
+    found.sort(key=lambda h: (h["ended"], h["path"]), reverse=True)
     if stats is not None:
-        stats["stale"] = stale
-        stats["duplicates"] = len(found) - len(newest)
-    return newest
+        stats.update(stale=stale, claimed=claimed, incomplete=incomplete, duplicates=duplicates, errors=errors)
+    return found
 
 
 def _topic_for_path(path, legacy=None):
@@ -317,11 +368,11 @@ def resolve(topic_or_path, root):
         "path": r["path"],
         "status": (r["fm"].get("status") or "open").lower(),
         "ended": r["ended"],
-        "description": r["fm"].get("description") or "",
+        "description": (r["fm"].get("description") or "")[:240],
         "references": _split_csv(r["fm"].get("references") or ""),
         "problems": r["problems"],
     } for r in _records(root) if r["topic"] == topic]
-    chain.sort(key=lambda h: h["ended"])
+    chain.sort(key=lambda h: (h["ended"], h["path"]))
 
     # Only the authoritative (newest) handoff's references are current: earlier
     # handoffs' references were either carried forward or deliberately dropped.
@@ -375,21 +426,21 @@ def _git_position(root):
         return ""
 
 
-def session_note_path(root):
+def session_note_path(root, session=None):
     """Where context_watch.py leaves this project's live session facts
     (session id, transcript, whether the trigger fired), so ledger commands
     run from the agent's shell can read them without hook stdin."""
     import hashlib
     import tempfile
-    key = hashlib.sha1(project_root(root).encode("utf-8", "replace")).hexdigest()[:12]
-    # ponytail: keyed by project, so parallel sessions in one project see the
-    # last writer's note; key by session id if that ever matters.
+    key = hashlib.sha1((os.path.realpath(project_root(root)) + "\0" + (session or "unidentified")).encode("utf-8", "replace")).hexdigest()[:20]
     return os.path.join(tempfile.gettempdir(), "context-watch-session-%s.json" % key)
 
 
-def read_session_note(root, max_age_s=86400):
+def read_session_note(root, max_age_s=86400, session=None):
+    if not session:
+        return {}
     try:
-        with open(session_note_path(root), encoding="utf-8") as f:
+        with open(session_note_path(root, session), encoding="utf-8") as f:
             note = json.load(f)
         if time.time() - float(note.get("ts") or 0) <= max_age_s:
             return note
@@ -423,13 +474,8 @@ def transcript_skills(path):
 
 
 def supersede_candidates(root, git_position, topic):
-    """Open handoffs written on the same git branch: the thread this handoff
-    most likely continues, so the agent supersedes instead of forking."""
-    branch = git_position.split("@")[0] if git_position else ""
-    if not branch:
-        return []
-    return [h["path"] for h in scan(root, 9999)
-            if h["topic"] != topic and (h.get("git") or "").split("@")[0] == branch]
+    """Legacy API: automatic predecessor inference has been retired."""
+    return []  # lineage is explicit; sharing a branch never authorizes replacement.
 
 
 def read_template():
@@ -463,8 +509,7 @@ def new_path(topic, root):
         "project": abs_root,
         "git": git_position,
         "reason": "context-pressure" if note.get("fired") else "user-parked",
-        "skills": ", ".join(transcript_skills(note["transcript_path"]))
-                  if note.get("transcript_path") else "",
+        "skills": "",  # execution dependencies are explicit, not all past Skill calls
         "supersedes": supersede_candidates(abs_root, git_position, topic),
     }
 
@@ -520,7 +565,7 @@ def _set_fields(path, fields, drop):
     _atomic_write(path, new_text, before)
 
 
-def _mark(path, status, superseded_by=None):
+def _mark_unlocked(path, status, superseded_by=None):
     """Flip a handoff's status and stamp the time. Idempotent."""
     stamp = datetime.now().strftime(STAMP)
     fields = [("status", status), (status, stamp)]
@@ -530,6 +575,12 @@ def _mark(path, status, superseded_by=None):
         fields.append(("superseded_by", superseded_by))
     _set_fields(path, fields, drop)
     return stamp
+
+
+def _mark(path, status, superseded_by=None, owner=None):
+    with locked(path):
+        _check_owner(path, owner)
+        return _mark_unlocked(path, status, superseded_by)
 
 
 def _check_owner(path, owner):
@@ -543,11 +594,12 @@ def _check_owner(path, owner):
 
 
 def claim(path, owner=None):
-    _check_owner(path, owner)
-    stamp = datetime.now().strftime(STAMP)
-    fields = [("claimed", stamp)] + ([("claim_owner", owner)] if owner else [])
-    _set_fields(path, fields, ("claimed:", "claim_owner:"))
-    return stamp
+    with locked(path):
+        _check_owner(path, owner)
+        stamp = datetime.now().strftime(STAMP)
+        fields = [("claimed", stamp)] + ([("claim_owner", owner)] if owner else [])
+        _set_fields(path, fields, ("claimed:", "claim_owner:"))
+        return stamp
 
 
 def claim_report(path):
@@ -574,8 +626,9 @@ def claim_report(path):
 
 
 def release(path, owner=None):
-    _check_owner(path, owner)
-    _set_fields(path, [], ("claimed:", "claim_owner:"))
+    with locked(path):
+        _check_owner(path, owner)
+        _set_fields(path, [], ("claimed:", "claim_owner:"))
 
 
 def mark_resumed(path):
@@ -587,10 +640,14 @@ def mark_superseded(path):
 
 
 def _cli(argv):
-    if not argv:
+    if not argv or argv[0] in ('--help', '-h'):
+        print('Preferred workflow: lookup | save | prepare | verify | acknowledge | history.\nRun a command with --help for arguments. Legacy interfaces below:')
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
+    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history"):
+        from handoff_protocol import cli
+        return cli(argv)
     if cmd == "list":
         as_json = "--json" in args
         args = [a for a in args if a != "--json"]
@@ -611,6 +668,12 @@ def _cli(argv):
             for h in handoffs:
                 print("%s\t%s\t%s\t%s" % (h["ended"], h["topic"], h["path"],
                                           h["description"]))
+        if stats.get('errors'):
+            print('lookup failed: some handoff locations are unreadable; run lookup for recovery details.', file=sys.stderr)
+            return 1
+        if not handoffs and not as_json:
+            from handoff_protocol import lookup
+            print(lookup(root, max_age)['action'])
         if stats["stale"]:
             print("%d open handoff(s) older than %d days hidden; raise --max-age-days to "
                   "see them, or `abandon <path>` to close them" % (stats["stale"], max_age),
@@ -627,6 +690,12 @@ def _cli(argv):
         resolved = resolve(args[0], root)
         if not resolved["chain"]:
             print("no handoffs found for topic: %s" % resolved["topic"], file=sys.stderr)
+            return 1
+        resolved['history_count'] = len(resolved['chain'])
+        resolved['chain'] = resolved['chain'][-1:]
+        if len(json.dumps(resolved).encode()) > 16000:
+            print(json.dumps(dict(outcome='needs-context', authoritative=resolved['authoritative'],
+                  action='Resolution metadata exceeds 16000 bytes. Inspect the named checkpoint metadata locally; reduce required references before preparation. History is available separately.')))
             return 1
         if as_json:
             print(json.dumps(resolved, indent=2))
@@ -668,7 +737,7 @@ def _cli(argv):
         return 0
     if cmd in ("resume", "supersede", "abandon", "claim", "release"):
         owner = None
-        if cmd in ("claim", "release", "resume") and "--owner" in args:
+        if "--owner" in args:
             i = args.index("--owner")
             if i + 1 >= len(args):
                 print("usage: handoff_ledger.py %s <path> [--owner X]" % cmd, file=sys.stderr)
@@ -706,7 +775,7 @@ def _cli(argv):
                 _check_owner(path, owner)
             status = {"resume": "resumed", "supersede": "superseded",
                       "abandon": "abandoned"}[cmd]
-            stamp = _mark(path, status, superseded_by)
+            stamp = _mark(path, status, superseded_by, owner)
         except ConflictError as e:
             print("refused: %s" % e, file=sys.stderr)
             return 1
@@ -717,4 +786,8 @@ def _cli(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(_cli(sys.argv[1:]))
+    try:
+        sys.exit(_cli(sys.argv[1:]))
+    except OSError as exc:
+        print("blocked: %s. Keep the checkpoint; report the failed location and restore access before retrying. Do not adopt or clear the session." % exc, file=sys.stderr)
+        sys.exit(1)

@@ -168,8 +168,8 @@ def main():
     else:
         check("resolve-json-parses", True)
     chain_paths = [os.path.basename(h.get("path", "")) for h in result.get("chain", [])]
-    check("resolve-chain-oldest-first",
-          chain_paths == ["20260812-1530-pdf-mcp-mvp-build.md", "20260813-0002-pdf-mcp-mvp-build.md"],
+    check("resolve-default-authoritative-only",
+          chain_paths == ["20260813-0002-pdf-mcp-mvp-build.md"] and result.get("history_count") == 2,
           "chain=%r" % chain_paths)
     check("resolve-authoritative-is-newest",
           os.path.basename(result.get("authoritative", "")) == "20260813-0002-pdf-mcp-mvp-build.md",
@@ -304,13 +304,13 @@ def main():
                    "ts": time.time()}, f)
     p7b = run(["new-path", "new-thread", tmp7b, "--json"], tmp7b, env7b)
     j7b = json.loads(p7b.stdout or "{}")
-    check("new-path-reason-context-pressure", j7b.get("reason") == "context-pressure", "out=%r" % j7b)
-    check("new-path-skills-from-transcript", j7b.get("skills") == "ponytail, tdd", "out=%r" % j7b)
-    check("new-path-supersedes-same-branch",
-          [os.path.basename(x) for x in j7b.get("supersedes", [])] == ["20260927-0800-same-branch.md"],
+    check("new-path-unidentified-session-does-not-borrow-pressure", j7b.get("reason") == "user-parked", "out=%r" % j7b)
+    check("new-path-no-eager-skill-inheritance", j7b.get("skills") == "", "out=%r" % j7b)
+    check("new-path-does-not-infer-lineage",
+          [os.path.basename(x) for x in j7b.get("supersedes", [])] == [],
           "out=%r" % j7b)
     p7b = run(["new-path", "new-thread", tmp7b], tmp7b, env7b)
-    check("new-path-supersedes-text-line", "supersedes: " in p7b.stdout, "out=%r" % p7b.stdout)
+    check("new-path-no-branch-supersede-instruction", "supersedes: " not in p7b.stdout, "out=%r" % p7b.stdout)
 
     # 8. supersede --by: bidirectional link, backward compatible with plain
     #    supersede (already covered above).
@@ -444,11 +444,12 @@ def main():
         f.write("# Session handoff\nnext: ship\n")
     check("bare-handoff-md-with-marker", [h["topic"] for h in hl.scan(t12)] == ["default"])
 
+    put("remaining.md", "---\ntopic: remaining\nstatus: open\n---\n")
     sub = os.path.join(t11, "src", "deep")
     os.makedirs(sub)
     p = run(["list", sub, "--json"], sub)
     check("subfolder-finds-project-handoffs",
-          any(h["topic"] == "dup" for h in json.loads(p.stdout or "[]"))
+          any(h["topic"] == "remaining" for h in json.loads(p.stdout or "[]"))
           and run(["save-path", sub], sub).stdout.strip() == h11, "stdout=%r" % p.stdout[:300])
 
     t13 = tempfile.mkdtemp(prefix="ledger-verify13-")

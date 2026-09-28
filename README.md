@@ -84,7 +84,7 @@ keystroke. Handoff files are named by ending date/time
 (`.handoffs/20260811-1430-auth-refactor.md`) and carry a one-line
 `description:` in front matter, so announcements and directory listings stay
 tellable-apart as they accumulate. The filename timestamp and `created:`
-front matter are produced together by `handoff_ledger.py new-path`, so the
+front matter are produced together by `handoff_ledger.py save`, so the
 agent never guesses them independently.
 
 **Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Inside tmux,
@@ -247,42 +247,47 @@ Other variables:
 
 ## How automated does it get
 
-Fully closed-loop on the hook surfaces. Handoffs carry `status: open` until a
-session actually resumes one and marks it (`handoff_ledger.py resume`), so
-session starts can check for **untransferred** work every time and never
-re-announce what was already picked up:
+The ledger returns explicit lookup outcomes: no work, available work, stale work,
+claimed work, or a read error. An empty retrieval ends with a clear message.
+Retrieval is read-only; explicit continuation prepares, verifies, and acknowledges
+transfer. Multiple candidates require a choice (including none), except fully
+automatic mode, which selects the newest. Execution skills load only during
+execution preparation, not to discover that there is nothing to resume.
 
-- **0 open** — silence.
-- **1 open** — announced with "read it and continue" (or resumed outright with
-  `CONTEXT_WATCH_AUTORESUME=1`).
-- **Several open** — enumerated, with an instruction to ask the user which one
-  to resume before any other work.
+The preferred workflow is:
 
-The ledger CLI also supports thread-oriented resolution: `handoff_ledger.py
-resolve <topic-or-path> [dir] [--json]` returns the full oldest-first chain
-for a topic, the authoritative latest handoff, and any must-also-read
-references from `references:` front matter. `handoff_ledger.py supersede
-<path> [--by <new-path>]` can record the newer handoff as a forward link, and
-`handoff_ledger.py save-path [dir]` prints where new handoffs should be
-written, using `<dir>/.handoffs` when present and otherwise the per-project
-fallback under `~/.claude/handoffs/<project-basename>/` (the project is the
-nearest ancestor holding `.handoffs/`, so subdirectories share one ledger).
-`claim <path> [--owner X]` hides a handoff from other sessions for two hours
-while one session resumes it. An owned claim refuses other owners, and
-`release <path>` drops the claim. `abandon <path>` closes a handoff for good.
-Status changes are atomic writes that refuse if the file changed underneath.
-`list`/`resolve` flag malformed front matter as `problems` (an unknown status
-is listed as open). `resolve` caps must-also-read at 8 references / 256 KB and
-lists the rest as `unresolved_references`. The announcer lists
-at most five handoffs ("and N more"), and says how many open ones are hidden
-as too old. New handoffs record `project:` and `git: <branch>@<sha>` so the
-resuming session can check what has changed since.
-`handoff_ledger.py new-path <topic> [dir] [--json]` uses one clock read and
-returns the `directory`, `filename`, `path`, and `created` values for a new
-handoff, with the same directory choice as `save-path`, filename format
-`<YYYYMMDD-HHMM>-<topic>.md` (plus `-2`, `-3`, … if that name is taken),
-and `created` format `%Y-%m-%dT%H:%M`; with `--json` it also returns the
-handoff template's text, so the agent needs no read outside the project.
+```sh
+python3 skills/session-handoff/hooks/handoff_ledger.py lookup
+python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION
+# After continuation is authorized:
+python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION --execute
+python3 skills/session-handoff/hooks/handoff_ledger.py verify PATH --session SESSION
+python3 skills/session-handoff/hooks/handoff_ledger.py acknowledge PATH --session SESSION
+# At the next checkpoint:
+python3 skills/session-handoff/hooks/handoff_ledger.py save --session SESSION --request-id CHECKPOINT --input draft.json
+```
+
+Use the session ID printed by the hook. Run verify only when preparation says
+it is required. Supply an installed skill catalog when the checkpoint names
+execution dependencies; see [the protocol reference](skills/session-handoff/reference.md).
+
+Save validates and atomically publishes a checkpoint. Identical retries are
+idempotent; explicit predecessor identity replaces same-branch guesses. It tries
+the other supported location on filesystem write failure and returns a concrete
+blocked action if neither works. Host permission denials remain authoritative.
+Read failures are reported, and every state mutation respects existing ownership.
+
+The complete resume package defaults to 32,000 bytes, including references and
+skills. Required references can select line ranges; optional background stays
+out of context. Checkpoints are limited to 1,500 words / 24,000 bytes, with no
+minimum length. Verification preserves pipeline failures while keeping full
+output in a log and returning only a bounded excerpt. Resume metrics distinguish
+package sizes from host startup/input samples and never record checkpoint text.
+
+`resolve` returns compact authoritative metadata; `history` provides paginated
+historical inspection. Legacy commands remain available, but automatic clearing
+requires a validated `save` publication matching this session and trigger.
+Changes to unrelated file timestamps cannot satisfy the checkpoint requirement.
 
 Deliberate ceiling: the announcer informs and offers, it does not hijack — if
 the session opens with an unrelated explicit task, open handoffs get one

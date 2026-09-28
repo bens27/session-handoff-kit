@@ -156,10 +156,31 @@ def write_session_note(cwd, evt, fired):
     """Leave this session's facts where handoff_ledger.py new-path (run from
     the agent's shell, no hook stdin) can read them: reason and skills."""
     try:
-        note = {"session_id": evt.get("session_id") or "", "cwd": cwd,
+        sid = session_key(evt)
+        if not sid:
+            return
+        trigger = str(os.stat(latch_path(sid)).st_mtime_ns) if fired and os.path.exists(latch_path(sid)) else ''
+        note = {"session_id": sid, "trigger_id": trigger, "cwd": cwd,
                 "transcript_path": evt.get("transcript_path") or "",
                 "fired": bool(fired), "ts": time.time()}
-        path = _ledger().session_note_path(cwd)
+        path = _ledger().session_note_path(cwd, sid)
+        previous = _ledger().read_session_note(cwd, session=sid)
+        entries = load_transcript_tail(evt.get('transcript_path') or '') if evt.get('transcript_path') else []
+        agent = detect_agent(evt, entries)
+        usage = claude_usage(entries)[0] if agent == 'claude' else codex_usage(entries)[0]
+        note['startup_input_tokens'] = previous.get('startup_input_tokens')
+        def input_size(breakdown):
+            if not breakdown:
+                return None
+            return (sum(breakdown.get(k, 0) for k in ('input', 'cache_creation', 'cache_read'))
+                    if agent == 'claude' else breakdown.get('input'))
+        # A tail is not the startup baseline. Only label the first input when the whole trace fits.
+        transcript = evt.get('transcript_path')
+        if note['startup_input_tokens'] is None and entries and transcript and os.path.getsize(transcript) <= TAIL_BYTES:
+            usage_fn = claude_usage if agent == 'claude' else codex_usage
+            note['startup_input_tokens'] = next((input_size(b) for e in entries
+                if (b := usage_fn([e])[0]) is not None), None)
+        note['observed_input_tokens'] = input_size(usage)
         tmp = "%s.%d" % (path, os.getpid())
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(note, f)
@@ -325,16 +346,20 @@ def usage_age_seconds(entries):
     return None
 
 
-def handoff_written_since(cwd, since):
-    """True when a handoff for cwd's project, in any status, was written at or
-    after `since`: the checkpoint the first notice asked for already happened,
-    even if this session has since resumed it and finished the work itself."""
-    # ponytail: mtime, so resuming an unrelated old handoff after the notice also
-    # silences the one-time nudge; compare `created` if that ever matters.
+def handoff_written_since(cwd, since, session=None, require_open=False):
+    """Only a validated publication for this session's trigger satisfies it."""
+    if not session:
+        return False
     try:
         ledger = _ledger()
-        return any(r["mtime"] >= since for r in ledger._records(ledger.project_root(cwd)))
-    except Exception:
+        note = ledger.read_session_note(cwd, session=session)
+        trigger = note.get('trigger_id')
+        return bool(trigger) and any(
+            r['fm'].get('session_id') == session and r['fm'].get('trigger_id') == trigger
+            and r['fm'].get('checkpoint_id') and not r['problems']
+            and (not require_open or r['fm'].get('status') == 'open')
+            for r in ledger._records(ledger.project_root(cwd)))
+    except OSError:
         return False
 
 
@@ -592,94 +617,13 @@ def handle_session_start(evt, agent):
     if source in ("resume", "fork"):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
-    here = os.path.dirname(os.path.abspath(__file__))
-    ledger = os.path.join(here, "handoff_ledger.py")
-    try:
-        max_age = int(env("CONTEXT_WATCH_MAX_AGE_DAYS", "14"))
-    except ValueError:
-        max_age = 14
-
-    open_handoffs, stats = [], {}
-    try:
-        open_handoffs = _ledger().scan(cwd, max_age, stats)
-    except Exception:
-        path = os.path.join(cwd, "HANDOFF.md")
-        try:
-            if os.path.isfile(path):
-                mtime = os.path.getmtime(path)
-                age_days = (time.time() - mtime) / 86400.0
-                if age_days <= max_age:
-                    open_handoffs = [{"path": path, "topic": "default",
-                                      "ended": time.strftime("%Y-%m-%dT%H:%M", time.localtime(mtime)),
-                                      "age_days": round(age_days, 1),
-                                      "description": "", "skills": ""}]
-        except Exception:
-            pass
-
-    if not open_handoffs:
-        sys.exit(0)
-
-    label = LABEL.get(agent, LABEL["claude"])
-    sid = str(evt.get("session_id") or "").strip()
-    owner = " --owner %s" % sid if sid and all(c.isalnum() or c in "-_." for c in sid) else ""
-    mark = ("Before resuming, claim it so a parallel session start skips it: python3 %s "
-            "claim <path>%s (if it refuses, another session holds it: do not resume it). "
-            "After a handoff has been resumed, mark it transferred so future sessions stop "
-            "announcing it: python3 %s resume <path>%s" % (ledger, owner, ledger, owner))
-    defer = ("If the user's opening request is an unrelated explicit task, mention the "
-             "open handoff(s) in one sentence and proceed with their task instead.")
-    hidden = ""
-    if stats.get("stale"):
-        hidden = (" %d open handoff(s) older than %d days are hidden; list them with "
-                  "`python3 %s list --max-age-days 9999` and close dead ones with "
-                  "`python3 %s abandon <path>`." % (stats["stale"], max_age, ledger, ledger))
-
-    if len(open_handoffs) == 1 or auto_mode_on():
-        h = open_handoffs[0]  # newest first
-        desc = h.get("description") or ""
-        suffix = " — %s" % desc if desc else ""
-        if autoresume_on():
-            action = "Read it in full and resume it immediately without asking. "
-        else:
-            action = ("Read it in full before doing anything else, then continue the "
-                      "work it describes. ")
-        skills = h.get("skills") or ""
-        skills_note = ""
-        if skills:
-            skills_note = ("First load exactly these skills via the Skill tool, in "
-                           "order, before resuming: %s. " % skills)
-        others = ""
-        if len(open_handoffs) > 1:
-            others = ("Fully automatic mode: this is the newest of %d open handoffs; the "
-                      "others stay open. " % len(open_handoffs))
-        note = ("%s One open handoff awaiting resume: '%s' (%.0fd old, ended %s) at %s%s. "
-                % (label, h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"], suffix)
-                + others + action + skills_note + mark + " " + defer + hidden)
-    else:
-        shown = open_handoffs[:ANNOUNCE_CAP]
-        listing = "; ".join(
-            "%d) %s (%.0fd old, ended %s, %s)%s%s" % (
-                i + 1, h["topic"], h["age_days"], h.get("ended") or "unknown", h["path"],
-                " — %s" % h.get("description") if h.get("description") else "",
-                " [skills: %s]" % h.get("skills") if h.get("skills") else "")
-            for i, h in enumerate(shown)
-        )
-        if len(open_handoffs) > len(shown):
-            listing += "; and %d more (python3 %s list)" % (
-                len(open_handoffs) - len(shown), ledger)
-        note = ("%s %d open handoffs awaiting resume: %s. Before any other "
-                "work, present this list and ask the user which one to resume (use an "
-                "interactive question tool if available), or none. %s %s%s"
-                % (label, len(open_handoffs), listing, mark, defer, hidden))
-
-    # JSON for both agents: newer Codex parses stdout that starts with "[" or "{"
-    # as JSON, so a plain-text note would fail there; the JSON form works in both.
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": note,
-        }
-    }))
+    write_session_note(cwd, evt, False)
+    from handoff_protocol import lookup, opening_action
+    result = lookup(cwd)
+    policy = opening_action('', result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
+    label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' else 'handoff-status:'
+    note = label + ' ' + policy + (' This status requires no skill loading.' if result['outcome'] != 'available' else '')
+    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
     sys.exit(0)
 
 
@@ -700,17 +644,19 @@ def nudge_unwritten_handoff(evt):
     if os.path.exists(second) and os.path.getsize(second) == 0:
         return  # floor note: no handoff was asked for
     cwd = evt.get("cwd") or os.getcwd()
-    if handoff_written_since(cwd, os.path.getmtime(latch) - 60):
+    if handoff_written_since(cwd, os.path.getmtime(latch) - 60, key):
         return
     try:
         os.close(os.open(latch + ".nudged", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except OSError:
         return  # nudged once already, or unwritable temp dir
+    import shlex
     print(json.dumps({"decision": "block", "reason": (
-        "[context-watch] The handoff notice fired in this session and no handoff has "
-        "been written since. Write it now per the `%s` skill: python3 %s new-path "
-        "<topic-slug> --json, fill the template, verify with resolve, then stop."
-        % (env("CONTEXT_WATCH_SKILL", "session-handoff"), LEDGER))}))
+        "[context-watch] No published checkpoint matches this session's trigger. "
+        "Preserve the draft and publish with python3 %s save --session %s "
+        "--request-id <stable-checkpoint-id> --input <draft.json>; stop after outcome saved. "
+        "If blocked, report the failed location and keep this session; do not clear."
+        % (shlex.quote(LEDGER), shlex.quote(key)))}))
     sys.exit(0)
 
 
@@ -759,30 +705,27 @@ def route_opening_prompt(evt, agent):
     claim one or leave them alone, so it neither resumes unrelated work nor
     asks which of one."""
     cwd = evt.get("cwd") or os.getcwd()
-    try:
-        max_age = int(env("CONTEXT_WATCH_MAX_AGE_DAYS", "14"))
-    except ValueError:
-        max_age = 14
-    try:
-        handoffs = _ledger().scan(cwd, max_age)
-    except Exception:
-        return
-    if not handoffs:
-        return
-    hit = jev_handoff_route(str(evt.get("prompt") or ""), handoffs)
-    if not hit:
-        return
-    label = LABEL.get(agent, LABEL["claude"])
-    choice, conf = hit
-    if choice == "unrelated":
-        message = ("%s The opening request is unrelated to the open handoff(s) (%.2f): "
-                   "mention them in one sentence and do the user's task; do not claim or "
-                   "resume any of them." % (label, conf))
-    else:
-        message = ("%s The opening request continues open handoff `%s` (%.2f): claim and "
-                   "resume that one per the session-handoff skill without asking which."
-                   % (label, choice, conf))
-    emit(agent, "UserPromptSubmit", message, "warn")
+    from handoff_protocol import lookup, opening_action
+    prompt = str(evt.get('prompt') or '')
+    import re
+    direct = re.fullmatch(r'(resume|retrieve) ([a-z0-9-]+|/[^\n]+)', prompt.strip(), re.I)
+    result = lookup(cwd, topic=direct[2] if direct else None)
+    policy = opening_action(prompt, result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
+    if policy is None and direct:
+        policy = result['action']
+    if policy is None:
+        hit = jev_handoff_route(prompt, result['items']) if result['outcome'] == 'available' else None
+        if not hit:
+            return
+        choice, conf = hit
+        if choice == 'unrelated':
+            policy = 'The opening request is unrelated to the open handoff(s); continue the user task and leave them open.'
+        else:
+            # A classifier selects context, not authorization. Retrieval stays read-only.
+            selected = dict(result, items=[h for h in result['items'] if h['topic'] == choice], total=1)
+            policy = opening_action('retrieve', selected, session_key(evt))
+    label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' else 'handoff-status:'
+    emit(agent, 'UserPromptSubmit', label + ' ' + policy, 'warn')
 
 
 # ---------------------------------------------------------------- auto mode
@@ -808,7 +751,7 @@ def handle_stop(evt):
         sys.exit(0)
     fired_at = os.path.getmtime(latch)
     handoffs = _ledger().scan(cwd, 1)
-    if not any(os.path.getmtime(h["path"]) >= fired_at - 60 for h in handoffs):
+    if not handoff_written_since(cwd, fired_at, key, require_open=True):
         sys.exit(0)  # still writing it; the next Stop will check again
     try:
         os.close(os.open(latch + ".cleared", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
@@ -863,11 +806,14 @@ def auto_cli(argv):
     child_env = dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1")
     rc = 0
     for run in range(1, max_runs + 1):
-        started = time.time()
+        import uuid
+        run_id = uuid.uuid4().hex
+        child_env['HANDOFF_RUN_ID'] = run_id
         print("[auto] run %d: %s" % (run, " ".join(cmd + [prompt])), file=sys.stderr)
         rc = subprocess.run(cmd + [prompt], env=child_env).returncode
         fresh = [h for h in _ledger().scan(os.getcwd(), 1)
-                 if os.path.getmtime(h["path"]) >= started]
+                 if _ledger()._read_fm(h['path']).get('runner_id') == run_id
+                 and _ledger()._read_fm(h['path']).get('checkpoint_id')]
         if not fresh:
             print("[auto] run %d left no new open handoff; done (exit %d)" % (run, rc),
                   file=sys.stderr)
@@ -1037,7 +983,7 @@ def main():
             # No model turn since the first notice (e.g. parallel tool results
             # landing together): it has not been seen yet, so it was not ignored.
             sys.exit(0)
-        if handoff_written_since(cwd, os.path.getmtime(first)):
+        if handoff_written_since(cwd, os.path.getmtime(first), session_id):
             sys.exit(0)  # the handoff was written; the notice was acted on
         need = max(limit * SECOND_NOTICE_FACTOR,
                    first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
@@ -1096,10 +1042,11 @@ def main():
     mode = env("CONTEXT_WATCH_MODE", "warn").strip().lower()
     if below_floor:
         emit(agent, event_name, build_floor_message(floor, limit, model, agent), "warn")
-    emit(agent, event_name,
-         build_message(occupancy, pending, breakdown, limit, source, model, skill,
-                       agent, second=fired, usage_age=usage_age),
-         mode)
+    import shlex
+    message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
+                            agent, second=fired, usage_age=usage_age)
+    message += " Session identity: %s. Publish with python3 %s save --session %s --request-id <stable-checkpoint-id> --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
+    emit(agent, event_name, message, mode)
 
 
 if __name__ == "__main__":
@@ -1114,5 +1061,7 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except Exception:
-        sys.exit(0)  # fail open — never break the session
+    except Exception as exc:
+        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext':
+            'context-watch: Handoff service unavailable (%s). Continue the current task; explicit retrieval is blocked. Restore the installed skill files/access; do not infer that no handoff exists.' % type(exc).__name__}}))
+        sys.exit(0)  # report failure without breaking the host session

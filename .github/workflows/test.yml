@@ -31,6 +31,9 @@ jobs:
       - name: Verify ledger
         run: python3 tests/verify-ledger.py
 
+      - name: Verify deterministic protocol
+        run: python3 tests/test_protocol.py
+
       - name: Verify watcher
         run: python3 tests/verify-watcher.py
 

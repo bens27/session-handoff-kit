@@ -97,16 +97,16 @@ def main():
     check("agent-wind-down-section-present", wind is not None)
     if wind:
         sect = wind.group(0)
-        verify = re.search(r"resolve", sect)
+        verify = re.search(r"outcome: saved", sect)
         report = re.search(r"Tell the user the handoff is complete", sect)
         stop = re.search(r"\bStop\b", sect)
-        check("agent-wind-down-verifies-with-resolve",
-              verify is not None and "authoritative" in sect,
-              "§1 must run handoff_ledger.py resolve and check the authoritative: line")
+        check("agent-wind-down-requires-published-receipt",
+              verify is not None and "save --session" in sect,
+              "§1 must publish with save and require outcome: saved")
         check("agent-wind-down-verify-precedes-report",
               verify is not None and report is not None and stop is not None
               and verify.start() < report.start() < stop.start(),
-              "§1 order must be: write -> verify (resolve) -> tell user -> stop")
+              "§1 order must be: save -> receipt -> tell user -> stop")
 
     # The four-step order should all be present in the resume flow
     for needle, name in (("SESSION HANDOFF", "chat-past-chat-search-marker",),):

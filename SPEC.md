@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.11.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.12.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -291,25 +291,13 @@ or disable Claude Code auto-compact in `/config`).
 
 ### 7.1 File format (agent surfaces)
 
-Handoffs live at `./.handoffs/<YYYYMMDD-HHMM>-<topic-slug>.md`, named by the
-handoff's **ending date/time** so a directory listing is a chronology
-(`20260811-1430-auth-refactor.md`). The filename stamp and `created:` front
-matter come from one `handoff_ledger.py new-path <topic> [dir] [--json]`
-call, not independent timestamp computation. Re-handoff of the same thread
-writes a new dated file and marks the previous one `superseded`
-(`handoff_ledger.py supersede <old-path>`). Legacy undated
-`./.handoffs/<topic-slug>.md` files and `./HANDOFF.md` (topic `default`)
-remain supported; their ending time falls back to front-matter `created`,
-then file mtime. Front matter carries the state plus a one-line
-`description` of what is parked — the announcer surfaces it so handoffs can
-be told apart without opening them — plus optional comma-separated `skills`
-and `references` lists. `skills` names the skills the parked work depends
-on; `references` names other paths the next session must also read when
-resolving the thread. Skills cannot be added to or removed from a session's
-roster at runtime (the roster is fixed at session start), but skill
-*content* only enters context on invocation, so a fresh or cleared session
-that loads exactly the listed skills first restores the working context
-deliberately rather than by accident:
+New handoffs are published by `save` to a dated, uniquely suffixed Markdown file
+in `.handoffs/` or the per-project fallback. The command generates metadata
+from one timestamp and binds retries to session/request identity. Predecessor
+replacement is explicit. Legacy dated/undated files and HANDOFF.md remain
+readable. Required execution skills and references are optional metadata;
+preparation loads them only in the applicable phase and within a total budget.
+A stored document resembles:
 
 ```markdown
 ---
@@ -325,7 +313,7 @@ references: docs/auth-notes.md, tests/auth_refresh_test.py
 ```
 
 `reason:` records why the handoff was written (`context-pressure` from the
-trigger, `user-request`, `end-of-session`). It is optional and informational.
+matching session trigger, or `user-parked`). Live user authorization wins.
 
 Body sections, in order: Objective; User request and constraints (the ask
 verbatim, constraints, approval scope, pending decisions); Current state,
@@ -335,151 +323,91 @@ commands); Gotchas (including approaches tried and abandoned). Target under
 1,500 words, facts a fresh session can verify, no conversational narration.
 The body outline is a default, not a contract: the skill is organized into
 independently customizable sections (naming convention, document structure,
-post-resume actions), and only the front-matter block is load-bearing for
-the hooks. The outline and its rules live in `handoff-template.md`, a file
+post-resume actions), and Objective, Current state and Next steps are required for validated publication. The outline and its rules live in `handoff-template.md`, a file
 bundled beside each `SKILL.md` rather than inlined in it, so the shape of a
 handoff can be rewritten without touching trigger, ledger, or resume policy;
-`SKILL.md` §3 delegates to it.
+`SKILL.md` wind-down delegates to it.
 If a `LESSONS.md` exists (e.g. maintained by a mistake-learning skill), new
 lessons append there and Gotchas references it rather than duplicating.
-Before reporting completion the skill runs `handoff_ledger.py resolve
-<topic>` and confirms the `authoritative:` line is the file it just wrote;
-a handoff the announcer cannot find is not complete, so a malformed front
-matter or a wrong directory is caught by the session that wrote it, not
-by the next one.
+Before reporting completion the skill requires `outcome: saved` from the
+validated publication command. A failure preserves the draft and current session.
 
-### 7.2 States
+### 7.2 Deterministic checkpoint protocol
 
-| State | Meaning | Transition |
-| --- | --- | --- |
-| `open` | Written, not yet transferred; announced every session start | Skill writes the file |
-| `resumed` | Transferred; silent forever | `handoff_ledger.py resume <path>` flips status and stamps `resumed:` |
-| `superseded` | Replaced by a newer handoff of the same thread; silent forever | `handoff_ledger.py supersede <path>`, run by the skill on re-handoff |
-| `abandoned` | Dropped, never to be resumed; silent forever | `handoff_ledger.py abandon <path>` |
-| claimed | Still `open`, but a session is resuming it; hidden for 2 hours | `handoff_ledger.py claim <path> [--owner X]` stamps `claimed:` (and `claim_owner:`); `release` drops it |
-| aged out | Older than `CONTEXT_WATCH_MAX_AGE_DAYS` (default 14); not announced | Time |
+`handoff_ledger.py lookup [dir]` returns `none`, `available`, `stale`, `claimed`,
+or `error`, each with a concrete action. It chooses authoritative topic state
+before filtering availability, scans local and fallback directories plus legacy
+HANDOFF.md, and reports read failures rather than turning them into absence.
+The latest record uses created time and a stable path tie-breaker. Five summaries
+are returned per page; `--offset` paginates. Descriptions are bounded.
 
-Announced ≠ transferred; listed ≠ transferred. Only an explicit `resume` — run
-after the session has actually read and adopted the handoff — changes state.
-`resume` and `supersede` are idempotent and prepend front matter to a legacy
-file that lacks it. CLI: `handoff_ledger.py list [dir] [--json]
-[--max-age-days N]` prints open handoffs newest-first (ended, topic, path,
-description); `resolve <topic-or-path> [dir] [--json]` prints the full
-oldest-first chain for that topic across all statuses, with the most recent
-entry as `authoritative` and a deduplicated `must_also_read` list from each
-entry's `references:` front matter; `resume <path>` marks transfer;
-`supersede <path> [--by <new-path>]` marks replacement and, with `--by`,
-records the newer handoff as a forward link; `save-path [dir]` prints where
-new handoffs should be written: `<dir>/.handoffs` when it exists, otherwise
-the per-project fallback `~/.claude/handoffs/<project-basename>/`.
-`save-path` chooses ONE write location, but every read — `list`, `resolve`,
-and the session-start announcer — scans BOTH, plus `<dir>/HANDOFF.md`, so a
-project that gains a local `.handoffs/` later does not lose sight of the
-handoffs it already wrote to the fallback. `HANDOFF.md` carries topic
-`default` in either location.
-`new-path <topic> [dir] [--json]` takes one clock read and returns
-`directory`, `filename`, `path`, and `created` for a new handoff, using the
-same directory as `save-path`, a filename of
-`<YYYYMMDD-HHMM>-<topic>.md`, and `created` formatted `%Y-%m-%dT%H:%M`.
-With `--json` it also returns `template`, the text of the skill's
-`handoff-template.md` (found at `../skills/session-handoff/` from the hooks
-directory, `""` when absent), so writing a handoff needs no file read outside
-the working directory — in auto mode such a read raises a permission prompt
-that stalls an unattended session.
-If that name is taken (same topic within a minute), the ledger adds `-2`,
-`-3`, and so on.
+`save [dir] --session ID --request-id ID --input draft.json` validates the
+agent-authored core and generates timestamps, project/Git state, session/trigger
+identity and publication identity. Identical request retries return the same
+checkpoint; changed content under the same ID is refused. Temporary-file fsync
+and exclusive atomic publication prevent partial Markdown files. Directory
+failures try the other supported location, then return `blocked` with recovery
+instructions. Neither CLI nor skill bypasses host permission denial.
 
-Claims and owners: `claim <path> --owner X` also stamps `claim_owner: X`.
-A live owned claim refuses `claim`, `release` and `resume --owner` from
-any other owner, and an owner-less caller counts as a different owner.
-Bare `resume <path>` stays permissive. The announcer passes
-`--owner <session_id>` in the commands it prints.
+Lineage is explicit through `predecessor`; branch equality never supersedes work.
+The published successor is the committed replacement record, so a crash after
+publication cannot resurrect its predecessor. All state changes check owner
+under a sidecar lock. Omitted owners do not bypass another session's claim.
 
-Writes: every status change goes through one atomic write (temp file,
-fsync, rename). The write is refused with a conflict error if the file's
-mtime or size changed since it was read. Rerun the command.
+`prepare TOPIC-OR-PATH --session ID` is read-only retrieval. With `--execute`
+it claims a validated, bounded package and records a recoverable preparation
+receipt. Claims expire after two hours or can be released explicitly. Checkpoint
+and dependency fingerprints bind preparation to the material actually delivered.
+`verify PATH --session ID` preserves pipeline failure, stores complete output in
+a log, and returns a bounded excerpt. `acknowledge PATH --session ID` transfers
+only after preparation and any recorded verification pass. Failure/expiry/change
+requires retry or release; it never silently marks work resumed.
 
-Problems: `list` and `resolve` report `problems` for malformed front matter:
-a missing closing fence, an unknown status, or a non-ISO `created`. An
-unknown status is listed as open, never silently dropped.
+States remain open, resumed, superseded and abandoned; claimed is a temporary
+lease on open work. Legacy `claim`, `resume`, `supersede`, `abandon`, `release`,
+`new-path`, `save-path` and `list` remain available. Legacy direct writes do not
+produce automatic checkpoint receipts. `new-path` no longer inherits unrelated
+session facts, skill history, or same-branch predecessors. CLI `resolve` is compact;
+`history --topic TOPIC --offset N --limit N` is explicit paginated metadata.
+The importable `resolve` API retains full-chain compatibility.
 
-Reference caps: `resolve` puts at most 8 references into `must_also_read`,
-up to 256 KB combined across the existing files. The rest go into
-`unresolved_references` with a reason, and missing files go into
-`missing_references`.
+### 7.3 Startup and opening requests
 
-### 7.3 Session-start announcer
+Startup emits a compact next action, including when no handoff exists. Native
+resume/fork continues existing context; compaction emits its existing evidence
+revalidation notice. Retrieval requests run read-only preparation. Explicit
+resume authorizes execution preparation. Multiple choices include none;
+AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newest.
+An unrelated live task takes precedence and leaves checkpoints open.
 
-Runs on `SessionStart`; skips sessions started with `source: resume`,
-`compact`, or `fork` (continuations already carry their context — Claude
-Code's documented sources are `startup`/`resume`/`clear`/`compact`/`fork`).
-Scans `.handoffs/*.md` plus legacy
-`HANDOFF.md` for open entries within the age window, then:
+Exact retrieval/resume commands, topics and paths route without a model call.
+Only ambiguous prose may use the optional Jev classifier. Classification can
+select context but does not grant execution authorization. Both hook branches
+use the same opening-action policy.
 
-- **0 open** — silent.
-- **1 open** — announce (topic, stored `ended` date/time, age, path,
-  description) with "read it in full and continue", or resume immediately
-  without asking when autoresume
-  is active (`AUTORESUME=1`, or the legacy `CONTEXT_WATCH_AUTORESUME=1`).
-  When the handoff's front matter names `skills`, the announcement also
-  instructs loading exactly those skills (via the Skill tool) before
-  resuming, so a `/clear` cycle comes back with the right skills loaded.
-- **N open** — enumerate newest-first (topic, stored `ended` date/time, age,
-  path, description) with an instruction to present the list and ask which
-  to resume before any other work, using an interactive question tool where
-  available, with "none" as an option. Autoresume never guesses among
-  several.
+Session notes are keyed by canonical project plus session identity. A trigger
+is satisfied only by a validated publication with matching session/trigger IDs;
+mtime changes to old or unrelated files do not count. The headless auto runner
+matches its own run ID. Failed saves never authorize automatic clear.
 
-Because `clear` is not a skipped source, autoresume closes a one-keystroke
-cycle: `HANDOFF_AT=<n> AUTORESUME=1 claude` triggers the handoff at the
-threshold, the skill tells the user to type `/clear`, and the cleared
-session announces and resumes the open handoff automatically.
+### 7.3b Context budgets and measurement
 
-Every announcement includes the exact mark-transferred command and the defer
-clause: if the user's opening request is an unrelated explicit task, mention
-the open handoff(s) in one sentence and proceed with their task; the ledger
-is untouched.
+The default complete preparation budget is 32,000 UTF-8 bytes including JSON,
+workflow instructions and declared already-loaded skills. Component byte counts
+and a bytes/4 token estimate are returned; this is not measured billing usage.
+An explicit user-authorized budget exception is available. Individual documents
+are capped at 24,000 bytes and 1,500 words. Required references (up to eight) may
+select line excerpts; optional background is not loaded. Skills are explicit
+execution dependencies resolved against the caller's installed catalog, deduped
+by canonical path, and never fetched or installed from handoff instructions.
 
-### 7.3b Decisions taken off the agent
-
-Three judgments the skill used to leave to the model are now computed, and a
-fourth is classified, because the signal already exists on disk:
-
-- **`reason`** — `new-path` prints `context-pressure` when this session's
-  trigger latch exists, else `user-parked`. It knows the session because the
-  watcher leaves a *session note* (`$TMPDIR/context-watch-session-<project
-  hash>.json`: session id, transcript path, fired flag) on every
-  PostToolUse/UserPromptSubmit; ledger commands run from the agent's shell
-  with no hook stdin.
-- **`skills`** — `new-path` reads the Claude transcript named in the session
-  note and lists every `Skill` tool call's name in first-use order. Codex has
-  no skill tool; the field is empty there.
-- **`supersedes`** — `new-path` lists open handoffs of other topics whose
-  `git:` branch equals the current one: the thread this handoff most likely
-  continues. The agent supersedes them unless told it is a separate thread.
-- **Unwritten handoff at turn end** — in warn mode on Claude, the Stop hook
-  blocks the stop once (`decision: block`) when the latch exists, no handoff
-  was written since it, and the latch is not a floor note. A `.nudged` file
-  beside the latch makes it fire once per session; `stop_hook_active` guards
-  the re-entry. Codex Stop hooks cannot block, so nothing happens there.
-- **Opening prompt vs open handoffs** — on the first UserPromptSubmit of a
-  session (no usage entry yet) with open handoffs, the watcher asks Jev
-  (TypeSafe System One, `TYPESAFE_API_KEY`, 3 s timeout, fail-open) a single
-  choice question: which handoff does the prompt continue, or `unrelated`.
-  At confidence ≥ 0.8 it injects one line telling the agent to claim that
-  handoff or to leave them all alone; below it, or without a key, or with
-  `CONTEXT_WATCH_JEV=0`, it stays silent and the skill's default (§4) applies.
-- **Template lint** — `_problems` also checks the body: `## Objective`,
-  `## Current state` and `## Next steps` must be present and the body must
-  stay within 1,500 words. `resolve` and `claim` print each defect as a
-  `problem:` line instead of leaving the resuming session to notice.
-- **`verify:`** — an optional front-matter line naming the command "Current
-  state" rests on; `claim` prints it back, so the resuming session runs that
-  command rather than guessing which check is relevant.
-- **`commits_since` / `dirty`** — when the front matter has `git: branch@sha`,
-  `claim` prints `git rev-list --count <sha>..HEAD` and the number of
-  `git status --short` lines for the handoff's `project:`, so "has the work
-  moved on" is a printed number, not a judgment.
+Verification runs Bash with pipefail, a 60-second default timeout, persistent
+full log, and a 2,000-byte maximum failure excerpt. Retrieval does not verify.
+No recorded verification command means no speculative suite is required.
+Resume telemetry records component sizes, outcome, IDs and available startup/
+later host input samples without recording contents. Cached input still occupies
+context; startup baseline is not attributed to handoff waste. Configure
+CONTEXT_WATCH_RESUME_LOG (0 disables); CONTEXT_WATCH_LOG=0 disables it too.
 
 ### 7.4 Shared contract between the agent and chat skills
 
@@ -548,8 +476,8 @@ past-chat search for `SESSION HANDOFF <topic>` → ask for the file. Multiple
 open with no topic named: list one line each with topic, stored date, and
 description, then ask. After actual resume: flip the entry's status and
 remove the topic from the description. This is
-coarser than the agent-surface ledger's `resolve` command, which returns a
-full oldest-first chain plus a `must_also_read` reference list; the chat
+coarser than the agent-surface bounded `prepare` package and explicit paginated
+`history`; the chat
 surface has no equivalent chain/reference concept today.
 
 **Settings caveats.** Past-chat retrieval requires the "Search and reference
@@ -677,16 +605,15 @@ Rule convention:
 
 ```markdown
 ## Session handoffs
-Before starting any task, run: python3 scripts/handoff_ledger.py list --json
-If open handoffs print, mention them in one line and ask which to resume, or none.
-After actually resuming one: python3 scripts/handoff_ledger.py resume <path>
-When wrapping up or parking work, run: python3 scripts/handoff_ledger.py new-path <topic-slug> --json
-Then write the returned path with front matter (topic, created, status: open,
-description) using the session-handoff template.
+Use the bundled session-handoff skill and its complete hooks directory.
+Run handoff_ledger.py lookup and follow its explicit outcome/action.
+Retrieve with prepare --session ID; authorized continuation uses --execute,
+then verify if required and acknowledge. Save with --session ID --request-id ID
+--input draft.json; only outcome saved completes a checkpoint.
 ```
 
 Oz / cloud harnesses: commit the repo-local form of everything (project
-`.claude/` hooks config, the two scripts, `.context-watch.json`,
+`.claude/` hooks config, the complete hooks directory, `.context-watch.json`,
 `.handoffs/`) — a fresh managed environment has no user-level config; verify
 hooks fire before trusting the threshold there.
 
@@ -765,3 +692,9 @@ session-handoff-kit/
 `dist/` (the built `.plugin`/`.skill` artifacts) is generated by
 `scripts/package.sh` and gitignored.
 ```
+
+Publication receipts: generated checkpoints carry a `.published` sidecar binding
+the publication ID to its content fingerprint. Until that receipt is durable,
+lookup reports `incomplete` and automatic clearing is blocked. Retrying the same
+request completes an interrupted receipt. Legacy checkpoints without publication
+IDs remain readable. Keep receipt sidecars with generated checkpoint files.
