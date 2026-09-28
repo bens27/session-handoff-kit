@@ -169,3 +169,15 @@ failed child. Collect correctly classified live delivery/retry measurements
 before claiming economic improvement. A reasonable sign-off is that tested
 failure paths are controlled; a guarantee of no bad handoffs or excessive spend
 would still be unsupported.
+
+
+## Release and local rollout evidence
+
+v0.14.0 was released from `a19fa9f`; CI passed. The tracked-only plugin archive
+passed save → retrieve → reuse → acknowledge → explicit successor save. These
+are CLI/package checks, not proof of an end-to-end model-driven host session.
+AgentsRoom's existing library entry was refreshed (eight supporting files), and
+MCP readback confirmed the new lineage instructions and opt-in routing code.
+All 33 hooks in 11 AgentsRoom Codex profiles remain enabled and trusted without
+configuration changes. Portskill vendors the release verbatim in `3e5a645`, with
+18 passing integration tests. No automatic-continuation setting was enabled.

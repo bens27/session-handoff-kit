@@ -11,7 +11,7 @@ A release updates its checkout and archives. Copied plugins, vendored source and
 
 ## Shared installation
 
-Keep one canonical skill directory and point user-level skills/hooks at it. On the machine audited for v0.13.0:
+Keep one canonical skill directory and point user-level skills/hooks at it. On the machine verified for v0.14.0:
 
 - `~/.agents/skills/session-handoff` points to this repository's `skills/session-handoff`.
 - `~/.claude/skills/session-handoff` points to that shared directory.
@@ -67,11 +67,11 @@ Repeat registration for newly created profiles, or ask AgentsRoom's developer to
 ## AgentsRoom Skills Library copy
 
 The existing account-wide `session-handoff` entry (`zzaq83gtmuhdpr5w`) was
-refreshed on September 28 from tag v0.13.0, preserving its ID and attachments.
-Its body is now 2,480 characters (previously 7,548), with eight supporting files,
+refreshed on September 28 from tag v0.14.0, preserving its ID and attachments.
+Its body is now 2,605 characters (originally 7,548), with eight supporting files,
 including `hooks/handoff_protocol.py` and `continuation.md`. Both native API and
 MCP readback verified the result. The previous library was backed up locally at
-`~/.agentsroom/global-skills.before-shk-v013.json`; the on-disk library cache was
+`~/.agentsroom/global-skills.before-shk-v014.json`; the on-disk library cache was
 also refreshed. Reload the Skills Library and start a fresh agent to replace
 previously loaded instructions.
 
@@ -91,7 +91,7 @@ offers Agent summary as an alternative to Raw transcript.
 
 The audit also found:
 
-- `Portskill/vendor/session-handoff-kit`: updated verbatim to v0.13.0 (`ce13cbe`); all 18 Portskill handoff integration tests pass. Its integration remains experimental and disabled by default.
+- `Portskill/vendor/session-handoff-kit`: updated verbatim to v0.14.0 (`a19fa9f`, Portskill commit `3e5a645`); all 18 Portskill handoff integration tests pass. Its integration remains experimental and disabled by default.
 - The separate `handoff-manager` checkout: v0.8.0. Update it if you still launch its own skill/hooks.
 - Older Claude plugin cache directories. Their presence alone does not establish an active installation; check the installed/enabled plugin registry before updating or removing anything.
 
@@ -104,4 +104,16 @@ rg 'version:' "$HOME/.agents/skills/session-handoff/SKILL.md"
 python3 "$HOME/.agents/skills/session-handoff/hooks/handoff_ledger.py" save --template
 ```
 
-Expect version `0.13.0` and a JSON draft. These checks establish the files and CLI; combine them with a fresh session's skill catalog and `/hooks` trust inspection to establish runtime use. The project scan covered known development directories and runtime profiles, not every possible external checkout or host configuration.
+Expect version `0.14.0` and a JSON draft. These checks establish the files and CLI; combine them with a fresh session's skill catalog and `/hooks` trust inspection to establish runtime use. The project scan covered known development directories and runtime profiles, not every possible external checkout or host configuration.
+
+
+## v0.14.0 acceptance record
+
+Release commit `a19fa9f` passed 30 protocol tests, 11 integrity/cost regressions
+and all six supporting suites locally and in CI. A plugin built from tracked
+files completed save, retrieve, receipt reuse, acknowledge and successor save.
+AgentsRoom MCP confirmed the refreshed body and all eight bundled files. All
+11 existing Codex profile registrations were unchanged by the installer and
+fresh `hooks/list` checks reported all 33 definitions enabled and trusted.
+Portskill's 18 integration tests passed against the verbatim release copy.
+Automatic continuation settings were not enabled or changed by this rollout.
