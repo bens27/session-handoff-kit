@@ -28,8 +28,12 @@ The initial audit found ten profile config files below `~/.agentsroom/codex/`, w
 On September 28 the shared hook was registered in all **11** profiles then
 present (including a newly created profile). Codex 0.157.1 app-server `hooks/list`
 reported all three intended entries enabled, with no warnings or errors, but
-**untrusted** in every profile. Thus automatic execution remains pending the
-user's native hook review; registration is not activation. No trust bypass was used.
+**untrusted** in every profile initially. After the user's explicit activation
+request, all 33 definitions were trusted through Codex's native CLI review.
+Fresh app-server processes then reported **enabled and trusted** for all three
+hooks in every profile, with no warnings or errors. No trust bypass was used.
+Where required by the CLI, the kit checkout itself was also trusted in that
+profile to open the review UI. Existing AgentsRoom sessions were not interrupted.
 The audit used the kit working directory in fresh app-server processes; a running
 agent may retain older configuration, and another project's overrides can differ.
 

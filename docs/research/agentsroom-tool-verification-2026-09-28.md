@@ -75,3 +75,13 @@ In-memory candidate changes turn all three failures green. See
 [the developer report](agentsroom-transfer-issue.md) for commands, scope and repair
 criteria. The app itself remains unchanged, the historical incident's exact cause
 remains unproven, and no developer message was sent.
+
+## Trust activation follow-up
+
+On the user's explicit request, Codex's native hook review approved the three
+vetted Session Handoff definitions in each of the 11 profiles. Fresh `hooks/list`
+checks report all **33 enabled and trusted**, with no warnings or errors. The
+CLI also requested trust of the kit checkout in profiles that had not used it;
+that native project review was completed. No bypass flag or direct trust-store
+edit was used. Temporary review terminals were closed without submitting model
+tasks. Existing AgentsRoom sessions were not restarted or interrupted.
