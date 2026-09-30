@@ -29,6 +29,34 @@ job on request; file-ledger fallback conventions use
 | **Claude chat** (claude.ai web, **Claude Desktop**, mobile apps) | Open `session-handoff-chat.skill` and click **Save skill** (or upload in Settings → Capabilities) | Conversational — no token feed exists in chat |
 | **Claude chat, before your first message** | Load `chrome-extension/` unpacked in Chrome/Edge (see its README) | Pre-fills — optionally auto-sends — the handoff-check prompt into every new chat |
 
+### Complete standalone skill package
+
+The primary standalone artifact is `dist/session-handoff.skill`, a ZIP archive
+containing the complete `session-handoff/` folder: skill instructions,
+continuation protocol, templates, references, Codex metadata, installer, ledger,
+and context hooks. It requires Python 3 and a host with local file/tool access;
+no plugin or repository checkout is needed to use the extracted package.
+
+Build the distributable with `bash scripts/package.sh`. To install that artifact:
+
+```sh
+mkdir -p ~/.agents/skills
+unzip dist/session-handoff.skill -d ~/.agents/skills
+python3 ~/.agents/skills/session-handoff/install.py codex   # or: claude
+```
+
+Extract into the skill directory your host discovers (for example,
+`~/.claude/skills` for Claude Code), then run the installer from that permanent
+location. The installer registers hooks; host feature flags and hook trust still
+apply as described below. Extraction alone provides on-request handoffs but does
+not activate automatic context monitoring. For upgrades, replace the existing
+skill folder and rerun the installer.
+
+The `.skill` suffix identifies the ZIP package; it does not imply that every
+host supports one-click importing or running its scripts. The separate
+`session-handoff-chat.skill` is the conversational variant for chat-only hosts.
+The `.plugin` artifact remains an optional Claude plugin distribution.
+
 ### Skill folder + installer (Claude Code and Codex)
 
 `skills/session-handoff/` is the whole product: skill, template, and hook
@@ -86,6 +114,64 @@ keystroke. Handoff files are named by ending date/time
 tellable-apart as they accumulate. The filename timestamp and `created:`
 front matter are produced together by `handoff_ledger.py save`, so the
 agent never guesses them independently.
+
+**Easy Claude Code launcher.** From your project directory, run:
+
+```sh
+~/.agents/skills/session-handoff/claude-auto
+# Optional threshold and Claude prompt:
+~/.agents/skills/session-handoff/claude-auto --at 120000 -- "Continue this project"
+```
+
+The launcher requires `claude` and `tmux` on PATH, makes the skill discoverable
+in Claude's configuration directory, registers its hooks, and opens tmux when
+you are not already in a pane. It enables the save → clear → retrieve → resume
+cycle for this launch. It preserves normal Claude permissions and uses three
+consecutive automatic clears by default (`--max-clears N`); this is not a total
+session or spending limit. Existing project threshold configuration still applies
+unless `--at` overrides it. A configured session-handoff plugin supplies its own
+skill/hooks instead of registering a duplicate standalone installation.
+
+For a short command, link the launcher into a directory on your PATH:
+
+```sh
+mkdir -p ~/.local/bin
+ln -s ~/.agents/skills/session-handoff/claude-auto ~/.local/bin/claude-auto
+claude-auto
+```
+
+**Easy Codex launcher.** Install the short command once:
+
+```sh
+mkdir -p ~/.local/bin
+ln -s ~/.agents/skills/session-handoff/codex-auto ~/.local/bin/codex-auto
+```
+
+With `~/.local/bin` on PATH, prepare the active Codex profile and complete its
+native hook review once:
+
+```sh
+codex-auto --setup
+codex --enable hooks
+```
+
+Then, from your project directory:
+
+```sh
+codex-auto -- "Continue this project"
+codex-auto                         # resume an existing handoff
+codex-auto --at 120000 --max-runs 3 -- "Implement the next task"
+```
+
+This registers the skill and hooks in `CODEX_HOME` (default `~/.codex`), enables
+hooks for the launch, and runs Codex with the workspace-write sandbox. It uses
+fresh headless sessions rather than clearing an interactive UI; tmux is not
+required. Three sessions is the default run limit, not a token or spending cap.
+Child failures stop immediately; reaching the limit with work outstanding
+returns exit 75. Use the same `CODEX_HOME` for setup, hook approval, and launch.
+Hook trust is not bypassed or verified by this wrapper: an untrusted hook can be
+skipped by Codex, so complete native review before unattended use. Model and
+other settings come from that profile. No global auto-mode setting is changed.
 
 **Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Inside tmux,
 a `Stop` hook types `/clear` and then `resume` into the pane once the handoff

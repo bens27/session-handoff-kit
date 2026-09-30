@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Launch Claude Code with automatic checkpoint, clear, and resume in tmux."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+
+
+def positive(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('must be positive')
+    return number
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--max-clears', type=positive, default=3,
+                        help='maximum consecutive automatic clears (default: 3; not a spending cap)')
+    parser.add_argument('--at', type=positive, help='context token threshold for this launch')
+    parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='Claude arguments after --')
+    args = parser.parse_args()
+    forwarded = args.claude_args
+    if forwarded[:1] == ['--']:
+        forwarded = forwarded[1:]
+    for dependency in ('claude', 'tmux'):
+        if not shutil.which(dependency):
+            parser.exit(1, 'Install %s and ensure it is on PATH, then rerun claude-auto.\n' % dependency)
+    skill = Path(__file__).resolve().parent
+    config = Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home() / '.claude'))).expanduser().resolve()
+    settings_path = config / 'settings.json'
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    plugin = any(key.split('@')[0] == 'session-handoff' and enabled
+                 for key, enabled in settings.get('enabledPlugins', {}).items())
+    if not plugin:
+        destination = config / 'skills/session-handoff'
+        if destination.exists() or destination.is_symlink():
+            if destination.resolve() != skill:
+                parser.exit(1, 'Another session-handoff skill is installed at %s; run its claude-auto command or reconcile the installations first.\n' % destination)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.symlink_to(skill, target_is_directory=True)
+        subprocess.run([sys.executable, str(skill / 'install.py'), 'claude'], check=True)
+    env = dict(os.environ, HANDOFF_AUTO='1', HANDOFF_AUTO_MAX=str(args.max_clears),
+               CLAUDE_CONFIG_DIR=str(config))
+    env.pop('HANDOFF_AUTO_RUNNER', None)
+    if args.at:
+        env['HANDOFF_AT'] = str(args.at)
+    command = [shutil.which('claude')] + forwarded
+    print('Auto handoff enabled: save → clear → resume; limit %d consecutive clears. Claude permissions still apply.' % args.max_clears, flush=True)
+    if not os.environ.get('TMUX_PANE'):
+        # Explicit environment survives an already-running tmux server.
+        assignments = ['%s=%s' % (key, env[key]) for key in
+                       ('HANDOFF_AUTO', 'HANDOFF_AUTO_MAX', 'CLAUDE_CONFIG_DIR')]
+        if 'HANDOFF_AT' in env:
+            assignments.append('HANDOFF_AT=' + env['HANDOFF_AT'])
+        command = ['tmux', 'new-session', '-c', os.getcwd(),
+                   shlex.join(['env', '-u', 'HANDOFF_AUTO_RUNNER'] + assignments + command)]
+    os.execvpe(command[0], command, env)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print('claude-auto: %s' % error, file=sys.stderr)
+        sys.exit(1)

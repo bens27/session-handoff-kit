@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 REPO = os.getcwd()
@@ -16,7 +17,7 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
-def check_installer():
+def check_installer(skill_root=None):
     """install.py against scratch config dirs: preserves foreign hooks, is
     idempotent, keeps Codex hook groups independent, and uninstall restores."""
     import tempfile
@@ -31,8 +32,9 @@ def check_installer():
     codex_before = {"hooks": {"SessionStart": [{"hooks": [dict(foreign)]}]}}
     json.dump(claude_before, open(claude_p, "w"))
     json.dump(codex_before, open(codex_p, "w"))
-    inst = os.path.join(REPO, "skills/session-handoff/install.py")
-    watcher = os.path.join(REPO, "skills/session-handoff/hooks/context_watch.py")
+    skill_root = skill_root or os.path.join(REPO, "skills/session-handoff")
+    inst = os.path.join(skill_root, "install.py")
+    watcher = os.path.join(skill_root, "hooks/context_watch.py")
 
     def run(*args):
         p = subprocess.run([sys.executable, inst] + list(args), env=env,
@@ -120,6 +122,28 @@ def main():
             for member_needle in member_needles:
                 check("%s:%s" % (name, member_needle), any(member_needle in n for n in names),
                       "zip %s lacks %s; members=%r" % (os.path.relpath(art, REPO), member_needle, names[:10]))
+        standalone = os.path.join(REPO, "dist/session-handoff.skill")
+        check("standalone-produced", os.path.isfile(standalone))
+        if os.path.isfile(standalone):
+            with tempfile.TemporaryDirectory(prefix="standalone-skill-") as tmp:
+                with zipfile.ZipFile(standalone) as archive:
+                    names = archive.namelist()
+                    check("standalone-root", all(n.startswith("session-handoff/") for n in names))
+                    check("standalone-no-caches", not any("__pycache__" in n or n.endswith(".pyc") for n in names))
+                    archive.extractall(tmp)
+                root = os.path.join(tmp, "session-handoff")
+                for name in ("SKILL.md", "continuation.md", "reference.md", "handoff-template.md",
+                             "agents/openai.yaml", "hooks/thresholds.example.json", "claude-auto", "codex-auto"):
+                    check("standalone:" + name, os.path.isfile(os.path.join(root, name)))
+                check_installer(root)
+                workspace = os.path.join(tmp, "workspace")
+                os.mkdir(workspace)
+                env = dict(os.environ, HOME=tmp, CONTEXT_WATCH_JEV="0")
+                probe = subprocess.run([sys.executable, os.path.join(root, "hooks/handoff_ledger.py"),
+                                        "lookup"], cwd=workspace, env=env,
+                                       capture_output=True, text=True, timeout=30)
+                check("standalone-ledger-runs", probe.returncode == 0 and
+                      json.loads(probe.stdout).get("outcome") == "none", probe.stderr[:300])
         gi = open(os.path.join(REPO, ".gitignore")).read() if os.path.isfile(os.path.join(REPO, ".gitignore")) else ""
         check("dist-gitignored", "dist" in gi, ".gitignore must exclude dist/")
 

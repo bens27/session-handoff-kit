@@ -6,7 +6,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 
 cd "${repo_root}"
 mkdir -p dist
-rm -f dist/session-handoff.plugin dist/session-handoff-chat.skill
+rm -f dist/session-handoff.plugin dist/session-handoff-chat.skill dist/session-handoff.skill
 
 (
   cd plugins/session-handoff
@@ -20,6 +20,13 @@ rm -f dist/session-handoff.plugin dist/session-handoff-chat.skill
     -x '*.DS_Store' '*/.DS_Store' '*__pycache__*'
 )
 
+(
+  cd skills
+  /usr/bin/zip -qr "${repo_root}/dist/session-handoff.skill" session-handoff \
+    -x '*.DS_Store' '*/.DS_Store' '*__pycache__*' '*.pyc'
+)
+
 printf '%s\n' \
+  "dist/session-handoff.skill" \
   "dist/session-handoff.plugin" \
   "dist/session-handoff-chat.skill"

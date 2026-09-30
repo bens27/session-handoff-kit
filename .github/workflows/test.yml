@@ -28,6 +28,12 @@ jobs:
       - name: Verify packaging
         run: python3 tests/verify-packaging.py
 
+      - name: Verify Claude auto launcher
+        run: python3 tests/test_claude_auto.py
+
+      - name: Verify Codex auto launcher
+        run: python3 tests/test_codex_auto.py
+
       - name: Verify ledger
         run: python3 tests/verify-ledger.py
 

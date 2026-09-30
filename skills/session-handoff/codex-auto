@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Launch bounded Codex sessions with automatic checkpoint and resumption."""
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+def positive(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('must be positive')
+    return number
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--max-runs', type=positive, default=3,
+                        help='maximum sessions (default: 3; not a spending cap)')
+    parser.add_argument('--at', type=positive, help='context token threshold for this launch')
+    parser.add_argument('--setup', action='store_true', help='install skill/hooks without starting a task')
+    parser.add_argument('prompt', nargs='?', default='resume', help='task text; defaults to resume')
+    args = parser.parse_args()
+    codex = shutil.which('codex')
+    if not codex:
+        parser.exit(1, 'Install Codex and ensure it is on PATH, then rerun codex-auto.\n')
+    skill = Path(__file__).resolve().parent
+    home = Path(os.environ.get('CODEX_HOME') or str(Path.home() / '.codex')).expanduser().resolve()
+    destination = home / 'skills/session-handoff'
+    if destination.exists() or destination.is_symlink():
+        if destination.resolve() != skill:
+            parser.exit(1, 'Another session-handoff skill is installed at %s; run its codex-auto command or reconcile the installations first.\n' % destination)
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.symlink_to(skill, target_is_directory=True)
+    env = dict(os.environ, CODEX_HOME=str(home))
+    if args.at:
+        env['HANDOFF_AT'] = str(args.at)
+    subprocess.run([sys.executable, str(skill / 'install.py'), 'codex'], env=env, check=True)
+    print('Profile: %s. Hooks must be trusted: run codex --enable hooks in this same profile and approve its native hook review before unattended use.' % home, flush=True)
+    if args.setup:
+        return 0
+    command = [sys.executable, str(skill / 'hooks/context_watch.py'), 'auto',
+               '--max', str(args.max_runs), '--prompt', args.prompt, '--', codex,
+               'exec', '--enable', 'hooks', '--sandbox', 'workspace-write', '--']
+    os.execvpe(command[0], command, env)
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print('codex-auto: %s' % error, file=sys.stderr)
+        sys.exit(1)
