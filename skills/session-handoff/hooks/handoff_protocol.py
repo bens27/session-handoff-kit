@@ -611,6 +611,7 @@ def cli(argv):
             result = lookup(a.root, a.max_age_days, a.offset, a.topic)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
+    result.setdefault('project', ledger.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
     telemetry(a.command, a.root, getattr(a, 'session', None), result)
     output = json.dumps(result, ensure_ascii=False)
     limit = getattr(a, 'budget_bytes', PACKAGE_BYTES)

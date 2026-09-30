@@ -750,6 +750,26 @@ def route_opening_prompt(evt, agent):
 
 # ---------------------------------------------------------------- auto mode
 
+def announce_manual_clear(evt):
+    """No tmux pane to type into (e.g. an AgentsRoom console): once this session's
+    trigger produced a published handoff, tell the user to clear it themselves
+    instead of leaving them waiting on a clear that can never happen."""
+    key = session_key(evt)
+    latch = latch_path(key) if key else None
+    if not latch or not os.path.exists(latch):
+        return
+    cwd = evt.get("cwd") or os.getcwd()
+    if not handoff_written_since(cwd, os.path.getmtime(latch), key, require_open=True):
+        return
+    try:
+        os.close(os.open(latch + ".announced", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except OSError:
+        return  # told once already, or unwritable temp dir
+    print(json.dumps({"systemMessage": (
+        "[context-watch] Handoff saved. This session cannot be cleared automatically "
+        "(no tmux pane): type /clear, then resume. Hook session id: %s" % key)}))
+
+
 def handle_stop(evt):
     """Fully automatic mode, interactive session inside tmux: once this session's
     trigger has fired and a handoff was written after it, type /clear and then
@@ -757,6 +777,8 @@ def handle_stop(evt):
     pane = env("TMUX_PANE")
     if not auto_mode_on():
         nudge_unwritten_handoff(evt)
+    if not pane and not env("HANDOFF_AUTO_RUNNER") and (auto_mode_on() or env("AGENTSROOM_AGENT_ID")):
+        announce_manual_clear(evt)
     if not auto_mode_on() or not pane or env("HANDOFF_AUTO_RUNNER"):
         sys.exit(0)  # the headless runner starts fresh sessions itself
     cwd = evt.get("cwd") or os.getcwd()

@@ -41,6 +41,8 @@ def run_hook(event, env_extra, script=PLUGIN):
     env.pop("AUTORESUME", None)
     env.pop("HANDOFF_AUTO", None)
     env.pop("HANDOFF_AUTO_RUNNER", None)
+    env.pop("AGENTSROOM_AGENT_ID", None)
+    env.pop("TMUX_PANE", None)
     env.pop("CONTEXT_WATCH_AUTORESUME", None)
     env.pop("CONTEXT_WATCH_TOKENS", None)
     env.pop("CONTEXT_WATCH_TOKENS_MAP", None)
@@ -644,6 +646,20 @@ def main():
         f.write("150000/130000/140000\n")
     p_n = run_hook(dict(nudge_evt, session_id=sid_n4), dict(env_n, CONTEXT_WATCH_AGENT="codex"))
     check("stop-nudge-silent-codex", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+
+    # 13b2. No automatic clear possible (AgentsRoom console, no tmux): once the
+    #       handoff is published, tell the user to clear instead of exiting silently.
+    proj_ar = os.path.join(tmp, "proj-agentsroom")
+    os.makedirs(os.path.join(proj_ar, ".handoffs"))
+    sid_ar = "verify-" + uuid.uuid4().hex[:8]
+    env_arm = dict(env_n, AGENTSROOM_AGENT_ID="agent-verify")
+    checkpoint(proj_ar, sid_ar, env_arm)
+    ar_evt = dict(nudge_evt, session_id=sid_ar, cwd=proj_ar)
+    p_ar = run_hook(ar_evt, env_arm)
+    check("stop-agentsroom-says-clear", "type /clear" in p_ar.stdout
+          and '"systemMessage"' in p_ar.stdout, "stdout=%r" % p_ar.stdout[:300])
+    p_ar = run_hook(ar_evt, env_arm)
+    check("stop-agentsroom-says-clear-once", p_ar.stdout.strip() == "", "stdout=%r" % p_ar.stdout[:200])
 
     # 13c. Opening-prompt routing through Jev: injectable ask(), confidence
     #      floor, unknown choice, fail-open; and the hook is silent with

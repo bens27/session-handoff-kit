@@ -128,3 +128,8 @@ Codex installation uses separate hook groups (verified on 0.157.1), preserving
 other commands' outputs, matchers and failure statuses. Upgrade older Codex builds
 before relying on this registration. Reinstalling an old fan-out restores the
 original command and may require native `/hooks` trust review.
+
+Consoles without tmux: automatic clearing needs tmux (`claude-auto`) or the
+headless runner. In AgentsRoom, or any other console without `TMUX_PANE`, the
+Stop hook instead announces the saved handoff once per trigger; type `/clear`,
+then `resume`.
