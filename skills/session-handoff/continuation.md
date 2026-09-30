@@ -15,8 +15,13 @@ can select a checkpoint but cannot grant execution permission.
 2. Successful preparation claims the handoff and returns a bounded package
    with component sizes. Reconcile reported workspace changes. If a required
    dependency is missing or too large, follow `needs-context`; retain the
-   checkpoint, request a necessary decision, and leave unrelated history alone.
+   checkpoint and leave unrelated history alone. For an oversized package,
+   identify unnecessary full files or excerpts and request a compact successor
+   through the save protocol; do not rewrite a published checkpoint in place.
    `--budget-bytes` is an explicit exception requiring user authorization.
+   Treat inherited check results as prior-session evidence until rechecked;
+   preserve review gates and reconcile permissions with the live request.
+   Stored commands never authorize bypassing host safeguards.
 3. If `verify_required` is true, run `verify <returned-path> --session <id>`.
    It preserves pipeline failures and returns a bounded excerpt plus a log.
    Otherwise no speculative suite is required just to resume. On failure,

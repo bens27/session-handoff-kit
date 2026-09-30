@@ -68,7 +68,13 @@ references and sixteen skill names are accepted for preparation. Required
 references support `path#LSTART-LEND`; background belongs in `optional_references`.
 Skill catalogs are caller-supplied installed paths, never downloaded dependencies.
 Aliases and already-loaded skills are deduplicated by canonical path. There is
-no minimum checkpoint length.
+no minimum checkpoint length. The template's ordinary-core target is writing
+guidance, not an enforced size limit. Choose required excerpts for the immediate
+next action; a path used during previous work need not be loaded on resumption.
+A review-only next step normally needs artifact paths and the review question,
+not embedded implementation source. Reduce dependencies before requesting a
+budget exception; keep published checkpoints intact and use a successor save
+when revising their contents.
 
 Verification uses Bash pipefail, a default 60-second timeout (configurable to
 one hour), a durable full log in `.verification/`, and at most 2,000 bytes of

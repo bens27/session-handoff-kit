@@ -17,6 +17,8 @@ For installation/customization only, read `reference.md`.
 1. Finish the atomic action in flight, then read `handoff-template.md`.
    `python3 <ledger> save --template` prints a valid JSON draft. Replace its
    facts with the authorized objective, constraints, evidence and exact next step.
+   Build a minimal continuation core, not a session report. Require only excerpts
+   needed for that next action; keep source files and background as optional paths.
    Continuing an existing topic requires its authoritative `predecessor` path;
    use a distinct topic for independent work.
 2. Run `python3 <ledger> save --session <id> --request-id <checkpoint-id>
@@ -41,6 +43,9 @@ searching history. For multiple candidates ask which (including none).
 
 Run `python3 <ledger> prepare <topic-or-path> --session <id>`.
 Read its body and required excerpts, then report the objective and next step.
+Treat inherited verification as prior-session evidence, not a fresh check.
+A budget failure calls for a smaller core and narrower dependencies; increasing
+`--budget-bytes` requires explicit user authorization.
 Retain `delivery_receipt` only while that content remains in this context.
 Retrieval does not claim, verify, load execution skills, acknowledge or execute.
 Do not mark a checkpoint resumed merely because it was listed or retrieved.
