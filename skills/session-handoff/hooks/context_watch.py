@@ -662,8 +662,10 @@ def nudge_unwritten_handoff(evt):
         "[context-watch] No published checkpoint matches this session's trigger. "
         "For the JSON draft format run python3 %s save --template. Preserve the draft and publish with python3 %s save --session %s "
         "--request-id <stable-checkpoint-id> --input <draft.json>; stop after outcome saved. "
-        "If blocked, report the failed location and keep this session; do not clear."
-        % (shlex.quote(LEDGER), shlex.quote(LEDGER), shlex.quote(key)))}))
+        "If blocked, report the failed location and keep this session; do not clear. "
+        "Searched project: %s."
+        % (shlex.quote(LEDGER), shlex.quote(LEDGER), shlex.quote(key),
+           _ledger().project_root(cwd)))}))
     sys.exit(0)
 
 

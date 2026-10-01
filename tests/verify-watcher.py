@@ -635,6 +635,24 @@ def main():
     checkpoint(proj_n5, sid_n5, env_n, resumed=True)
     p_n = run_hook(dict(nudge_evt, session_id=sid_n5, cwd=proj_n5), env_n)
     check("stop-nudge-silent-after-handoff-resumed", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
+    # A linked git worktree belongs to its main checkout's handoff project: a
+    # save from the root satisfies a Stop whose cwd is inside the worktree.
+    proj_wt = os.path.join(tmp, "proj-worktree")
+    os.makedirs(os.path.join(proj_wt, ".handoffs"))
+    git = lambda *a: subprocess.run(["git", "-C", proj_wt, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                    check=True, capture_output=True)
+    git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "init")
+    git("worktree", "add", "-q", ".worktrees/x")
+    wt = os.path.join(proj_wt, ".worktrees", "x")
+    os.makedirs(os.path.join(wt, ".handoffs"))
+    sid_wt = "verify-" + uuid.uuid4().hex[:8]
+    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_wt), "w") as f:
+        f.write("150000/130000/140000\n")
+    time.sleep(0.05)
+    checkpoint(proj_wt, sid_wt, env_n)
+    p_n = run_hook(dict(nudge_evt, session_id=sid_wt, cwd=os.path.join(wt, ".handoffs")), env_n)
+    check("stop-nudge-silent-after-handoff-from-main-checkout", p_n.stdout.strip() == "",
+          "stdout=%r" % p_n.stdout[:300])
     sid_n3 = "verify-" + uuid.uuid4().hex[:8]
     with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n3), "w") as f:
         f.write("30000/25000/28000\n")

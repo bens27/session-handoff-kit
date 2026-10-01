@@ -152,11 +152,27 @@ def _fallback_claims(d):
     return False
 
 
+def _main_checkout(start):
+    """Main checkout of a linked git worktree containing start, else None."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+            cwd=start, capture_output=True, text=True, timeout=5).stdout.split("\n")
+        gitdir, common = out[0], out[1]
+    except Exception:
+        return None
+    if gitdir and common and gitdir != common and os.path.basename(common) == ".git":
+        return os.path.dirname(common)
+    return None
+
+
 def project_root(start):
     """Nearest ancestor (inclusive) with a .handoffs/ dir or a fallback-dir handoff
     naming it as project, stopping at $HOME; else start. Deliberately NOT the git
-    toplevel: a folder of projects can itself be a git repo."""
+    toplevel: a folder of projects can itself be a git repo. A linked git worktree
+    resolves to its main checkout, so one repo is one handoff project."""
     start = os.path.abspath(start)
+    start = _main_checkout(start) or start
     home = os.path.abspath(os.path.expanduser("~"))
     d = start
     while d != home:
