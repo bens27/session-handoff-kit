@@ -211,13 +211,22 @@ def auto_count_path(cwd):
 
 def read_event():
     try:
-        return json.load(sys.stdin)
+        evt = json.load(sys.stdin)
     except Exception:
         return {}
+    return evt if isinstance(evt, dict) else {}
+
+
+TAIL_STATUS = None  # why the last load_transcript_tail produced no telemetry: missing | unreadable | malformed
 
 
 def load_transcript_tail(path):
-    entries = []
+    """Transcript entries (dicts only). A legitimately empty or usage-free
+    transcript is not an error; a missing/unreadable file, or a non-empty one
+    with no parsable entry, sets TAIL_STATUS so main() can say so once."""
+    global TAIL_STATUS
+    TAIL_STATUS = None
+    entries, bad = [], 0
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -225,13 +234,77 @@ def load_transcript_tail(path):
                 f.seek(-TAIL_BYTES, os.SEEK_END)
                 f.readline()  # discard the partial first line
             for raw in f:
-                try:
-                    entries.append(json.loads(raw))
-                except Exception:
+                if not raw.strip():
                     continue
-    except Exception:
-        pass
+                try:
+                    entry = json.loads(raw)
+                except Exception:
+                    bad += 1
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+                else:
+                    bad += 1
+    except FileNotFoundError:
+        TAIL_STATUS = "missing"
+    except OSError:
+        TAIL_STATUS = "unreadable"
+    else:
+        if bad and not entries:
+            TAIL_STATUS = "malformed"
     return entries
+
+
+_DIAG = None  # one-time telemetry diagnostic, delivered by emit() or at exit
+
+
+def claim_once(evt, suffix):
+    """True the first time per session (latch file); True too when the
+    session is unknowable, so a failure is never swallowed."""
+    key = session_key(evt)
+    if not key:
+        return True
+    try:
+        os.close(os.open(latch_path(key) + suffix, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+
+
+def diag_envelope(agent, event_name, message):
+    if agent != "claude" and event_name == "UserPromptSubmit":
+        return message  # Codex UserPromptSubmit: plain stdout becomes context
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": message}})
+
+
+def flush_diag(agent):
+    """Print a still-undelivered diagnostic (the hook had nothing else to say)."""
+    global _DIAG
+    if _DIAG:
+        event_name, message = _DIAG
+        _DIAG = None
+        print(diag_envelope(agent, event_name, message))
+
+
+def fail_open(exc, evt):
+    """Report an unexpected failure under the event that triggered it, once per
+    session, with the exception type only. Always exits 0."""
+    event_name = (evt or {}).get("hook_event_name") or "SessionStart"
+    if event_name == "SessionStart":
+        message = ('handoff-status: Handoff service unavailable (%s). Continue the current task; explicit retrieval '
+                   'is blocked. Restore the installed skill files/access; do not infer that no handoff exists.'
+                   % type(exc).__name__)
+        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': message}}))
+    elif claim_once(evt, ".error"):
+        message = ("handoff-status: Context-watch failed (%s); context telemetry is unavailable for this hook. "
+                   "Continue the current task." % type(exc).__name__)
+        if event_name in ("PostToolUse", "UserPromptSubmit"):
+            print(diag_envelope(detect_agent(evt, []), event_name, message))
+        elif event_name == "Stop":
+            print(json.dumps({"systemMessage": message}))
+    sys.exit(0)  # report failure without breaking the host session
 
 
 def detect_agent(evt, entries):
@@ -287,14 +360,26 @@ def claude_usage(entries):
 def codex_usage(entries):
     """(breakdown, window, model) from the last token_count / turn_context events."""
     last, window, model = None, None, None
+    seen_total = stale_total = None  # running total of the newest accepted / pre-compaction count
     for e in entries:
         payload = e.get("payload")
+        if e.get("type") == "compacted" or (isinstance(payload, dict)
+                                            and payload.get("type") == "context_compacted"):
+            # Pre-compaction usage no longer describes the window. Codex also
+            # replays the old token_count right after the record: ignore it
+            # until a count with a different running total arrives.
+            last, stale_total = None, seen_total
+            continue
         if isinstance(payload, dict):
             if payload.get("type") == "token_count":
                 info = payload.get("info") or {}
                 usage = info.get("last_token_usage")
+                total = info.get("total_token_usage")
+                if stale_total is not None and total == stale_total:
+                    continue  # replay of the pre-compaction measurement
                 if isinstance(usage, dict):
                     last = usage
+                    seen_total, stale_total = total, None
                 w = info.get("model_context_window")
                 if isinstance(w, int) and w > 0:
                     window = w
@@ -909,20 +994,25 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill,
     return message
 
 
-def build_floor_message(floor, limit, model, agent):
+def build_floor_message(floor, threshold, floor_limit, model, agent):
     # Smallest threshold that clears the floor by max(10k, 10% of itself).
     suggest = -(-max(floor + 10000, floor / 0.9) // 1000) * 1000
     return (
         "%s The %s-token handoff threshold for %s is below this session's startup "
-        "context (~%s tokens at the first model call), so a handoff would free "
-        "nothing and no handoff notice will be sent this session. Tell the user: "
-        "set HANDOFF_AT (or CONTEXT_WATCH_TOKENS) to at least ~%s."
-        % ("handoff-status:", format(limit, ","),
-           model or "unknown model", format(floor, ","), format(int(suggest), ","))
+        "context (~%s tokens at the first model call), so an early handoff would free "
+        "nothing. No handoff notice is sent until context pressure nears the window "
+        "limit (~%s tokens). Tell the user: set HANDOFF_AT (or CONTEXT_WATCH_TOKENS) "
+        "to at least ~%s."
+        % ("handoff-status:", format(threshold, ","),
+           model or "unknown model", format(floor, ","), format(floor_limit, ","),
+           format(int(suggest), ","))
     )
 
 
 def emit(agent, event_name, message, mode):
+    global _DIAG
+    if _DIAG and _DIAG[0] == event_name:
+        message, _DIAG = _DIAG[1] + " " + message, None
     if agent == "claude" or event_name == "PostToolUse":
         # Codex PostToolUse takes the same JSON: additionalContext is added as
         # developer context and the tool result is kept; block replaces it.
@@ -942,17 +1032,27 @@ def emit(agent, event_name, message, mode):
 
 # ---------------------------------------------------------------- main
 
+_AGENT, _EVT = "claude", {}
+
+
 def main():
     if env("CONTEXT_WATCH_DISABLE") == "1":
         sys.exit(0)
 
-    evt = read_event()
+    global _DIAG, _AGENT, _EVT
+    evt = _EVT = read_event()
     event_name = evt.get("hook_event_name") or ""
     if event_name == "Stop":
         handle_stop(evt)
     transcript_path = evt.get("transcript_path") or ""
     entries = load_transcript_tail(transcript_path) if transcript_path else []
-    agent = detect_agent(evt, entries)
+    agent = _AGENT = detect_agent(evt, entries)
+    # A first prompt may precede the transcript file; PostToolUse never does.
+    if (TAIL_STATUS and event_name in ("PostToolUse", "UserPromptSubmit")
+            and not (TAIL_STATUS == "missing" and event_name == "UserPromptSubmit")
+            and claim_once(evt, ".telemetry")):
+        _DIAG = (event_name, "handoff-status: Context telemetry unavailable (transcript %s); context-pressure "
+                 "warnings are off for this session until it is readable. Continue the current task." % TAIL_STATUS)
 
     if event_name == "SessionStart":
         handle_session_start(evt, agent)
@@ -1017,13 +1117,47 @@ def main():
                 source, format(limit, ","), format(window, ","), format(reserve, ","))
             limit = cap
     fired = os.path.exists(first)
-    if fired and occupancy < limit * REARM_FACTOR:
-        for path in (first, second, first + ".cleared"):
+    floor_latch = first + ".floor"
+    floored = os.path.exists(floor_latch)
+    if (fired or floored) and occupancy < limit * REARM_FACTOR:
+        for path in (first, second, floor_latch, first + ".cleared"):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:
                 pass
         sys.exit(0)
+    floor, below_floor, floor_limit = None, False, None
+    if floored or (not fired and occupancy >= limit):
+        # A threshold at or under the startup context would fire at once and
+        # free nothing. Say so once, then watch the window-reserve limit
+        # instead: pressure protection stays, the handoff loop cannot start.
+        if not floored:
+            try:
+                if os.path.getsize(transcript_path) <= TAIL_BYTES:
+                    floor = floor_occupancy(entries, agent)
+            except OSError:
+                pass
+        else:
+            floor = read_first_latch(floor_latch)[0] or None
+        if floored or (floor is not None and limit < floor + max(FLOOR_MARGIN, limit * 0.1)):
+            try:
+                reserve = int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE)))
+            except ValueError:
+                reserve = DEFAULT_RESERVE
+            # ponytail: an assumed (unreported) window uses CONTEXT_WATCH_WINDOW, 200k by default
+            floor_limit = max(window - reserve, limit)
+            below_floor = True
+            source = "%s, raised to window %s - reserve %s (startup context ~%s)" % (
+                source, format(window, ","), format(reserve, ","), format(floor or 0, ","))
+    configured_limit = limit
+    if below_floor:
+        if not floored:
+            try:
+                with open(floor_latch, "w") as f:
+                    f.write("%d/0/0\n" % (floor or 0))
+            except OSError:
+                pass
+        limit = floor_limit
     if os.path.exists(second):
         sys.exit(0)  # both notices given; only a compaction re-arms
     need = limit
@@ -1037,34 +1171,20 @@ def main():
             sys.exit(0)  # the handoff was written; the notice was acted on
         need = max(limit * SECOND_NOTICE_FACTOR,
                    first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
-    if occupancy < need:
+    note_only = below_floor and not floored and occupancy < need
+    if occupancy < need and not note_only:
         sys.exit(0)
 
-    floor = None
-    if not fired:
+    if not note_only:
         try:
-            if os.path.getsize(transcript_path) <= TAIL_BYTES:
-                floor = floor_occupancy(entries, agent)
-        except OSError:
+            fd = os.open(second if fired else first, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write("%d/%d/%d\n" % (occupancy, limit, breakdown["occupancy"]))
+        except FileExistsError:
+            sys.exit(0)
+        except Exception:
             pass
-    below_floor = floor is not None and limit < floor + max(FLOOR_MARGIN, limit * 0.1)
-
-    try:
-        fd = os.open(second if fired else first, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w") as f:
-            f.write("%d/%d/%d\n" % (occupancy, limit, breakdown["occupancy"]))
-    except FileExistsError:
-        sys.exit(0)
-    except Exception:
-        pass
-    write_session_note(cwd, evt, not below_floor)
-    if below_floor:
-        # One note per session: occupy the second-notice latch too, so the
-        # handoff never fires (and HANDOFF_AUTO cannot loop) until a compaction.
-        try:
-            open(second, "w").close()
-        except OSError:
-            pass
+        write_session_note(cwd, evt, True)
 
     usage_age = usage_age_seconds(entries)
     log_event({
@@ -1081,7 +1201,7 @@ def main():
         "window": window,
         "window_source": window_source,
         "usage_age_s": usage_age,
-        "notice": "floor" if below_floor else (2 if fired else 1),
+        "notice": "floor" if note_only else (2 if fired else 1),
         "floor": floor,
         "breakdown": breakdown,
         "session_id": session_id,
@@ -1090,8 +1210,8 @@ def main():
 
     skill = env("CONTEXT_WATCH_SKILL", "session-handoff")
     mode = env("CONTEXT_WATCH_MODE", "warn").strip().lower()
-    if below_floor:
-        emit(agent, event_name, build_floor_message(floor, limit, model, agent), "warn")
+    if note_only:
+        emit(agent, event_name, build_floor_message(floor, configured_limit, floor_limit, model, agent), "warn")
     import shlex
     message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
                             agent, second=fired, usage_age=usage_age)
@@ -1110,8 +1230,7 @@ if __name__ == "__main__":
     try:
         main()
     except SystemExit:
+        flush_diag(_AGENT)
         raise
     except Exception as exc:
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext':
-            'handoff-status: Handoff service unavailable (%s). Continue the current task; explicit retrieval is blocked. Restore the installed skill files/access; do not infer that no handoff exists.' % type(exc).__name__}}))
-        sys.exit(0)  # report failure without breaking the host session
+        fail_open(exc, _EVT)
