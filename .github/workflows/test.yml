@@ -20,11 +20,6 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Prepare extension verifier Python path
-        run: |
-          sudo mkdir -p /opt/homebrew/bin
-          sudo ln -sf "$(command -v python3)" /opt/homebrew/bin/python3.14
-
       - name: Verify packaging
         run: python3 tests/verify-packaging.py
 
