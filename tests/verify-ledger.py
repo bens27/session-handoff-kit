@@ -262,7 +262,7 @@ def main():
         check("new-path-json-parses", True)
     check("new-path-json-exact-keys",
           set(generated.keys()) == set(["directory", "filename", "path", "created", "project", "git",
-                                        "reason", "skills", "supersedes", "template"]),
+                                        "reason", "skills", "template"]),
           "keys=%r" % sorted(generated.keys()))
     with open(os.path.join(REPO, "skills", "session-handoff", "handoff-template.md"), encoding="utf-8") as f:
         check("new-path-json-template-is-skill-file", generated.get("template") == f.read(),
@@ -307,7 +307,7 @@ def main():
     check("new-path-unidentified-session-does-not-borrow-pressure", j7b.get("reason") == "user-parked", "out=%r" % j7b)
     check("new-path-no-eager-skill-inheritance", j7b.get("skills") == "", "out=%r" % j7b)
     check("new-path-does-not-infer-lineage",
-          [os.path.basename(x) for x in j7b.get("supersedes", [])] == [],
+          "supersedes" not in j7b,
           "out=%r" % j7b)
     p7b = run(["new-path", "new-thread", tmp7b], tmp7b, env7b)
     check("new-path-no-branch-supersede-instruction", "supersedes: " not in p7b.stdout, "out=%r" % p7b.stdout)

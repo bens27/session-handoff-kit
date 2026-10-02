@@ -447,5 +447,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(out['outcome'], 'incomplete')
 
 
+    def test_prepare_names_an_unpublished_successor_as_incomplete(self):
+        first = json.loads(self.save('first').stdout)
+        second = json.loads(self.save('second', predecessor=first['path']).stdout)
+        os.unlink(second['path'] + '.published')  # interrupted save: document without receipt
+        out = json.loads(self.cli('prepare', first['path'], '--session', 'one', ok=False).stdout)
+        self.assertEqual(out['outcome'], 'incomplete', out)
+        self.assertIn('retry', out['action'])
+
+    def test_new_path_rejects_a_topic_that_is_not_kebab_case(self):
+        for topic in ('../../x', 'Has Space', ''):
+            with self.subTest(topic=topic):
+                p = self.cli('new-path', topic, self.root, ok=False)
+                self.assertEqual(p.returncode, 1)
+                self.assertNotIn('path:', p.stdout)
+        self.assertEqual(self.cli('new-path', 'fine-topic', self.root).returncode, 0)
+
+
 if __name__ == '__main__':
     unittest.main()

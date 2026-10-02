@@ -147,8 +147,7 @@ def save(root, session, request_id, document):
     if not isinstance(document, dict):
         raise ValueError('Draft must be a JSON object.')
     topic = document.get('topic', '')
-    import re
-    if not isinstance(topic, str) or len(topic) > 80 or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', topic):
+    if not isinstance(topic, str) or len(topic) > 80 or not ledger.TOPIC_RE.fullmatch(topic):
         return dict(outcome='invalid', action='Supply a short kebab-case topic.')
     body = document.get('body', '')
     if not isinstance(body, str):
@@ -348,6 +347,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
     path = resolved['authoritative']
     if not path:
         return lookup(root)
+    if resolved['chain'][-1]['status'] == 'unpublished':
+        return dict(outcome='incomplete', path=path, action='The newest checkpoint for this topic was never fully published (interrupted save). Keep the draft/session; retry the original save request to finish it, or inspect history to repair it. Do not clear.')
     if resolved['chain'][-1]['status'] != 'open':
         return dict(outcome='closed', action='This topic is already transferred or closed. Use history for inspection; do not adopt it.')
     supplied = catalog is not None

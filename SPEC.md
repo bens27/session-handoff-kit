@@ -408,7 +408,9 @@ States remain open, resumed, superseded and abandoned; claimed is a temporary
 lease on open work. Legacy `claim`, `resume`, `supersede`, `abandon`, `release`,
 `new-path`, `save-path` and `list` remain available. Legacy direct writes do not
 produce automatic checkpoint receipts. `new-path` no longer inherits unrelated
-session facts, skill history, or same-branch predecessors. CLI `resolve` is compact;
+session facts, skill history, or same-branch predecessors. It rejects a topic that is not
+kebab-case, as `save` does. `prepare` on a topic whose newest checkpoint is an
+unpublished (interrupted) save returns `incomplete`, not `closed`. CLI `resolve` is compact;
 `history --topic TOPIC --offset N --limit N` is explicit paginated metadata.
 The importable `resolve` API retains full-chain compatibility.
 

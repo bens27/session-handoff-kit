@@ -61,6 +61,7 @@ CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
 KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
 REQUIRED_SECTIONS = ("Objective", "Current state", "Next steps")
 MAX_WORDS = 1500
+TOPIC_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished")
 MAX_REFS = 8              # references a resume is asked to read, at most
 MAX_REF_BYTES = 256_000   # combined size of the existing referenced files
@@ -554,11 +555,6 @@ def transcript_skills(path):
     return seen
 
 
-def supersede_candidates(root, git_position, topic):
-    """Legacy API: automatic predecessor inference has been retired."""
-    return []  # lineage is explicit; sharing a branch never authorizes replacement.
-
-
 def read_template():
     """handoff-template.md from the skill folder these hooks live in, so the
     agent never has to read a file outside its working directory. "" when
@@ -576,7 +572,6 @@ def new_path(topic, root):
     now = datetime.now()
     abs_root = project_root(root)
     directory = save_path(abs_root)
-    note = read_session_note(abs_root)
     git_position = _git_position(abs_root)
     stem = "%s-%s" % (now.strftime("%Y%m%d-%H%M"), topic)
     filename, n = stem + ".md", 2
@@ -589,9 +584,8 @@ def new_path(topic, root):
         "created": now.strftime(STAMP),
         "project": abs_root,
         "git": git_position,
-        "reason": "context-pressure" if note.get("fired") else "user-parked",
+        "reason": "user-parked",  # context-pressure is only known to save, which has the session
         "skills": "",  # execution dependencies are explicit, not all past Skill calls
-        "supersedes": supersede_candidates(abs_root, git_position, topic),
     }
 
 
@@ -808,6 +802,9 @@ def _cli(argv):
             print("usage: handoff_ledger.py new-path <topic> [dir] [--json]",
                   file=sys.stderr)
             return 1
+        if len(args[0]) > 80 or not TOPIC_RE.fullmatch(args[0]):
+            print("invalid topic: use a short kebab-case topic", file=sys.stderr)
+            return 1
         root = args[1] if len(args) > 1 else "."
         result = new_path(args[0], root)
         if as_json:
@@ -816,8 +813,6 @@ def _cli(argv):
             for key in ("directory", "filename", "path", "created", "project", "git",
                         "reason", "skills"):
                 print("%s: %s" % (key, result[key]))
-            if result["supersedes"]:
-                print("supersedes: %s" % ", ".join(result["supersedes"]))
         return 0
     if cmd in ("resume", "supersede", "abandon", "claim", "release"):
         owner = None
@@ -855,8 +850,6 @@ def _cli(argv):
                 release(path, owner)
                 print("released: %s" % path)
                 return 0
-            if owner is not None:
-                _check_owner(path, owner)
             status = {"resume": "resumed", "supersede": "superseded",
                       "abandon": "abandoned"}[cmd]
             stamp = _mark(path, status, superseded_by, owner)
