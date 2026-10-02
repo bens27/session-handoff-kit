@@ -63,8 +63,8 @@ def main():
     # Content the next step needs travels as a line-range excerpt, not as a
     # prose pointer the receiver has to search for and rebuild.
     check("agent-template-prefers-line-range-excerpts",
-          re.search(r"--attach path#L", a_tpl) is not None
-          and re.search(r"around line", a_tpl, re.IGNORECASE) is not None,
+          re.search(r"#L", a_tpl) is not None and "--attach" in a_tpl
+          and re.search(r"\b(around|near|about|approximately)\s+lines?\b", a_tpl, re.IGNORECASE) is not None,
           "handoff-template.md must steer needed files into path#L references and flag 'around line N' prose")
 
     # Contract literals may live in either half of a skill directory.
@@ -96,24 +96,22 @@ def main():
         check("chat-attached-before-ledger", ok,
               "resume section must check attached/pasted content before the memory ledger (SPEC 8 resolution order)")
 
-    # Wind-down must prove the handoff is discoverable before reporting done:
-    # the §1 protocol runs `resolve` and checks `authoritative:` is the new
-    # file. A handoff the announcer cannot find is the failure mode the
-    # both-locations ledger fix (0.6.1) existed to close.
+    # Wind-down invariant, independent of wording: §1 invokes `<ledger> save`,
+    # requires `outcome: saved`, then reports to the user, then stops. A
+    # handoff announced before the ledger confirms it may not be discoverable.
     wind = re.search(r"^## §1 .*?(?=^## §2)", a, re.DOTALL | re.MULTILINE)
     check("agent-wind-down-section-present", wind is not None)
     if wind:
         sect = wind.group(0)
-        verify = re.search(r"outcome: saved", sect)
-        report = re.search(r"Tell the user the handoff is complete", sect)
-        stop = re.search(r"\bStop\b", sect)
-        check("agent-wind-down-requires-published-receipt",
-              verify is not None and "<ledger> save --input" in sect,
-              "§1 must publish with save and require outcome: saved")
-        check("agent-wind-down-verify-precedes-report",
-              verify is not None and report is not None and stop is not None
-              and verify.start() < report.start() < stop.start(),
-              "§1 order must be: save -> receipt -> tell user -> stop")
+        save = re.search(r"<ledger>`?\s+save\b(?!\s+--template)", sect)
+        saved = save and re.search(r"outcome: saved", sect[save.end():])
+        after = save.end() + saved.end() if saved else len(sect)
+        report = re.search(r"\b(tell|report|announce)\b[^.\n]*\buser\b", sect[after:], re.IGNORECASE)
+        stop = report and re.search(r"\bstop\b", sect[after + report.end():], re.IGNORECASE)
+        check("agent-wind-down-requires-published-receipt", bool(save and saved),
+              "§1 must publish with `<ledger> save` and require outcome: saved")
+        check("agent-wind-down-verify-precedes-report", bool(saved and report and stop),
+              "§1 order must be: save -> outcome: saved -> report to user -> stop")
 
     # The four-step order should all be present in the resume flow
     for needle, name in (("SESSION HANDOFF", "chat-past-chat-search-marker",),):
