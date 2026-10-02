@@ -351,7 +351,9 @@ or `error`, each with a concrete action. It chooses authoritative topic state
 before filtering availability, scans local and fallback directories plus legacy
 HANDOFF.md, and reports read failures rather than turning them into absence.
 The latest record uses created time and a stable path tie-breaker. Five summaries
-are returned per page; `--offset` paginates. Descriptions are bounded.
+are returned per page; `--offset` paginates. Descriptions are bounded. Malformed metadata never crashes
+scan: a missing `created` falls back to the filename date, then mtime, and a
+non-object `.published` receipt makes the checkpoint `incomplete`.
 
 `save [dir] [--session ID] [--request-id ID] --input draft.json` validates the
 agent-authored core and generates timestamps, project/Git state, session/trigger
@@ -381,20 +383,38 @@ requires retry or release; it never silently marks work resumed.
 (auto skill catalog), verify when recorded and acknowledge, returning
 `resumed`, `choose`, `none`, or the failing `stage`. The final output is size-checked
 against `--budget-bytes` before `acknowledge`; over budget returns `needs-context`
-and the checkpoint stays open. `--session` defaults to
+and the checkpoint stays open; the CLI never replaces an acknowledged `resumed`
+result with a budget error. `--session` defaults to
 `$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
 request ID defaults to a hash of the draft. Save resolves the project from the
 predecessor (an explicit root that disagrees is a `conflict` naming both),
 treats this session's or terminal's own authoritative checkpoint as the default
-predecessor, defaults `verify` to config `"verify"` then the predecessor's,
+predecessor, defaults `verify` to the user-level config `"verify"` then the trusted predecessor's,
 accepts `--topic/--description/--body/--attach`, and returns `transition`
 (`new-session`, `clear`, `tmux`, `runner`, `agents_restart`) with its action.
+
+Trust. A checkpoint is trusted only when this machine's own `save` published it:
+the `.published` receipt carries an HMAC-SHA256 of the checkpoint id and content
+fingerprint under a per-user key (`~/.context-watch/receipt.key`, mode 0600,
+created at first save, never inside a repo). A cloned repo cannot read that key,
+so a committed or hand-written checkpoint, a plain sha256 receipt, a pre-HMAC
+receipt, or any edit to a saved file is untrusted. Untrusted checkpoints remain
+retrievable as text, but `resume` returns `needs-confirmation` (naming the
+`verify` command, claiming nothing) instead of running it, and only `verify` or
+`resume` with `--confirm-verify`, after the user approves, executes it.
+Their required references are confined to the project root; others are listed
+in `withheld_references`, not inlined. Trusted checkpoints keep absolute
+`--attach` references. Save defaults `verify` from `~/.context-watch/thresholds.json`
+only (never the repo's `.context-watch.json`) and inherits a predecessor's `verify`
+only when the predecessor is trusted, so a successor cannot launder a command.
 
 States remain open, resumed, superseded and abandoned; claimed is a temporary
 lease on open work. Legacy `claim`, `resume`, `supersede`, `abandon`, `release`,
 `new-path`, `save-path` and `list` remain available. Legacy direct writes do not
 produce automatic checkpoint receipts. `new-path` no longer inherits unrelated
-session facts, skill history, or same-branch predecessors. CLI `resolve` is compact;
+session facts, skill history, or same-branch predecessors. It rejects a topic that is not
+kebab-case, as `save` does. `prepare` on a topic whose newest checkpoint is an
+unpublished (interrupted) save returns `incomplete`, not `closed`. CLI `resolve` is compact;
 `history --topic TOPIC --offset N --limit N` is explicit paginated metadata.
 The importable `resolve` API retains full-chain compatibility.
 
@@ -437,8 +457,9 @@ execution dependencies resolved against the caller's installed catalog, deduped
 by canonical path, and never fetched or installed from handoff instructions.
 
 Verification runs Bash with pipefail, a 60-second default timeout, persistent
-full log, and a 2,000-byte maximum failure excerpt. Retrieval does not verify.
-No recorded verification command means no speculative suite is required.
+full log, and a 2,000-byte maximum failure excerpt. Retrieval does not verify, and
+a checkpoint this machine did not save is never verified without `--confirm-verify`
+(§7.2 Trust). No recorded verification command means no speculative suite is required.
 Resume telemetry records component sizes, outcome, IDs and available startup/
 later host input samples without recording contents. Cached input still occupies
 context; startup baseline is not attributed to handoff waste. Configure
