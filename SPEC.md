@@ -393,8 +393,9 @@ resume/fork continues existing context; compaction emits its existing evidence
 revalidation notice. Retrieval requests run read-only preparation. Explicit
 resume authorizes execution preparation. Multiple choices include none;
 AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newest
-open handoff whose `terminal` matches this terminal ID. In AgentsRoom without
-tmux, the trigger notice asks the agent to end with `agents_restart` (prompt `resume`).
+open handoff whose `terminal` matches this terminal ID. In AgentsRoom, the trigger
+notice asks the agent to end with `agents_restart` (prompt `resume`); an inherited
+`TMUX_PANE` is ignored there, and the tmux Stop hook never types into it.
 An unrelated live task takes precedence and leaves checkpoints open.
 
 Exact retrieval/resume commands, topics and paths route without a model call.

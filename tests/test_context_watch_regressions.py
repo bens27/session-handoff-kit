@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -116,13 +117,42 @@ class AgentsRoomRestart(HookCase):
         self.assertIn("agents_restart", msg)
         self.assertIn("resume", msg.split("agents_restart", 1)[1])
 
-    def test_no_restart_instruction_in_tmux_or_without_auto(self):
-        tmux = self.trigger({"HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "agent-7",
-                             "TMUX_PANE": "%1"})
+    def test_no_restart_instruction_in_plain_tmux_or_without_auto(self):
+        tmux = self.trigger({"HANDOFF_AUTO": "1", "TMUX_PANE": "%1"})
         self.assertIn("reason: context-pressure", tmux)
         self.assertNotIn("agents_restart", tmux)
         self.setUp()
         self.assertNotIn("agents_restart", self.trigger({"AGENTSROOM_AGENT_ID": "agent-7"}))
+
+    def test_agentsroom_wins_over_inherited_tmux_pane(self):
+        # AgentsRoom started from a shell inside tmux inherits TMUX_PANE; that pane
+        # belongs to another terminal, so the tab must restart itself and the Stop
+        # hook must never type into the pane.
+        bindir = os.path.join(self.tmp, "bin")
+        os.makedirs(bindir)
+        keys = os.path.join(self.tmp, "tmux-keys.txt")
+        with open(os.path.join(bindir, "tmux"), "w") as f:
+            f.write("#!/bin/sh\necho \"$*\" >> %s\n" % keys)
+        os.chmod(os.path.join(bindir, "tmux"), 0o755)
+        extra = {"HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "agent-7", "TMUX_PANE": "%1",
+                 "PATH": bindir + os.pathsep + os.environ.get("PATH", "")}
+        msg = self.trigger(extra)
+        self.assertIn("agents_restart", msg)
+        os.makedirs(os.path.join(self.tmp, ".handoffs"))
+        env = {k: v for k, v in os.environ.items() if k not in CLEAN}
+        env.update(extra, HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0")
+        doc = {"topic": "inherited-pane", "description": "fixture",
+               "body": "## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nTest.\n"}
+        ledger = os.path.join(os.path.dirname(HOOK), "handoff_ledger.py")
+        p = subprocess.run([sys.executable, ledger, "save", self.tmp, "--session", self.sid,
+                            "--request-id", "fixture"], input=json.dumps(doc), env=env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(json.loads(p.stdout)["transition"]["kind"], "agents_restart")
+        stop = self.run_hook(event="Stop", extra=extra)
+        self.assertIn("did not restart itself", stop)
+        time.sleep(2.5)  # the tmux typer would send /clear 2s after the hook returns
+        self.assertFalse(os.path.exists(keys), open(keys).read() if os.path.exists(keys) else "")
 
 
 class CodexCompaction(HookCase):

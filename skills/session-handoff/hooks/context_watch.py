@@ -929,7 +929,9 @@ def handle_stop(evt):
     """Fully automatic mode, interactive session inside tmux: once this session's
     trigger has fired and a handoff was written after it, type /clear and then
     "resume" into the pane, so the cleared session picks the handoff up."""
-    pane = env("TMUX_PANE")
+    # An AgentsRoom tab restarts itself; a TMUX_PANE it inherited (the app was
+    # launched from inside tmux) belongs to another terminal, so never type there.
+    pane = "" if env("AGENTSROOM_AGENT_ID") else env("TMUX_PANE")
     if not auto_mode_on():
         nudge_unwritten_handoff(evt)
     if not pane and not env("HANDOFF_AUTO_RUNNER") and (auto_mode_on() or env("AGENTSROOM_AGENT_ID")):
@@ -1281,8 +1283,8 @@ def main():
     message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
                             agent, second=fired, usage_age=usage_age)
     message += " Session identity: %s. Publish with python3 %s save --session %s --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
-    if auto_mode_on() and env("AGENTSROOM_AGENT_ID") and not env("TMUX_PANE"):
-        # No pane to type /clear into: the AgentsRoom agent restarts its own tab.
+    if auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
+        # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
         message += (" Fully automatic mode in AgentsRoom: after save returns outcome saved,"
                     " make your last action a call to the AgentsRoom agents_restart tool"
                     " for this agent with prompt \"resume\", so the fresh session picks"

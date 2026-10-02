@@ -178,8 +178,9 @@ records the terminal it came from (`HANDOFF_TERMINAL_ID`, else
 `AGENTSROOM_AGENT_ID`), and the cleared session resumes the newest open handoff
 of its own terminal, not the project's newest. In AgentsRoom (the default path),
 the context notice tells the agent to finish by calling `agents_restart` with
-prompt `resume`, which reopens its tab on that handoff. As an optional fallback inside tmux,
-a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
+prompt `resume`, which reopens its tab on that handoff; AgentsRoom takes precedence
+over any `TMUX_PANE` the app inherited, so nothing is typed into another terminal.
+As an optional fallback inside tmux outside AgentsRoom, a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
 is written (Claude Code hooks cannot clear a session themselves). Outside
 tmux, or for Codex, use the headless runner, which re-launches the agent with
 `resume` while successful runs leave a new open handoff. A nonzero child exit
