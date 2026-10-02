@@ -440,6 +440,16 @@ section, assign each a distinct section or give all doc edits to one doc lane.
 Interface notes kept in scratch files leave the coordinator to rebuild the docs
 from them, which costs a full extra read of every changed interface.
 
+A coordinator that is asked to save while workers are live saves immediately,
+then waits for them to report (or confirms their results are durable in commits
+or backlog comments) before it follows the transition. An Agent-tool subagent's
+report reaches only the session that spawned it, so `/clear` or `agents_restart`
+would discard it. For long-running parallel lanes prefer AgentsRoom workers
+(`agents_spawn`, reported back through the mailbox or a backlog comment): they
+outlive the coordinator. The context watcher stays silent inside subagents (it
+detects them by the `agent_id` field Claude Code adds to their hook events), so
+a subagent never receives the parent's handoff notice.
+
 ## Layout
 
 ```

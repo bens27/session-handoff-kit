@@ -135,6 +135,13 @@ other commands' outputs, matchers and failure statuses. Upgrade older Codex buil
 before relying on this registration. Reinstalling an old fan-out restores the
 original command and may require native `/hooks` trust review.
 
+Live delegated workers: a session that saves while Agent-tool subagents are
+running saves now but defers the transition (`/clear`, `agents_restart`, runner
+restart) until they report or their results are confirmed durable in commits or
+backlog comments; their reports reach only the spawning session. Prefer
+AgentsRoom workers (`agents_spawn` + mailbox) for long parallel lanes. The
+watcher ignores hook events that carry `agent_id` (subagents).
+
 Consoles without tmux: automatic clearing needs tmux (`claude-auto`) or the
 headless runner. With auto mode on in AgentsRoom, the context notice has the
 agent call `agents_restart` with prompt `resume`; no typing is needed. Typing
