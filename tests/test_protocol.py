@@ -50,6 +50,24 @@ class ProtocolTests(unittest.TestCase):
         return self.cli('save', '--session', 'one', '--request-id', request,
                         input=json.dumps(doc))
 
+    def test_auto_clear_resumes_this_terminals_handoff_not_the_newest(self):
+        # Two wrapped terminals in one project: B saves after A. Each cleared
+        # session must resume its own terminal's handoff, never "newest".
+        doc = lambda topic: json.dumps({'topic': topic, 'description': topic,
+            'body': '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun checks.\n'})
+        paths = {}
+        for tid, topic in (('agent-a', 'alpha-work'), ('agent-b', 'beta-work')):
+            self.env['AGENTSROOM_AGENT_ID'] = tid
+            out = self.cli('save', '--session', 'old-' + tid, '--request-id', 'c1', input=doc(topic))
+            paths[tid] = os.path.basename(json.loads(out.stdout)['path'])
+        self.env['HANDOFF_AUTO'] = '1'
+        for tid in ('agent-a', 'agent-b'):
+            self.env['AGENTSROOM_AGENT_ID'] = tid
+            note = json.dumps(self.hook('SessionStart', session='new-' + tid, source='clear'))
+            self.assertIn(paths[tid], note)
+            other = paths['agent-b' if tid == 'agent-a' else 'agent-a']
+            self.assertNotIn(other, note)
+
     def test_informational_hooks_do_not_activate_handoff_skill(self):
         self.put()
         compact = json.dumps(self.hook('SessionStart', source='compact'))

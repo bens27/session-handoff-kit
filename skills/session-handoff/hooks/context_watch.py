@@ -710,8 +710,8 @@ def handle_session_start(evt, agent):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
     write_session_note(cwd, evt, False)
-    from handoff_protocol import lookup, opening_action
-    result = lookup(cwd)
+    from handoff_protocol import lookup, opening_action, terminal_id
+    result = lookup(cwd, terminal=terminal_id() if auto_mode_on() else None)
     policy = opening_action('', result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
     label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' and autoresume_on() else 'handoff-status:'
     note = label + ' ' + policy + (' This status requires no skill loading.' if label == 'handoff-status:' else '')
@@ -799,11 +799,12 @@ def route_opening_prompt(evt, agent):
     claim one or leave them alone, so it neither resumes unrelated work nor
     asks which of one."""
     cwd = evt.get("cwd") or os.getcwd()
-    from handoff_protocol import lookup, opening_action, generic_intent
+    from handoff_protocol import lookup, opening_action, generic_intent, terminal_id
     prompt = str(evt.get('prompt') or '')
     import re
     direct = None if generic_intent(prompt) else re.fullmatch(r'(resume|retrieve) ([a-z0-9-]+|/[^\n]+)', prompt.strip(), re.I)
-    result = lookup(cwd, topic=direct[2] if direct else None)
+    result = lookup(cwd, topic=direct[2] if direct else None,
+                    terminal=terminal_id() if auto_mode_on() and not direct else None)
     policy = opening_action(prompt, result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
     actionable = result['outcome'] == 'available'
     if policy is None and direct:
@@ -853,8 +854,8 @@ def announce_manual_clear(evt):
     except OSError:
         return  # told once already, or unwritable temp dir
     print(json.dumps({"systemMessage": (
-        "[context-watch] Handoff saved. This session cannot be cleared automatically "
-        "(no tmux pane): type /clear, then resume. Hook session id: %s" % key)}))
+        "[context-watch] Handoff saved. If the agent did not restart itself, type "
+        "/clear, then resume (no tmux pane to clear automatically). Hook session id: %s" % key)}))
 
 
 def handle_stop(evt):
@@ -1216,6 +1217,12 @@ def main():
     message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
                             agent, second=fired, usage_age=usage_age)
     message += " Session identity: %s. Publish with python3 %s save --session %s --request-id <stable-checkpoint-id> --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
+    if auto_mode_on() and env("AGENTSROOM_AGENT_ID") and not env("TMUX_PANE"):
+        # No pane to type /clear into: the AgentsRoom agent restarts its own tab.
+        message += (" Fully automatic mode in AgentsRoom: after save returns outcome saved,"
+                    " make your last action a call to the AgentsRoom agents_restart tool"
+                    " for this agent with prompt \"resume\", so the fresh session picks"
+                    " up this terminal's handoff.")
     emit(agent, event_name, message, mode)
 
 

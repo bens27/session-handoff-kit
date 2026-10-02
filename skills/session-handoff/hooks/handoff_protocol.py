@@ -11,9 +11,17 @@ from datetime import datetime
 import handoff_ledger as ledger
 
 
-def lookup(root='.', max_age=14, offset=0, topic=None):
+def terminal_id():
+    """Wrapper identity that survives /clear: one terminal, one current handoff."""
+    value = os.environ.get('HANDOFF_TERMINAL_ID') or os.environ.get('AGENTSROOM_AGENT_ID') or ''
+    return value.strip().splitlines()[0][:120] if value.strip() else ''
+
+
+def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
     stats = {}
     items = ledger.scan(root, max_age, stats)
+    if terminal:
+        items = [h for h in items if h.get('terminal') == terminal]
     if topic is not None:
         items = [h for h in items if h['topic'] == topic or os.path.realpath(h['path']) == os.path.realpath(topic)]
     outcome = ('error' if stats['errors'] else 'incomplete' if stats['incomplete'] else 'available' if items else
@@ -106,6 +114,7 @@ def save(root, session, request_id, document):
                       checkpoint_id=identity, content_hash=fingerprint,
                       trigger_id=note.get('trigger_id', '') if note.get('fired') else '',
                       runner_id=os.environ.get('HANDOFF_RUN_ID', ''),
+                      terminal=terminal_id(),
                       reason='context-pressure' if note.get('fired') else 'user-parked')
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
@@ -447,7 +456,7 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     if execute:
         command += ' --execute'
     suffix = ' Prepare and verify, then acknowledge before continuing the authorized work.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
-    return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + ('Fully automatic: newest of %d; proceed without asking. ' % result['total'] if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
+    return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
 
 
 def history(root, topic=None, offset=0, limit=10):

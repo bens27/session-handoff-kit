@@ -106,6 +106,25 @@ class NormalPolicyUnchanged(HookCase):
                       self.context(self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})))
 
 
+class AgentsRoomRestart(HookCase):
+    def trigger(self, extra):
+        self.write([claude_call(20000), claude_call(140000)])
+        return self.context(self.run_hook(extra=dict(extra, CONTEXT_WATCH_THINKING="0")))
+
+    def test_auto_agentsroom_trigger_asks_agent_to_restart_itself(self):
+        msg = self.trigger({"HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "agent-7"})
+        self.assertIn("agents_restart", msg)
+        self.assertIn("resume", msg.split("agents_restart", 1)[1])
+
+    def test_no_restart_instruction_in_tmux_or_without_auto(self):
+        tmux = self.trigger({"HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "agent-7",
+                             "TMUX_PANE": "%1"})
+        self.assertIn("reason: context-pressure", tmux)
+        self.assertNotIn("agents_restart", tmux)
+        self.setUp()
+        self.assertNotIn("agents_restart", self.trigger({"AGENTSROOM_AGENT_ID": "agent-7"}))
+
+
 class CodexCompaction(HookCase):
     def setUp(self):
         super().setUp()

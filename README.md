@@ -173,7 +173,12 @@ Hook trust is not bypassed or verified by this wrapper: an untrusted hook can be
 skipped by Codex, so complete native review before unattended use. Model and
 other settings come from that profile. No global auto-mode setting is changed.
 
-**Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Inside tmux,
+**Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Each save
+records the terminal it came from (`HANDOFF_TERMINAL_ID`, else
+`AGENTSROOM_AGENT_ID`), and the cleared session resumes the newest open handoff
+of its own terminal, not the project's newest. In AgentsRoom (the default path),
+the context notice tells the agent to finish by calling `agents_restart` with
+prompt `resume`, which reopens its tab on that handoff. As an optional fallback inside tmux,
 a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
 is written (Claude Code hooks cannot clear a session themselves). Outside
 tmux, or for Codex, use the headless runner, which re-launches the agent with
@@ -333,6 +338,7 @@ Other variables:
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
 | `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## How automated does it get

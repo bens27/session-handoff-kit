@@ -359,6 +359,7 @@ def scan(root, max_age_days=14, stats=None):
         found.append(dict(path=r["path"], topic=r["topic"], ended=r["ended"][:64],
                           description=(fm.get("description") or "")[:240],
                           skills=(fm.get("skills") or "")[:240], git=(fm.get("git") or "")[:240],
+                          terminal=(fm.get("terminal") or "")[:120],
                           age_days=round(age, 1), problems=r["problems"][:8]))
     found.sort(key=lambda h: (h["ended"], h["path"]), reverse=True)
     if stats is not None:

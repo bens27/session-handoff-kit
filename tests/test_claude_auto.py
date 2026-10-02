@@ -24,6 +24,9 @@ class LauncherTests(unittest.TestCase):
                 exe.chmod(0o755)
             env = dict(os.environ, CLAUDE_CONFIG_DIR=str(config), CAPTURE=str(root / 'capture'),
                        PATH=str(binary)+os.pathsep+os.environ['PATH'], TMUX_PANE='%99')
+            # Host identities would suppress the launcher's own terminal ID.
+            for key in ('AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID'):
+                env.pop(key, None)
             result = subprocess.run([str(CLI), '--max-clears', '3', '--', 'literal $(touch NEVER)'],
                                     cwd=root, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -44,6 +47,8 @@ class LauncherTests(unittest.TestCase):
             import shlex
             child = shlex.split(data['args'][4])
             self.assertIn('HANDOFF_AT=120000', child)
+            # A per-launch terminal identity survives /clear inside the tmux session.
+            self.assertTrue(any(a.startswith('HANDOFF_TERMINAL_ID=') and len(a) > 30 for a in child), child)
             self.assertEqual(child[-1], 'literal $(touch NEVER)')
             result = subprocess.run([str(CLI), '--max-clears', '0'], cwd=root,
                                     env=env, capture_output=True, text=True)

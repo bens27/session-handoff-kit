@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import uuid
 
 
 def positive(value):
@@ -50,12 +51,17 @@ def main():
     env.pop('HANDOFF_AUTO_RUNNER', None)
     if args.at:
         env['HANDOFF_AT'] = str(args.at)
+    # Survives /clear, so the cleared session resumes this terminal's own handoff.
+    if not env.get('HANDOFF_TERMINAL_ID') and not env.get('AGENTSROOM_AGENT_ID'):
+        env['HANDOFF_TERMINAL_ID'] = 'tmux-' + uuid.uuid4().hex
     command = [shutil.which('claude')] + forwarded
     print('Auto handoff enabled: save → clear → resume; limit %d consecutive clears. Claude permissions still apply.' % args.max_clears, flush=True)
     if not os.environ.get('TMUX_PANE'):
         # Explicit environment survives an already-running tmux server.
         assignments = ['%s=%s' % (key, env[key]) for key in
                        ('HANDOFF_AUTO', 'HANDOFF_AUTO_MAX', 'CLAUDE_CONFIG_DIR')]
+        if env.get('HANDOFF_TERMINAL_ID'):
+            assignments.append('HANDOFF_TERMINAL_ID=' + env['HANDOFF_TERMINAL_ID'])
         if 'HANDOFF_AT' in env:
             assignments.append('HANDOFF_AT=' + env['HANDOFF_AT'])
         command = ['tmux', 'new-session', '-c', os.getcwd(),

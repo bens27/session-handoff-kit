@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.14.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.15.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -377,7 +377,9 @@ Startup emits a compact next action, including when no handoff exists. Native
 resume/fork continues existing context; compaction emits its existing evidence
 revalidation notice. Retrieval requests run read-only preparation. Explicit
 resume authorizes execution preparation. Multiple choices include none;
-AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newest.
+AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newest
+open handoff whose `terminal` matches this terminal ID. In AgentsRoom without
+tmux, the trigger notice asks the agent to end with `agents_restart` (prompt `resume`).
 An unrelated live task takes precedence and leaves checkpoints open.
 
 Exact retrieval/resume commands, topics and paths route without a model call.
@@ -591,6 +593,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
 | `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
 | `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## 12. Surface compatibility

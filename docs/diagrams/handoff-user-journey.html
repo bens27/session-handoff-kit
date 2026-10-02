@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto-handoff: one pin per terminal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:       #f4efe6;
+      --paper-2:     #fffdf8;
+      --ink:         #1a1714;
+      --muted:       #5c564e;
+      --soft:        #6e675d;
+      --rule:        rgba(26,23,20,0.12);
+      --accent:      #c24a28;
+      --accent-text: #9a3a1e;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --ui:      ui-sans-serif, system-ui, sans-serif;
+      --mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--ui);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+      text-rendering: optimizeLegibility;
+    }
+    .frame { max-width: 1280px; width: 100%; }
+    .eyebrow {
+      font-family: var(--mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--display);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 600; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--ink); margin-bottom: 0.4rem;
+    }
+    .standfirst {
+      font-family: var(--ui); font-size: 0.9rem; line-height: 1.5;
+      color: var(--muted); max-width: 62ch; margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+    footer {
+      margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid var(--rule);
+      font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--soft);
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Swimlane &middot; Session Handoff Kit &middot; fully automatic mode</p>
+    <h1>Auto-handoff: one pin per terminal</h1>
+    <p class="standfirst">The wrapper (tmux via <code>claude-auto</code>, or an AgentsRoom tab) owns a terminal ID that outlives every <code>/clear</code>.
+      Each save pins its handoff to that ID, so the cleared session resumes exactly what its own terminal saved.
+      Without a wrapper, you type <code>/clear</code> and <code>resume</code> yourself; everything else is the same.</p>
+    <svg viewBox="0 0 1280 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="uj-t uj-d">
+      <title id="uj-t">Auto-handoff: one pin per terminal</title>
+      <desc id="uj-d">Four lanes: you, the wrapper, the agent, and the kit. You launch the agent in a wrapper, which exports a terminal ID (the AgentsRoom agent id or a tmux launch uuid) that survives clears. The context watch counts tokens; at the threshold it injects a one-time notice, the agent winds down and saves a checkpoint that records the terminal ID, and the kit publishes it where the terminal field acts as the pin (newest open handoff per terminal). The agent ends its turn (tmux) or calls agents_restart (AgentsRoom); the wrapper clears the session only if the save receipt matches this trigger. The new session's SessionStart hook looks up the newest open handoff with the same terminal ID, the wrapper injects resume, and the agent prepares, verifies and acknowledges that exact handoff, which the kit marks resumed.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c564e"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c24a28"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="#f4efe6"/>
+<rect x="40" y="112" width="1220" height="130" fill="rgba(194,74,40,0.03)" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+<text x="52" y="132" fill="#9a3a1e" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">YOU</text>
+<rect x="40" y="252" width="1220" height="130" fill="rgba(26,23,20,0.05)" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+<text x="52" y="272" fill="#1a1714" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">WRAPPER</text>
+<rect x="40" y="392" width="1220" height="130" fill="rgba(26,23,20,0.02)" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+<text x="52" y="412" fill="#6e675d" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">AGENT</text>
+<rect x="40" y="532" width="1220" height="130" fill="rgba(26,23,20,0.02)" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/>
+<text x="52" y="552" fill="#6e675d" font-size="8" font-weight="500" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">KIT</text>
+<text x="220" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">0 · LAUNCH</text>
+<text x="380" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">1 · WATCH</text>
+<text x="540" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">2 · THRESHOLD</text>
+<text x="700" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">3 · CHECKPOINT</text>
+<text x="860" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">4 · HAND OFF</text>
+<text x="1020" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">5 · RESTART</text>
+<text x="1180" y="96" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">6 · RESUME</text>
+<path d="M 220 225 V 269" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 290 317 H 380 V 549" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 450 597 H 470" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 540 549 V 505" fill="none" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<path d="M 610 457 H 630" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 700 505 V 549" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 770 597 H 860 V 505" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 860 409 V 365" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 930 335 H 940 V 597 H 950" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 1020 549 V 365" fill="none" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<path d="M 1090 317 H 1100 V 457 H 1110" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 1180 505 V 549" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<path d="M 1180 409 V 225" fill="none" stroke="#5c564e" stroke-width="1" marker-end="url(#arrow)"/>
+<rect x="347.5" y="448" width="65" height="12" rx="2" fill="#f4efe6"/><text x="380" y="457" fill="#5c564e" font-size="7" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">$TID IN ENV</text>
+<rect x="497.5" y="514" width="85" height="12" rx="2" fill="#f4efe6"/><text x="540" y="523" fill="#9a3a1e" font-size="7" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ONE-TIME NOTICE</text>
+<rect x="835.0" y="514" width="70" height="12" rx="2" fill="#f4efe6"/><text x="870" y="523" fill="#5c564e" font-size="7" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SAVE RECEIPT</text>
+<rect x="832.5" y="374" width="55" height="12" rx="2" fill="#f4efe6"/><text x="860" y="383" fill="#5c564e" font-size="7" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">TURN ENDS</text>
+<rect x="992.0" y="488" width="40" height="12" rx="2" fill="#f4efe6"/><text x="1012" y="497" fill="#5c564e" font-size="7" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">/CLEAR</text>
+<rect x="992.5" y="374" width="55" height="12" rx="2" fill="#f4efe6"/><text x="1020" y="383" fill="#9a3a1e" font-size="7" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">PIN FOUND</text>
+<rect x="150" y="129" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="150" y="129" width="140" height="96" rx="8" fill="rgba(194,74,40,0.08)" stroke="#c24a28" stroke-width="1"/>
+<text x="220" y="155" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Launch</text>
+<text x="220" y="174" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">claude-auto (tmux), or</text>
+<text x="220" y="187" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">an AgentsRoom tab</text>
+<rect x="150" y="269" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="150" y="269" width="140" height="96" rx="8" fill="rgba(26,23,20,0.10)" stroke="#1a1714" stroke-width="1.6"/>
+<text x="220" y="295" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Terminal ID</text>
+<text x="220" y="314" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">$TID =</text>
+<text x="220" y="327" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">AGENTSROOM_AGENT_ID</text>
+<text x="220" y="340" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">or tmux launch uuid</text>
+<text x="220" y="353" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">survives every /clear</text>
+<rect x="310" y="549" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="310" y="549" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="380" y="575" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Context watch</text>
+<text x="380" y="594" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">counts session tokens</text>
+<text x="380" y="607" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">on every tool call</text>
+<rect x="470" y="549" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="470" y="549" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="540" y="575" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Threshold hit</text>
+<text x="540" y="594" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">injects [context-watch]</text>
+<text x="540" y="607" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">once per session</text>
+<rect x="470" y="409" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="470" y="409" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="540" y="435" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Wind down</text>
+<text x="540" y="454" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">finishes the action</text>
+<text x="540" y="467" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">in flight, starts</text>
+<text x="540" y="480" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">nothing new</text>
+<rect x="630" y="409" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="630" y="409" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="700" y="435" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Write checkpoint</text>
+<text x="700" y="454" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">save --session &lt;sid&gt;</text>
+<text x="700" y="467" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">records terminal: $TID</text>
+<rect x="630" y="549" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="630" y="549" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="700" y="575" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Publish + pin</text>
+<text x="700" y="594" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status: open</text>
+<text x="700" y="607" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">terminal: $TID field</text>
+<text x="700" y="620" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">newest open per $TID;</text>
+<text x="700" y="633" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">no separate pin file</text>
+<rect x="790" y="409" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="790" y="409" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="860" y="435" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Hand off</text>
+<text x="860" y="454" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">tmux: end the turn</text>
+<text x="860" y="467" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">AgentsRoom: call</text>
+<text x="860" y="480" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">agents_restart(&#8220;resume&#8221;)</text>
+<rect x="790" y="269" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="790" y="269" width="140" height="96" rx="8" fill="rgba(26,23,20,0.10)" stroke="#1a1714" stroke-width="1.6"/>
+<text x="860" y="295" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Clear session</text>
+<text x="860" y="314" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">gate: receipt matches</text>
+<text x="860" y="327" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">this trigger</text>
+<text x="860" y="340" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">tmux send-keys /clear</text>
+<text x="860" y="353" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">AgentsRoom restart</text>
+<rect x="950" y="549" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="950" y="549" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="1020" y="575" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">SessionStart</text>
+<text x="1020" y="594" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">new session id,</text>
+<text x="1020" y="607" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">same $TID &#8594; newest open</text>
+<text x="1020" y="620" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">exactly one handoff</text>
+<rect x="950" y="269" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="950" y="269" width="140" height="96" rx="8" fill="rgba(26,23,20,0.10)" stroke="#1a1714" stroke-width="1.6"/>
+<text x="1020" y="295" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Inject &#8220;resume&#8221;</text>
+<text x="1020" y="314" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">tmux send-keys, or</text>
+<text x="1020" y="327" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">the restart prompt</text>
+<text x="1020" y="340" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">loop cap: max clears</text>
+<rect x="1110" y="409" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="1110" y="409" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="1180" y="435" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Resume pinned</text>
+<text x="1180" y="454" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">prepare --execute &lt;pin&gt;</text>
+<text x="1180" y="467" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">verify if required</text>
+<text x="1180" y="480" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">acknowledge</text>
+<rect x="1110" y="549" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="1110" y="549" width="140" height="96" rx="8" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="1"/>
+<text x="1180" y="575" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Mark resumed</text>
+<text x="1180" y="594" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">claim + fingerprints</text>
+<text x="1180" y="607" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">status: resumed</text>
+<rect x="1110" y="129" width="140" height="96" rx="8" fill="#f4efe6"/><rect x="1110" y="129" width="140" height="96" rx="8" fill="rgba(194,74,40,0.08)" stroke="#c24a28" stroke-width="1"/>
+<text x="1180" y="155" fill="#1a1714" font-size="11" font-weight="600" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">Fresh context</text>
+<text x="1180" y="174" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">same terminal, same</text>
+<text x="1180" y="187" fill="#5c564e" font-size="7.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" text-anchor="middle">work, exact next step</text>
+<text x="300" y="200" fill="#1a1714" font-size="15" font-style="italic" font-family="'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif">nothing for you to do between launch and fresh context</text>
+<text x="40" y="700" fill="#1a1714" font-size="15" font-style="italic" font-family="'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif">the session id changes at /clear; the terminal id does not, so the pin decides, never &#8220;newest in the project&#8221;</text>
+<line x1="40" y1="712" x2="1260" y2="712" stroke="rgba(26,23,20,0.10)" stroke-width="0.8"/><text x="40" y="736" fill="#5c564e" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+<rect x="130" y="726" width="20" height="12" rx="2" fill="rgba(194,74,40,0.08)" stroke="#c24a28" stroke-width="0.8"/><text x="160" y="736" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">YOUR ACTION</text>
+<rect x="256" y="726" width="20" height="12" rx="2" fill="rgba(26,23,20,0.10)" stroke="#1a1714" stroke-width="1.2800000000000002"/><text x="286" y="736" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">WRAPPER · OUTLIVES THE SESSION</text>
+<rect x="496" y="726" width="20" height="12" rx="2" fill="rgba(26,23,20,0.05)" stroke="#5c564e" stroke-width="0.8"/><text x="526" y="736" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">AGENT / KIT STEP</text>
+<line x1="652" y1="732" x2="676" y2="732" stroke="#c24a28" stroke-width="1.2" marker-end="url(#arrow-accent)"/><text x="688" y="736" fill="#6e675d" font-size="8" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" letter-spacing="0.06em">HOOK DECISION</text>
+    </svg>
+    <footer>Session Handoff Kit &middot; diagram 4 of 4 &middot; proposed design &middot; skin: soux.ai</footer>
+  </div>
+</body>
+</html>

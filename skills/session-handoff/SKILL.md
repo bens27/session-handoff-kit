@@ -2,7 +2,7 @@
 name: session-handoff
 description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work on an explicit request or active autoresume. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
 metadata:
-  version: "0.14.0"
+  version: "0.15.0"
 ---
 
 # Session Handoff
@@ -31,7 +31,8 @@ For installation/customization only, read `reference.md`.
    automatic resumption is blocked.
 4. Tell the user the handoff is complete and give its path. With autoresume,
    tell them to type `/clear`; otherwise start a new session in this project.
-   Fully automatic mode handles the transition after this turn ends.
+   Fully automatic mode handles the transition after this turn ends: in
+   AgentsRoom, call `agents_restart` for this agent with prompt `resume`.
 5. Stop. Remaining authorized work belongs to the receiving session.
 
 ## §2 Retrieval
