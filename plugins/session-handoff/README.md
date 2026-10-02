@@ -49,7 +49,10 @@ except as listed here.
   for the checkpoint's git position and ancestry). `resume` runs the
   checkpoint's recorded `verify` command through `bash -c` in the project root
   and logs its output under `.verification/`, subject to the trust rules in
-  SPEC §7.2. In fully automatic mode (`HANDOFF_AUTO=1`) outside AgentsRoom, the
+  SPEC §7.2: only a checkpoint this machine saved (HMAC receipt) runs it
+  directly; for any other, `verify` returns `needs-confirmation` and runs
+  nothing until the user approves and `--confirm-verify` is passed, and its
+  references outside the project root are not loaded. In fully automatic mode (`HANDOFF_AUTO=1`) outside AgentsRoom, the
   `Stop` hook runs `tmux send-keys` to type `/clear` and `resume` into your own
   pane, and the `auto` runner launches the agent command you give it. In
   AgentsRoom the `Stop` hook instead tells the agent to call the AgentsRoom

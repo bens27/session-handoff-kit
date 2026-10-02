@@ -546,7 +546,7 @@ def main():
           "stdout=%r" % p.stdout)
     check("claim-prints-word-limit", "problem: body is 1" in p.stdout and "(limit 1500)" in p.stdout,
           "stdout=%r" % p.stdout)
-    check("claim-prints-verify", "verify: python3 -c 1\n" in p.stdout, "stdout=%r" % p.stdout)
+    check("claim-prints-verify", "verify: python3 -c 1 (untrusted" in p.stdout, "stdout=%r" % p.stdout)
     check("claim-prints-commits-since", "commits_since: 1\n" in p.stdout, "stdout=%r" % p.stdout)
     check("claim-prints-dirty", "dirty: 2\n" in p.stdout, "stdout=%r" % p.stdout)
     with open(f11b, "w") as f:
