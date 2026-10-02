@@ -60,6 +60,37 @@ def check_installer(skill_root=None):
           open(codex_p).read()[:300])
 
 
+def check_installer_symlink():
+    """A symlinked settings.json (dotfiles) stays a link; the target is updated
+    in place with its mode kept, on install and on uninstall."""
+    tmp = tempfile.mkdtemp(prefix="install-symlink-")
+    cfg = os.path.join(tmp, "claude"); dots = os.path.join(tmp, "dotfiles")
+    os.makedirs(cfg); os.makedirs(dots)
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=cfg, CODEX_HOME=os.path.join(tmp, "codex"))
+    target = os.path.join(dots, "settings.json")
+    link = os.path.join(cfg, "settings.json")
+    before = {"model": "x", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo other"}]}]}}
+    json.dump(before, open(target, "w"))
+    os.chmod(target, 0o600)
+    os.symlink(target, link)
+    inst = os.path.join(REPO, "skills/session-handoff/install.py")
+
+    def run(*args):
+        p = subprocess.run([sys.executable, inst] + list(args), env=env,
+                           capture_output=True, text=True, timeout=30)
+        check("symlink-install%s-exit0" % "".join(args), p.returncode == 0, p.stderr[:300])
+
+    run()
+    check("symlink-kept", os.path.islink(link))
+    check("symlink-target-has-hooks", "hooks" in json.load(open(target)))
+    check("symlink-target-mode-kept", (os.stat(target).st_mode & 0o777) == 0o600,
+          oct(os.stat(target).st_mode & 0o777))
+    run("--uninstall")
+    check("symlink-kept-after-uninstall", os.path.islink(link))
+    check("symlink-uninstall-restores-target", json.load(open(target)) == before)
+    check("symlink-mode-kept-after-uninstall", (os.stat(target).st_mode & 0o777) == 0o600)
+
+
 def main():
     # 1. hooks.json: Claude Code plugin schema requires event maps nested under
     #    a top-level "hooks" key (docs: code.claude.com/docs/en/plugins-reference).
@@ -155,6 +186,7 @@ def main():
               os.path.join(REPO, "skills/session-handoff")))
 
     check_installer()
+    check_installer_symlink()
 
     # 3c. The skill/plugin version lives in three files that must agree;
     #     scripts/bump-version is the single tool that rewrites all of them.
