@@ -51,6 +51,11 @@ replay hazard. Omit them when the core already covers those facts.
   `path#LSTART-LEND` excerpt only when that content is necessary for the next
   action. Prefer the smallest relevant excerpt. Files used earlier are not
   automatically required now; keep background paths in `optional_references`.
+- Content the next step edits or depends on belongs in `references` as a
+  `path#LSTART-LEND` excerpt (or `save --attach path#LSTART-LEND`), not as
+  prose. "Around line N" or a named scratch file in the body is a smell: the
+  receiver must search and re-read to rebuild it. Move scratch notes into the
+  project or attach them before saving.
 - For a review gate, carry the artifact paths and review question. Do not embed
   the generator's source or full input data just to present its output. Load
   those later if an authorized edit or investigation needs them.

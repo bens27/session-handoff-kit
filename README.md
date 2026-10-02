@@ -379,7 +379,8 @@ this terminal's handoffs `mine` and names a `selected` path when unambiguous.
 saved|resumed` polls the ledger. A draft's optional `verify_baseline` lists
 known failing test ids so `verify` passes when only those fail.
 `save` also takes `--topic/--description/--body file.md` instead of a JSON
-draft and `--attach FILE` for required references. It saves into the
+draft and `--attach FILE[#Lstart-Lend]` for required references
+(a line range delivers only that excerpt). It saves into the
 predecessor's project from any directory, continues this session's or terminal's
 own lineage without `predecessor`, defaults `verify` to `.context-watch.json`
 `"verify"` or the predecessor's, and returns a `transition` naming how this

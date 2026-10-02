@@ -60,6 +60,13 @@ def main():
     a_tpl = open(AGENT_TEMPLATE).read()
     chat_tpl = open(CHAT_TEMPLATE).read()
 
+    # Content the next step needs travels as a line-range excerpt, not as a
+    # prose pointer the receiver has to search for and rebuild.
+    check("agent-template-prefers-line-range-excerpts",
+          re.search(r"--attach path#L", a_tpl) is not None
+          and re.search(r"around line", a_tpl, re.IGNORECASE) is not None,
+          "handoff-template.md must steer needed files into path#L references and flag 'around line N' prose")
+
     # Contract literals may live in either half of a skill directory.
     agent_skill = a + "\n" + a_tpl
     chat_skill = chat + "\n" + chat_tpl

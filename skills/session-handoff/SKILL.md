@@ -22,7 +22,7 @@ For installation/customization only, read `reference.md`.
    Continuing an existing topic requires its authoritative `predecessor` path;
    use a distinct topic for independent work.
 2. Run `python3 <ledger> save --input <draft.json>` (or `--topic T
-   --description D --body file.md`; `--attach <file>` adds a required reference).
+   --description D --body file.md`; `--attach <file>[#Lstart-Lend]` adds a required reference).
    Session, request ID, project, your own predecessor and `verify` are deduced;
    pass flags only to override. Identical retries are idempotent.
    Success requires `outcome: saved` and a path; metadata and publication are

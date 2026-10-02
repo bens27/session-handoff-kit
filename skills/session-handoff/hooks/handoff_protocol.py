@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 import hashlib
@@ -761,12 +762,14 @@ def save_draft(a):
     if a.body:
         draft['body'] = read_bounded(a.body)
     if a.attach:
-        missing = [p for p in a.attach if not os.path.isfile(p)]
+        # path#Lstart-Lend keeps its range so prepare delivers only that excerpt
+        attached = [re.fullmatch(r'(.+?)(#L[1-9][0-9]*-L[1-9][0-9]*)?', p).groups('') for p in a.attach]
+        missing = [p for p, _ in attached if not os.path.isfile(p)]
         if missing:
             raise ValueError('Attachment not found: ' + ', '.join(missing))
         existing = draft.get('references') or []
         existing = ledger._split_csv(existing) if isinstance(existing, str) else list(existing)
-        draft['references'] = existing + [os.path.realpath(p) for p in a.attach]
+        draft['references'] = existing + [os.path.realpath(p) + lines for p, lines in attached]
     recorded = predecessor_project(draft['predecessor']) if draft.get('predecessor') else ''
     if a.root is None:
         a.root = recorded or '.'
@@ -844,7 +847,8 @@ def cli(argv):
     if a.command == 'save':
         if a.template:
             print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
-                body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action.\n')))
+                body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action; put files it edits or depends on in references as path#Lstart-Lend.\n',
+                references=[])))
             return 0
     if a.command == 'save':
         try:

@@ -87,6 +87,13 @@ class SaveCliTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.frontmatter(out['path'])['references'], str(notes.resolve()))
 
+    def test_attach_keeps_line_range(self):
+        notes = self.root / 'notes.txt'
+        notes.write_text('a\nb\nc\n')
+        code, out = self.save('--attach', '%s#L2-L3' % notes)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.frontmatter(out['path'])['references'], '%s#L2-L3' % notes.resolve())
+
     def test_attach_missing_file_is_invalid(self):
         code, out = self.save('--attach', self.root / 'missing.txt')
         self.assertEqual((code, out['outcome']), (1, 'invalid'))
