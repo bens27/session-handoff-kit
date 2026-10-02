@@ -108,7 +108,7 @@ rg 'version:' "$HOME/.agents/skills/session-handoff/SKILL.md"
 python3 "$HOME/.agents/skills/session-handoff/hooks/handoff_ledger.py" save --template
 ```
 
-Expect version `0.14.0` and a JSON draft. These checks establish the files and CLI; combine them with a fresh session's skill catalog and `/hooks` trust inspection to establish runtime use. The project scan covered known development directories and runtime profiles, not every possible external checkout or host configuration.
+Expect the version in `plugins/session-handoff/.claude-plugin/plugin.json` and a JSON draft. These checks establish the files and CLI; combine them with a fresh session's skill catalog and `/hooks` trust inspection to establish runtime use. The project scan covered known development directories and runtime profiles, not every possible external checkout or host configuration.
 
 
 ## v0.14.0 acceptance record

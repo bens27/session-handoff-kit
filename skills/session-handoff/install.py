@@ -37,6 +37,7 @@ def load(path):
 
 
 def save(path, data):
+    path = os.path.realpath(path)  # write through a dotfiles symlink, don't replace it
     os.makedirs(os.path.dirname(path), exist_ok=True)
     bak = path + ".bak-session-handoff"
     if os.path.exists(path) and not os.path.exists(bak):
@@ -45,6 +46,8 @@ def save(path, data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+    if os.path.exists(path):
+        shutil.copymode(path, tmp)
     os.replace(tmp, path)
 
 
@@ -83,7 +86,6 @@ def claude(uninstall):
     if uninstall and not os.path.exists(path):
         return
     data = load(path)
-    had_hooks = "hooks" in data
     hooks = data.setdefault("hooks", {})
     strip(hooks)
     if not uninstall:
@@ -92,7 +94,7 @@ def claude(uninstall):
             if event == "PostToolUse":
                 group = dict(matcher="", **group)
             hooks.setdefault(event, []).append(group)
-    if not hooks and not had_hooks:
+    if not hooks:
         del data["hooks"]
     save(path, data)
     print("%s Claude Code hooks: %s" % ("Removed" if uninstall else "Registered", path))

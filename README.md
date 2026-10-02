@@ -123,9 +123,10 @@ agent never guesses them independently.
 ~/.agents/skills/session-handoff/claude-auto --at 120000 -- "Continue this project"
 ```
 
-The launcher requires `claude` and `tmux` on PATH, makes the skill discoverable
-in Claude's configuration directory, registers its hooks, and opens tmux when
-you are not already in a pane. It enables the save → clear → retrieve → resume
+The launcher requires `claude` on PATH (and `tmux` outside AgentsRoom), makes the
+skill discoverable in Claude's configuration directory, registers its hooks, and
+opens tmux when you are neither already in a pane nor in AgentsRoom (where it
+runs `claude` directly). It enables the save → clear → retrieve → resume
 cycle for this launch. It preserves normal Claude permissions and uses three
 consecutive automatic clears by default (`--max-clears N`); this is not a total
 session or spending limit. Existing project threshold configuration still applies
@@ -344,7 +345,7 @@ Other variables:
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
 | `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
-| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
+| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only) | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## How automated does it get
@@ -378,7 +379,9 @@ pointer; `save --request-id` defaults to a hash of the draft. `lookup` marks
 this terminal's handoffs `mine` and names a `selected` path when unambiguous.
 `--fields a,b` trims any command's JSON output; `wait TOPIC --status
 saved|resumed` polls the ledger. A draft's optional `verify_baseline` lists
-known failing test ids so `verify` passes when only those fail.
+known failing test ids so `verify` passes when only those fail; the
+baseline is trusted only when pytest printed its summary line and no `ERROR`
+lines.
 `save` also takes `--topic/--description/--body file.md` instead of a JSON
 draft and `--attach FILE[#Lstart-Lend]` for required references
 (a line range delivers only that excerpt). It saves into the
@@ -444,18 +447,24 @@ session-handoff-kit/
 ├── .claude-plugin/marketplace.json      # makes this repo a Claude Code marketplace
 ├── skills/session-handoff/              # the product: one folder for Claude Code + Codex
 │   ├── SKILL.md                         # trigger, naming, resume
+│   ├── continuation.md                  # authorized continuation: prepare, verify, acknowledge
 │   ├── handoff-template.md              # the handoff's shape — edit this to experiment
 │   ├── reference.md                     # installing, customizing, mechanics; read on demand
 │   ├── install.py                       # registers/removes the hooks (settings.json, hooks.json)
+│   ├── claude-auto                      # launcher: Claude Code with automatic save, clear, resume in tmux
+│   ├── codex-auto                       # launcher: bounded Codex runs with automatic resumption
+│   ├── agents/openai.yaml               # Codex skill metadata
 │   └── hooks/
 │       ├── context_watch.py             # the unified watcher
 │       ├── handoff_ledger.py            # tracks handoff state and chains
+│       ├── handoff_protocol.py          # deterministic save/prepare/verify/acknowledge protocol
 │       └── thresholds.example.json      # sample per-model threshold config
 ├── plugins/session-handoff/             # Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop
 │   └── skills/session-handoff -> ../../../skills/session-handoff
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
+├── scripts/bump-version                 # rewrites (or --check) the version in all three files
 ├── chat/session-handoff-chat/
 │   ├── SKILL.md                         # behavioral variant for claude.ai
 │   └── handoff-template.md              # chat handoff shape — edit this to experiment
@@ -466,7 +475,7 @@ session-handoff-kit/
 
 The handoff document's structure is deliberately not inside `SKILL.md`. Each
 skill ships a `handoff-template.md` next to it holding the front matter, the
-body outline, and the length rules; `SKILL.md` §3 just points at it. To try a
+body outline, and the length rules; `SKILL.md` §1 just points at it. To try a
 different handoff shape — extra sections, fewer sections, a different order —
 edit `handoff-template.md` alone. Trigger thresholds, file naming, the ledger,
 and the resume flow are untouched by that edit.

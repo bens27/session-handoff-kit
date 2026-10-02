@@ -106,6 +106,87 @@ class NormalPolicyUnchanged(HookCase):
         self.assertIn("reason: context-pressure",
                       self.context(self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})))
 
+    def test_rearm_clears_stop_latches_so_next_cycle_nudges_again(self):
+        extra = {"CONTEXT_WATCH_THINKING": "0"}
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
+        self.assertIn('"decision": "block"', self.run_hook(event="Stop", extra=extra))
+        self.assertEqual(self.run_hook(event="Stop", extra=extra), "")  # nudged once
+        self.write([claude_call(20000)], "a")  # compaction
+        self.assertEqual(self.run_hook(extra=extra), "")  # re-armed
+        self.write([claude_call(140000)], "a")
+        self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
+        self.assertIn('"decision": "block"', self.run_hook(event="Stop", extra=extra))
+
+
+class FlooredCompaction(HookCase):
+    """Threshold 30k under a 50k startup context: the limit becomes window - reserve."""
+    ENV = {"CONTEXT_WATCH_THINKING": "0", "CONTEXT_WATCH_TOKENS": "30000"}
+
+    def hook(self):
+        return self.context(self.run_hook(extra=self.ENV))
+
+    def floor_and_first_notice(self):
+        self.write([claude_call(50000)])
+        self.assertIn("startup context", self.hook())
+        self.write([claude_call(185000)], "a")
+        first = self.hook()
+        self.assertIn("reason: context-pressure", first)
+        self.assertNotIn("SECOND NOTICE", first)
+
+    def test_floored_session_rearms_after_compaction(self):
+        self.floor_and_first_notice()
+        self.write([claude_call(60000)], "a")  # compaction cannot drop under the floor
+        self.assertEqual(self.hook(), "")
+        self.write([claude_call(199000)], "a")
+        self.assertIn("reason: context-pressure", self.hook())
+
+    def test_second_notice_reachable_when_limit_near_window(self):
+        self.floor_and_first_notice()
+        self.write([claude_call(197000)], "a")
+        self.assertIn("SECOND NOTICE", self.hook())
+
+
+class FlooredHighStartup(FlooredCompaction):
+    """Default 130k threshold under a ~135k startup context: compaction lands near the floor."""
+    ENV = {"CONTEXT_WATCH_THINKING": "0"}
+
+    def floor_and_first_notice(self):
+        self.write([claude_call(135000)])
+        self.assertIn("startup context", self.hook())
+        self.write([claude_call(196000)], "a")
+        self.assertIn("reason: context-pressure", self.hook())
+
+    def test_floored_session_rearms_after_compaction(self):
+        self.floor_and_first_notice()
+        self.write([claude_call(140000)], "a")  # compaction back to near-startup
+        self.assertEqual(self.hook(), "")
+        self.write([claude_call(196000)], "a")
+        self.assertIn("reason: context-pressure", self.hook())
+
+    test_second_notice_reachable_when_limit_near_window = None
+
+
+class SessionNoteTrigger(HookCase):
+    def test_stale_unfired_hook_does_not_blank_trigger_id(self):
+        # Hook B read "no latch" before hook A created it, then wrote its note after A's.
+        self.write([claude_call(20000), claude_call(140000)])
+        self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})  # hook A: fires, latch exists
+        code = (
+            "import importlib.util, json\n"
+            "spec = importlib.util.spec_from_file_location('cw', %r)\n"
+            "cw = importlib.util.module_from_spec(spec); spec.loader.exec_module(cw)\n"
+            "evt = {'session_id': %r, 'cwd': %r, 'transcript_path': %r}\n"
+            "cw.write_session_note(%r, evt, False)\n"
+            "print(json.dumps(cw._ledger().read_session_note(%r, session=%r)))\n"
+        ) % (HOOK, self.sid, self.tmp, self.transcript, self.tmp, self.tmp, self.sid)
+        env = {k: v for k, v in os.environ.items() if k not in CLEAN}
+        env.update(HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_AGENT="claude")
+        p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30)
+        note = json.loads(p.stdout)
+        self.assertTrue(note["trigger_id"], p.stderr)
+        self.assertTrue(note["fired"])
+
 
 class AgentsRoomRestart(HookCase):
     def trigger(self, extra):

@@ -28,6 +28,8 @@ reports a failed `stage`. `resume <path>` with no flags is the legacy transfer.
    preserve review gates and reconcile permissions with the live request.
    Stored commands never authorize bypassing host safeguards.
 3. If `verify_required` is true, run `verify <returned-path> --session <id>`.
+   For a checkpoint this machine did not save it returns `needs-confirmation`
+   and runs nothing; add `--confirm-verify` only after the user approves the command.
    It preserves pipeline failures and returns a bounded excerpt plus a log.
    Otherwise no speculative suite is required just to resume. On failure,
    fix/retry or `release <path> --owner <id>`; the checkpoint stays recoverable.

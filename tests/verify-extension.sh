@@ -15,7 +15,7 @@ for f in content.js background.js options.js; do
   fi
 done
 
-/opt/homebrew/bin/python3.14 -c "import json; json.load(open('$EXT/manifest.json'))" \
+"${PYTHON:-python3}" -c "import json; json.load(open('$EXT/manifest.json'))" \
   && echo "PASS manifest-json" || { echo "FAIL manifest-json"; rc=1; }
 
 # Finding E1: the unscoped submit-button fallback must be gone or scoped.

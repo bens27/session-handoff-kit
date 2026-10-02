@@ -61,6 +61,7 @@ CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
 KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
 REQUIRED_SECTIONS = ("Objective", "Current state", "Next steps")
 MAX_WORDS = 1500
+TOPIC_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished")
 MAX_REFS = 8              # references a resume is asked to read, at most
 MAX_REF_BYTES = 256_000   # combined size of the existing referenced files
@@ -273,9 +274,70 @@ def publication_valid(path, text, fm):
     try:
         with open(path + '.published') as f:
             receipt = json.loads(f.read(4096))
-        return (receipt.get('checkpoint_id') == fm.get('checkpoint_id')
+        return (isinstance(receipt, dict) and receipt.get('checkpoint_id') == fm.get('checkpoint_id')
                 and receipt.get('fingerprint') == content_fingerprint(text))
     except (OSError, ValueError):
+        return False
+
+
+def _receipt_key(create=False):
+    """Per-user secret outside any repo (~/.context-watch/receipt.key, 0600), or b''.
+    A cloned repo cannot read it, so it cannot forge a checkpoint receipt."""
+    path = os.path.join(os.path.expanduser("~"), ".context-watch", "receipt.key")
+    for attempt in (0, 1):
+        try:
+            with open(path, "rb") as f:
+                key = f.read(256)
+            if len(key) >= 32:
+                return key
+        except OSError:
+            pass
+        if not create or attempt:
+            break
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(os.urandom(32))
+        except FileExistsError:
+            pass  # a concurrent first use won; read its key
+        except OSError:
+            break
+    return b""
+
+
+def _mac(key, checkpoint_id, fingerprint):
+    import hmac
+    import hashlib
+    return hmac.new(key, ("%s\0%s" % (checkpoint_id, fingerprint)).encode(), hashlib.sha256).hexdigest()
+
+
+def seal(checkpoint_id, fingerprint):
+    """The publication receipt this machine writes: id, content fingerprint, HMAC under the local key."""
+    key = _receipt_key(create=True)
+    return dict(checkpoint_id=checkpoint_id, fingerprint=fingerprint,
+                mac=_mac(key, checkpoint_id, fingerprint) if key else "")
+
+
+def trusted(path, text=None, fm=None):
+    """True only when this machine's own save published exactly this content.
+    Legacy, hand-written, cloned or edited checkpoints are untrusted: their
+    verify command and out-of-project references need explicit confirmation."""
+    import hmac
+    try:
+        if text is None:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read(64_001)
+        fm = fm if fm is not None else parse_front_matter(text)
+        with open(path + ".published") as f:
+            receipt = json.loads(f.read(4096))
+        key = _receipt_key()
+        mac = receipt.get("mac")
+        return bool(key and isinstance(mac, str) and fm.get("checkpoint_id")
+                    and receipt.get("checkpoint_id") == fm["checkpoint_id"]
+                    and receipt.get("fingerprint") == content_fingerprint(text)
+                    and hmac.compare_digest(mac, _mac(key, fm["checkpoint_id"], receipt["fingerprint"])))
+    except (OSError, ValueError, AttributeError, StopIteration):
         return False
 
 
@@ -303,8 +365,9 @@ def _records(root, errors=None):
                 "path": path, "fm": fm, "text": text, "mtime": mtime, "topic": topic,
                 "legacy": _is_legacy_single_file(path, legacy),
                 "problems": _problems(text, fm) + (["document exceeds bounded read limit"] if len(text) > 64_000 else []),
-                "ended": (fm.get("created") if fm.get("checkpoint_id") else name_ended or fm.get("created")
-                          or datetime.fromtimestamp(mtime).strftime(STAMP)),
+                "ended": ((fm.get("created") or name_ended) if fm.get("checkpoint_id")
+                          else name_ended or fm.get("created"))
+                         or datetime.fromtimestamp(mtime).strftime(STAMP),
             })
         except OSError as exc:
             if errors is not None:
@@ -312,8 +375,8 @@ def _records(root, errors=None):
     replaced = {os.path.realpath(r["fm"]["predecessor"]) for r in out
                 if r["fm"].get("checkpoint_id") and r["fm"].get("predecessor") and not r["problems"]}
     for r in out:
-        if os.path.realpath(r["path"]) in replaced:
-            r["fm"]["status"] = "superseded"
+        if os.path.realpath(r["path"]) in replaced and r["fm"].get("status") != "resumed":
+            r["fm"]["status"] = "superseded"  # never erase the record of a transfer
     return out
 
 
@@ -492,11 +555,6 @@ def transcript_skills(path):
     return seen
 
 
-def supersede_candidates(root, git_position, topic):
-    """Legacy API: automatic predecessor inference has been retired."""
-    return []  # lineage is explicit; sharing a branch never authorizes replacement.
-
-
 def read_template():
     """handoff-template.md from the skill folder these hooks live in, so the
     agent never has to read a file outside its working directory. "" when
@@ -514,7 +572,6 @@ def new_path(topic, root):
     now = datetime.now()
     abs_root = project_root(root)
     directory = save_path(abs_root)
-    note = read_session_note(abs_root)
     git_position = _git_position(abs_root)
     stem = "%s-%s" % (now.strftime("%Y%m%d-%H%M"), topic)
     filename, n = stem + ".md", 2
@@ -527,9 +584,8 @@ def new_path(topic, root):
         "created": now.strftime(STAMP),
         "project": abs_root,
         "git": git_position,
-        "reason": "context-pressure" if note.get("fired") else "user-parked",
+        "reason": "user-parked",  # context-pressure is only known to save, which has the session
         "skills": "",  # execution dependencies are explicit, not all past Skill calls
-        "supersedes": supersede_candidates(abs_root, git_position, topic),
     }
 
 
@@ -746,6 +802,9 @@ def _cli(argv):
             print("usage: handoff_ledger.py new-path <topic> [dir] [--json]",
                   file=sys.stderr)
             return 1
+        if len(args[0]) > 80 or not TOPIC_RE.fullmatch(args[0]):
+            print("invalid topic: use a short kebab-case topic", file=sys.stderr)
+            return 1
         root = args[1] if len(args) > 1 else "."
         result = new_path(args[0], root)
         if as_json:
@@ -754,8 +813,6 @@ def _cli(argv):
             for key in ("directory", "filename", "path", "created", "project", "git",
                         "reason", "skills"):
                 print("%s: %s" % (key, result[key]))
-            if result["supersedes"]:
-                print("supersedes: %s" % ", ".join(result["supersedes"]))
         return 0
     if cmd in ("resume", "supersede", "abandon", "claim", "release"):
         owner = None
@@ -793,8 +850,6 @@ def _cli(argv):
                 release(path, owner)
                 print("released: %s" % path)
                 return 0
-            if owner is not None:
-                _check_owner(path, owner)
             status = {"resume": "resumed", "supersede": "superseded",
                       "abandon": "abandoned"}[cmd]
             stamp = _mark(path, status, superseded_by, owner)

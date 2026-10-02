@@ -243,14 +243,14 @@ class ProtocolTests(unittest.TestCase):
         p = self.put(fields="verify: printf 'failure'; false | tail -1")
         self.cli('prepare', p, '--session', 'one', '--execute')
         self.assertNotEqual(self.cli('acknowledge', p, '--session', 'one', ok=False).returncode, 0)
-        result = json.loads(self.cli('verify', p, '--session', 'one', ok=False).stdout)
+        result = json.loads(self.cli('verify', p, '--session', 'one', '--confirm-verify', ok=False).stdout)
         self.assertEqual(result['outcome'], 'verification-failed')
         self.assertNotEqual(result['exit_code'], 0)
         self.assertNotEqual(self.cli('acknowledge', p, '--session', 'one', ok=False).returncode, 0)
         self.cli('release', p, '--owner', 'one')
         p = self.put(fields="verify: python3 -c \"print('x'*100000)\"")
         self.cli('prepare', p, '--session', 'one', '--execute')
-        response = self.cli('verify', p, '--session', 'one').stdout
+        response = self.cli('verify', p, '--session', 'one', '--confirm-verify').stdout
         self.assertLess(len(response), 4000)
         self.assertEqual(json.loads(response)['outcome'], 'verified')
         self.assertGreater(Path(json.loads(response)['log']).stat().st_size, 100000)
@@ -266,7 +266,7 @@ class ProtocolTests(unittest.TestCase):
     def test_verification_timeout_keeps_handoff_recoverable(self):
         p = self.put(fields='verify: sleep 10')
         self.cli('prepare', p, '--session', 'one', '--execute')
-        result = json.loads(self.cli('verify', p, '--session', 'one', '--timeout', '0.1', ok=False).stdout)
+        result = json.loads(self.cli('verify', p, '--session', 'one', '--timeout', '0.1', '--confirm-verify', ok=False).stdout)
         self.assertEqual(result['outcome'], 'verification-timeout')
         self.cli('release', p, '--owner', 'one')
         self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'available')
@@ -429,6 +429,39 @@ class ProtocolTests(unittest.TestCase):
         self.assertLess(len(self.cli('lookup').stdout), 32000)
         self.put(fields='created: ' + 'bad-date' * 5000)
         self.assertLess(len(self.cli('history').stdout), 32000)
+
+    def test_checkpoint_without_created_does_not_break_lookup(self):
+        self.put('20260101-1000-other.md', fields='created: 2026-01-01T10:00:00').write_text(
+            '---\ntopic: other\nstatus: open\ncreated: 2026-01-01T10:00:00\n---\n## Objective\nA.\n## Current state\nB.\n## Next steps\nC.\n')
+        self.put('nodate.md', fields='checkpoint_id: abc')
+        for command in ('lookup', 'history'):
+            out = json.loads(self.cli(command).stdout)
+            self.assertNotIn('TypeError', json.dumps(out))
+        self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'incomplete')
+        self.assertEqual(json.loads(self.cli('lookup').stdout)['total'], 1)
+
+    def test_non_object_publication_sidecar_is_incomplete_not_a_crash(self):
+        p = self.put(fields='checkpoint_id: abc\ncreated: 2026-01-01T10:00:00')
+        Path(str(p) + '.published').write_text('[]')
+        out = json.loads(self.cli('lookup').stdout)
+        self.assertEqual(out['outcome'], 'incomplete')
+
+
+    def test_prepare_names_an_unpublished_successor_as_incomplete(self):
+        first = json.loads(self.save('first').stdout)
+        second = json.loads(self.save('second', predecessor=first['path']).stdout)
+        os.unlink(second['path'] + '.published')  # interrupted save: document without receipt
+        out = json.loads(self.cli('prepare', first['path'], '--session', 'one', ok=False).stdout)
+        self.assertEqual(out['outcome'], 'incomplete', out)
+        self.assertIn('retry', out['action'])
+
+    def test_new_path_rejects_a_topic_that_is_not_kebab_case(self):
+        for topic in ('../../x', 'Has Space', ''):
+            with self.subTest(topic=topic):
+                p = self.cli('new-path', topic, self.root, ok=False)
+                self.assertEqual(p.returncode, 1)
+                self.assertNotIn('path:', p.stdout)
+        self.assertEqual(self.cli('new-path', 'fine-topic', self.root).returncode, 0)
 
 
 if __name__ == '__main__':

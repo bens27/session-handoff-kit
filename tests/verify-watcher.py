@@ -23,6 +23,10 @@ os.environ['CONTEXT_WATCH_RESUME_LOG'] = '0'
 os.environ['CONTEXT_WATCH_LOG'] = '0'
 os.environ['CONTEXT_WATCH_ORIGIN'] = 'test'
 
+# Empty HOME for helper subprocesses: a developer's ~/.context-watch/thresholds.json
+# (auto, at, auto_max) must not leak into fixtures.
+ISOLATED_HOME = tempfile.mkdtemp(prefix="cw-home-")
+
 failures = []
 
 STARTUP_CLAUDE = json.dumps({"message": {"model": "claude-opus-4", "usage": {"input_tokens": 20000}}}) + "\n"
@@ -49,6 +53,7 @@ def run_hook(event, env_extra, script=PLUGIN):
     env.pop("CONTEXT_WATCH_PERCENT", None)
     env.pop("CONTEXT_WATCH_JEV", None)  # a developer opt-in must not send fixtures to the network
     env.pop("TYPESAFE_API_KEY", None)
+    env["HOME"] = env["USERPROFILE"] = ISOLATED_HOME
     env.update(env_extra)
     p = subprocess.run([PY, script], input=json.dumps(event), env=env,
                        capture_output=True, text=True, timeout=30)
@@ -65,13 +70,13 @@ def checkpoint(project, sid, environment, resumed=False):
     doc = {'topic':'published-' + sid.lower(), 'description':'fixture',
            'body':'## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nTest.\n'}
     ledger = os.path.join(os.path.dirname(PLUGIN), 'handoff_ledger.py')
-    env = dict(os.environ, **environment)
+    env = dict(os.environ, HOME=ISOLATED_HOME, USERPROFILE=ISOLATED_HOME, **environment)
     p = subprocess.run([PY,ledger,'save',project,'--session',sid,'--request-id','fixture'],
-                       input=json.dumps(doc), env=env, capture_output=True, text=True)
+                       input=json.dumps(doc), env=env, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
     path = json.loads(p.stdout)['path']
     if resumed:
-        subprocess.run([PY,ledger,'resume',path],env=env,check=True,capture_output=True)
+        subprocess.run([PY,ledger,'resume',path],env=env,check=True,capture_output=True,timeout=30)
     return path
 
 

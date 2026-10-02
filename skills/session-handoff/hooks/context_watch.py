@@ -106,6 +106,7 @@ MEDIA_URL_KEYS = ("image_url", "audio_url")
 BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
 SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
+SECOND_NOTICE_MARGIN = 5_000  # the second notice is capped this far under the window
 FLOOR_MARGIN = 10_000        # a threshold within this (or 10%) of startup context is useless
 
 
@@ -206,10 +207,8 @@ def write_session_note(cwd, evt, fired):
         sid = session_key(evt)
         if not sid:
             return
-        trigger = str(os.stat(latch_path(sid)).st_mtime_ns) if fired and os.path.exists(latch_path(sid)) else ''
-        note = {"session_id": sid, "trigger_id": trigger, "cwd": cwd,
-                "transcript_path": evt.get("transcript_path") or "",
-                "fired": bool(fired), "ts": time.time()}
+        note = {"session_id": sid, "cwd": cwd,
+                "transcript_path": evt.get("transcript_path") or "", "ts": time.time()}
         path = _ledger().session_note_path(cwd, sid)
         previous = _ledger().read_session_note(cwd, session=sid)
         entries = load_transcript_tail(evt.get('transcript_path') or '') if evt.get('transcript_path') else []
@@ -228,6 +227,13 @@ def write_session_note(cwd, evt, fired):
             note['startup_input_tokens'] = next((input_size(b) for e in entries
                 if (b := usage_fn([e])[0]) is not None), None)
         note['observed_input_tokens'] = input_size(usage)
+        # Read the latch last: a parallel hook may have created it after this
+        # hook's caller looked, and its trigger must not be blanked.
+        try:
+            note["trigger_id"] = str(os.stat(latch_path(sid)).st_mtime_ns)
+        except OSError:
+            note["trigger_id"] = ''
+        note["fired"] = bool(fired) or bool(note["trigger_id"])
         tmp = "%s.%d" % (path, os.getpid())
         with open_private(tmp, temp=True) as f:
             json.dump(note, f)
@@ -1196,8 +1202,23 @@ def main():
     fired = os.path.exists(first)
     floor_latch = first + ".floor"
     floored = os.path.exists(floor_latch)
-    if (fired or floored) and occupancy < limit * REARM_FACTOR:
-        for path in (first, second, floor_latch, first + ".cleared"):
+    rearm_limit = limit
+    if floored:
+        # A floored session is watched against window - reserve; compaction
+        # cannot drop it under the configured (startup-floor) threshold.
+        try:
+            rearm_limit = max(window - int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE))), limit)
+        except ValueError:
+            rearm_limit = max(window - DEFAULT_RESERVE, limit)
+    near_floor = False
+    if floored:
+        # A high startup floor can never compact under half of window - reserve;
+        # back within FLOOR_MARGIN of the startup context counts as compacted.
+        startup = read_first_latch(floor_latch)[0]
+        near_floor = bool(startup) and occupancy < startup + FLOOR_MARGIN
+    if (fired or floored) and (occupancy < rearm_limit * REARM_FACTOR or near_floor):
+        for path in (first, second, floor_latch, first + ".cleared",
+                     first + ".nudged", first + ".announced"):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:
@@ -1248,6 +1269,8 @@ def main():
             sys.exit(0)  # the handoff was written; the notice was acted on
         need = max(limit * SECOND_NOTICE_FACTOR,
                    first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
+        # Occupancy cannot pass the window: keep the second notice reachable.
+        need = max(limit, min(need, window - SECOND_NOTICE_MARGIN))
     note_only = below_floor and not floored and occupancy < need
     if occupancy < need and not note_only:
         sys.exit(0)

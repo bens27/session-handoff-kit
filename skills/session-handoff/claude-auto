@@ -28,11 +28,13 @@ def main():
     forwarded = args.claude_args
     if forwarded[:1] == ['--']:
         forwarded = forwarded[1:]
-    for dependency in ('claude', 'tmux'):
+    # AgentsRoom hosts the terminal itself; tmux is only for standalone use.
+    in_agentsroom = bool(os.environ.get('AGENTSROOM_AGENT_ID'))
+    for dependency in ('claude',) if in_agentsroom else ('claude', 'tmux'):
         if not shutil.which(dependency):
             parser.exit(1, 'Install %s and ensure it is on PATH, then rerun claude-auto.\n' % dependency)
     skill = Path(__file__).resolve().parent
-    config = Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home() / '.claude'))).expanduser().resolve()
+    config = Path(os.environ.get('CLAUDE_CONFIG_DIR') or str(Path.home() / '.claude')).expanduser().resolve()
     settings_path = config / 'settings.json'
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     plugin = any(key.split('@')[0] == 'session-handoff' and enabled
@@ -52,11 +54,11 @@ def main():
     if args.at:
         env['HANDOFF_AT'] = str(args.at)
     # Survives /clear, so the cleared session resumes this terminal's own handoff.
-    if not env.get('HANDOFF_TERMINAL_ID') and not env.get('AGENTSROOM_AGENT_ID'):
+    if not env.get('HANDOFF_TERMINAL_ID') and not in_agentsroom:
         env['HANDOFF_TERMINAL_ID'] = 'tmux-' + uuid.uuid4().hex
     command = [shutil.which('claude')] + forwarded
     print('Auto handoff enabled: save → clear → resume; limit %d consecutive clears. Claude permissions still apply.' % args.max_clears, flush=True)
-    if not os.environ.get('TMUX_PANE'):
+    if not os.environ.get('TMUX_PANE') and not in_agentsroom:
         # Explicit environment survives an already-running tmux server.
         assignments = ['%s=%s' % (key, env[key]) for key in
                        ('HANDOFF_AUTO', 'HANDOFF_AUTO_MAX', 'CLAUDE_CONFIG_DIR')]
