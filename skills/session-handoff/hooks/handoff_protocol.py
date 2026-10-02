@@ -99,8 +99,13 @@ def project_setting(root, key, kind, user_only=False):
 
 def transition(root):
     """What ends this session after a save, deduced from the environment and config."""
-    auto = _truthy(os.environ.get('HANDOFF_AUTO')) if (os.environ.get('HANDOFF_AUTO') or '').strip() \
-        else bool(project_setting(root, 'auto', bool))
+    if (os.environ.get('HANDOFF_AUTO') or '').strip():
+        auto = _truthy(os.environ.get('HANDOFF_AUTO'))
+    else:
+        # Unset means on inside AgentsRoom (its restart is safe and rate-limited by
+        # the app), off elsewhere; an explicit "auto": false always wins.
+        setting = project_setting(root, 'auto', bool)
+        auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
         return dict(kind='agents_restart', action='End this turn by calling AgentsRoom agents_restart for agent %s with prompt "resume".'
                     % os.environ['AGENTSROOM_AGENT_ID'].strip())
@@ -108,9 +113,11 @@ def transition(root):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
     if auto and os.environ.get('TMUX_PANE'):
         return dict(kind='tmux', action='Stop now; the Stop hook types /clear and resume into this pane.')
+    off = '' if auto else (' Automatic handoff is off: set "auto": true in ~/.context-watch/thresholds.json'
+                           ' (or HANDOFF_AUTO=1) to make the next save restart the session itself.')
     if auto or _truthy(os.environ.get('AUTORESUME')) or _truthy(os.environ.get('CONTEXT_WATCH_AUTORESUME')):
-        return dict(kind='clear', action='Tell the user to type /clear; the cleared session resumes this handoff.')
-    return dict(kind='new-session', action='Tell the user to start a new session in this project and ask it to resume.')
+        return dict(kind='clear', action='Tell the user to type /clear; the cleared session resumes this handoff.' + off)
+    return dict(kind='new-session', action='Tell the user to start a new session in this project and ask it to resume.' + off)
 
 
 def predecessor_project(predecessor):

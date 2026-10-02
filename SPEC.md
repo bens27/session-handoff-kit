@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.17.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.17.1 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -647,7 +647,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_DISABLE` | — | `1` = no-op without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
 | `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
-| `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_AUTO` | on in AgentsRoom, else off | `1` = fully automatic (`0` turns the AgentsRoom default off): implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
 | `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 

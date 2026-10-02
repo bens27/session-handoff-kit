@@ -177,7 +177,9 @@ other settings come from that profile. No global auto-mode setting is changed.
 **Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Each save
 records the terminal it came from (`HANDOFF_TERMINAL_ID`, else
 `AGENTSROOM_AGENT_ID`), and the cleared session resumes the newest open handoff
-of its own terminal, not the project's newest. In AgentsRoom (the default path),
+of its own terminal, not the project's newest. AgentsRoom turns this on by
+default (`HANDOFF_AUTO=0` or `"auto": false` opts out); elsewhere it is opt-in.
+When it is off, the save result says how to turn it on. In AgentsRoom (the default path),
 the context notice tells the agent to finish by calling `agents_restart` with
 prompt `resume`, which reopens its tab on that handoff; AgentsRoom takes precedence
 over any `TMUX_PANE` the app inherited, so nothing is typed into another terminal.
@@ -344,7 +346,7 @@ Other variables:
 | `CONTEXT_WATCH_DISABLE` | — | Set `1` to disable without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
-| `HANDOFF_AUTO` | — | `1` = fully automatic: implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_AUTO` | on in AgentsRoom, else off | `1` = fully automatic (`0` turns the AgentsRoom default off): implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
 | `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only) | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 

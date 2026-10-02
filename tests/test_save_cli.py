@@ -113,11 +113,24 @@ class SaveCliTests(unittest.TestCase):
     def test_transition_reflects_environment(self):
         cases = [({}, 'new-session'), ({'AUTORESUME': '1'}, 'clear'),
                  ({'HANDOFF_AUTO': '1', 'TMUX_PANE': '%1'}, 'tmux'),
-                 ({'HANDOFF_AUTO': '1', 'AGENTSROOM_AGENT_ID': 'a1'}, 'agents_restart')]
+                 ({'HANDOFF_AUTO': '1', 'AGENTSROOM_AGENT_ID': 'a1'}, 'agents_restart'),
+                 # AgentsRoom defaults to automatic handoff; only an explicit off disables it.
+                 ({'AGENTSROOM_AGENT_ID': 'a1'}, 'agents_restart'),
+                 ({'HANDOFF_AUTO': '0', 'AGENTSROOM_AGENT_ID': 'a1'}, 'new-session')]
         for i, (env, expected) in enumerate(cases):
             _, out = self.save(topic='t%d' % i, env=env)
             self.assertEqual(out['transition']['kind'], expected, env)
             self.assertTrue(out['transition']['action'])
+        # With auto off, the action says so instead of silently handing the restart to the user.
+        self.assertIn('Automatic handoff is off', out['transition']['action'])
+        self.assertIn('"auto": true', out['transition']['action'])
+
+    def test_agentsroom_user_config_can_turn_auto_off(self):
+        config = Path(self.tmp.name) / '.context-watch'
+        config.mkdir(exist_ok=True)
+        (config / 'thresholds.json').write_text(json.dumps({'auto': False}))
+        _, out = self.save(env={'AGENTSROOM_AGENT_ID': 'a1'})
+        self.assertEqual(out['transition']['kind'], 'new-session')
 
 
 if __name__ == '__main__':

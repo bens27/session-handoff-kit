@@ -61,7 +61,9 @@ Other environment variables:
   AUTORESUME                  announcer + trigger note: true resumes a single open
                               handoff without asking after /clear
   CONTEXT_WATCH_AUTORESUME    legacy alias for AUTORESUME
-  HANDOFF_AUTO                fully automatic: implies AUTORESUME, the newest open
+  HANDOFF_AUTO                fully automatic (default on in AgentsRoom, where the
+                              tab restarts itself; 0 or "auto": false turns it
+                              off): implies AUTORESUME, the newest open
                               handoff wins without asking, the agent ends its turn
                               after writing the handoff, and the Stop hook types
                               /clear + "resume" into the session's tmux pane
@@ -151,7 +153,12 @@ def config_setting(name, key, cwd=None):
 
 
 def auto_mode_on():
-    return _truthy(config_setting("HANDOFF_AUTO", "auto") or "")
+    """Unset means on inside AgentsRoom (the tab restarts itself), off elsewhere;
+    an explicit HANDOFF_AUTO=0 or "auto": false always wins."""
+    value = config_setting("HANDOFF_AUTO", "auto")
+    if value is None:
+        return bool(env("AGENTSROOM_AGENT_ID"))
+    return _truthy(value)
 
 
 def auto_max(cwd=None):

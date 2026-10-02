@@ -203,7 +203,13 @@ class AgentsRoomRestart(HookCase):
         self.assertIn("reason: context-pressure", tmux)
         self.assertNotIn("agents_restart", tmux)
         self.setUp()
-        self.assertNotIn("agents_restart", self.trigger({"AGENTSROOM_AGENT_ID": "agent-7"}))
+        off = self.trigger({"AGENTSROOM_AGENT_ID": "agent-7", "HANDOFF_AUTO": "0"})
+        self.assertNotIn("agents_restart", off)
+
+    def test_agentsroom_defaults_to_automatic_restart(self):
+        # The user expects auto handoff in AgentsRoom without configuring it.
+        msg = self.trigger({"AGENTSROOM_AGENT_ID": "agent-7"})
+        self.assertIn("agents_restart", msg)
 
     def test_agentsroom_wins_over_inherited_tmux_pane(self):
         # AgentsRoom started from a shell inside tmux inherits TMUX_PANE; that pane

@@ -20,7 +20,12 @@ class ProtocolTests(unittest.TestCase):
         self.root.mkdir()
         self.hd = self.root / '.handoffs'
         self.hd.mkdir()
-        self.env = dict(os.environ, HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
+        # Drop the caller's session settings: an AgentsRoom console's
+        # AGENTSROOM_AGENT_ID would switch on automatic mode by default.
+        inherited = {k: v for k, v in os.environ.items()
+                     if k not in ('AGENTSROOM_AGENT_ID', 'HANDOFF_AUTO', 'HANDOFF_TERMINAL_ID', 'TMUX_PANE',
+                                  'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME', 'HANDOFF_RUN_ID', 'HANDOFF_AT')}
+        self.env = dict(inherited, HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
 
     def cli(self, *args, input=None, ok=True):
         p = subprocess.run([sys.executable, str(LEDGER), *map(str, args)],
