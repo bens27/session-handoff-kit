@@ -43,6 +43,21 @@ jobs:
       - name: Verify integrity and cost regressions
         run: python3 tests/test_safety.py
 
+      - name: Verify version bump
+        run: python3 tests/test_bump_version.py
+
+      - name: Verify context-watch config
+        run: python3 tests/test_context_watch_config.py
+
+      - name: Verify context-watch regressions
+        run: python3 tests/test_context_watch_regressions.py
+
+      - name: Verify resume CLI
+        run: python3 tests/test_resume_cli.py
+
+      - name: Verify save CLI
+        run: python3 tests/test_save_cli.py
+
       - name: Verify watcher
         run: python3 tests/verify-watcher.py
 
