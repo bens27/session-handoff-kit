@@ -371,7 +371,12 @@ requires retry or release; it never silently marks work resumed.
 (auto skill catalog), verify when recorded and acknowledge, returning
 `resumed`, `choose`, `none`, or the failing `stage`. `--session` defaults to
 `$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
-request ID defaults to a hash of the draft.
+request ID defaults to a hash of the draft. Save resolves the project from the
+predecessor (an explicit root that disagrees is a `conflict` naming both),
+treats this session's or terminal's own authoritative checkpoint as the default
+predecessor, defaults `verify` to config `"verify"` then the predecessor's,
+accepts `--topic/--description/--body/--attach`, and returns `transition`
+(`new-session`, `clear`, `tmux`, `runner`, `agents_restart`) with its action.
 
 States remain open, resumed, superseded and abandoned; claimed is a temporary
 lease on open work. Legacy `claim`, `resume`, `supersede`, `abandon`, `release`,

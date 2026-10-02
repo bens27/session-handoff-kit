@@ -76,6 +76,50 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
 MAX_DOCUMENT_BYTES = 24_000
 
 
+def _truthy(value):
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def project_setting(root, key, kind):
+    """A typed key from ~/.context-watch/thresholds.json overridden by <root>/.context-watch.json."""
+    value = None
+    for path in (os.path.join(os.path.expanduser('~'), '.context-watch', 'thresholds.json'),
+                 os.path.join(root, '.context-watch.json')):
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and type(data.get(key)) is kind:
+                value = data[key]
+        except (OSError, ValueError):
+            continue
+    return value
+
+
+def transition(root):
+    """What ends this session after a save, deduced from the environment and config."""
+    auto = _truthy(os.environ.get('HANDOFF_AUTO')) if (os.environ.get('HANDOFF_AUTO') or '').strip() \
+        else bool(project_setting(root, 'auto', bool))
+    if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
+        return dict(kind='agents_restart', action='End this turn by calling AgentsRoom agents_restart for agent %s with prompt "resume".'
+                    % os.environ['AGENTSROOM_AGENT_ID'].strip())
+    if auto and os.environ.get('HANDOFF_RUN_ID'):
+        return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
+    if auto and os.environ.get('TMUX_PANE'):
+        return dict(kind='tmux', action='Stop now; the Stop hook types /clear and resume into this pane.')
+    if auto or _truthy(os.environ.get('AUTORESUME')) or _truthy(os.environ.get('CONTEXT_WATCH_AUTORESUME')):
+        return dict(kind='clear', action='Tell the user to type /clear; the cleared session resumes this handoff.')
+    return dict(kind='new-session', action='Tell the user to start a new session in this project and ask it to resume.')
+
+
+def predecessor_project(predecessor):
+    """The project recorded in a predecessor checkpoint, or ''."""
+    try:
+        text = read_bounded(os.path.expanduser(predecessor))
+    except (OSError, ValueError):
+        return ''
+    return ledger.parse_front_matter(text).get('project', '')
+
+
 def publish(path, text):
     """Exclusive atomic publication; a crash never leaves a partial .md file."""
     directory = os.path.dirname(path)
@@ -132,6 +176,11 @@ def save(root, session, request_id, document):
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity, action='Checkpoint is published and discoverable; stop when handing off.')
         predecessor = document.get('predecessor')
         current = ledger.resolve(topic, root)['authoritative']
+        if current and not predecessor:
+            # Continuing your own lineage needs no lookup: same session or terminal.
+            fm = next((r['fm'] for r in records if r['path'] == current), {})
+            if fm.get('session_id') == session or (terminal_id() and fm.get('terminal') == terminal_id()):
+                predecessor = current
         if current and (not predecessor or os.path.realpath(os.path.expanduser(predecessor)) != os.path.realpath(current)):
             return dict(outcome='conflict', path=current, action='This topic already has a checkpoint. Supply its authoritative path as predecessor to continue that lineage, or use a distinct topic for independent work.')
         if predecessor:
@@ -141,6 +190,10 @@ def save(root, session, request_id, document):
                 return dict(outcome='conflict', action='Predecessor is not authoritative in this project. Refresh lookup and select the intended lineage.')
             locks.enter_context(ledger.locked(predecessor))
             ledger._check_owner(predecessor, session)
+            if not document.get('verify'):
+                document = dict(document, verify=record['fm'].get('verify', ''))
+        if not document.get('verify'):
+            document = dict(document, verify=project_setting(root, 'verify', str) or '')
         note = ledger.read_session_note(root, session=session)
         now = datetime.now()
         fields = dict(topic=topic, created=now.isoformat(timespec='microseconds'), status='open',
@@ -175,8 +228,8 @@ def save(root, session, request_id, document):
                 write_json(path + '.published', dict(checkpoint_id=identity, fingerprint=ledger.content_fingerprint(text)))
                 # The successor's predecessor field is the committed lineage record.
                 # Old-file cleanup is optional and never makes a saved successor vanish.
-                return dict(outcome='saved', path=path, checkpoint_id=identity,
-                            action='Checkpoint is published and discoverable; stop when handing off.')
+                return dict(outcome='saved', path=path, checkpoint_id=identity, transition=transition(root),
+                            action='Checkpoint is published and discoverable; follow transition.action, then stop.')
             except OSError as exc:
                 if os.path.exists(path):
                     return dict(outcome='blocked', path=path, action='Publication was interrupted after writing the document. Keep the draft and retry the same request ID to finish its receipt; do not clear.')
@@ -686,6 +739,43 @@ def telemetry(operation, root, session, result):
         pass  # optional analytics never makes a completed checkpoint fail
 
 
+def save_draft(a):
+    """Build the save draft from JSON and flags, and settle a.root; a dict with outcome is a refusal."""
+    if a.input or not (a.topic or a.body):
+        if a.input:
+            with open(a.input, encoding='utf-8') as f:
+                raw = f.read(MAX_DOCUMENT_BYTES * 4 + 1)
+        else:
+            raw = sys.stdin.read(MAX_DOCUMENT_BYTES * 4 + 1)
+        if len(raw) > MAX_DOCUMENT_BYTES * 4:
+            raise ValueError('Draft exceeds input limit; keep it and reduce the mandatory core.')
+        draft = json.loads(raw)
+    else:
+        draft = {}
+    if not isinstance(draft, dict):
+        raise ValueError('Draft must be a JSON object')
+    if a.topic:
+        draft['topic'] = a.topic
+    if a.description:
+        draft['description'] = a.description
+    if a.body:
+        draft['body'] = read_bounded(a.body)
+    if a.attach:
+        missing = [p for p in a.attach if not os.path.isfile(p)]
+        if missing:
+            raise ValueError('Attachment not found: ' + ', '.join(missing))
+        existing = draft.get('references') or []
+        existing = ledger._split_csv(existing) if isinstance(existing, str) else list(existing)
+        draft['references'] = existing + [os.path.realpath(p) for p in a.attach]
+    recorded = predecessor_project(draft['predecessor']) if draft.get('predecessor') else ''
+    if a.root is None:
+        a.root = recorded or '.'
+    elif recorded and os.path.realpath(ledger.project_root(a.root)) != os.path.realpath(recorded):
+        return dict(outcome='conflict', action='Predecessor belongs to project %s but save targets %s. Drop the root argument to save into the predecessor project, or use a distinct topic without predecessor.'
+                    % (recorded, os.path.realpath(ledger.project_root(a.root))))
+    return draft
+
+
 def cli(argv):
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
@@ -697,11 +787,15 @@ def cli(argv):
     lookup_p.add_argument('--offset', type=int, default=0)
     lookup_p.add_argument('--topic')
     save_p = sub.add_parser('save', description='Publish a JSON draft: topic (kebab-case), description, body (Markdown with Objective, Current state and Next steps headings). Optional: predecessor, skills, references, optional_references, verify, reason. Metadata is generated. Use --template for a valid draft; edit its facts before saving.')
-    save_p.add_argument('root', nargs='?', default='.')
+    save_p.add_argument('root', nargs='?', help="Default: the predecessor's project, else the current directory's")
     save_p.add_argument('--session')
     save_p.add_argument('--request-id')
     save_p.add_argument('--template', action='store_true', help='Print a valid JSON draft without writing a checkpoint')
-    save_p.add_argument('--input', help='JSON draft path; default stdin')
+    save_p.add_argument('--input', help='JSON draft path; default stdin unless --topic/--body are given')
+    save_p.add_argument('--topic', help='Draft topic (kebab-case); overrides the JSON draft')
+    save_p.add_argument('--description', help='Draft description; overrides the JSON draft')
+    save_p.add_argument('--body', help='Markdown file used as the draft body; overrides the JSON draft')
+    save_p.add_argument('--attach', action='append', default=[], help='File the next session must read; repeatable')
     prepare_p = sub.add_parser('prepare')
     prepare_p.add_argument('path')
     prepare_p.add_argument('--root', default='.')
@@ -752,6 +846,15 @@ def cli(argv):
             print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
                 body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action.\n')))
             return 0
+    if a.command == 'save':
+        try:
+            draft = save_draft(a)
+        except (OSError, ValueError) as exc:
+            print(json.dumps(dict(outcome='invalid', action=str(exc)[:500] + '; correct the input and retry.')))
+            return 1
+        if isinstance(draft, dict) and draft.get('outcome'):
+            print(json.dumps(draft))
+            return 1
     if hasattr(a, 'session') and not a.session:
         a.session = default_session(getattr(a, 'root', '.'))
         if not a.session:
@@ -772,14 +875,6 @@ def cli(argv):
         elif a.command == 'resume':
             result = resume(a.root, a.session, a.target, a.budget_bytes)
         elif a.command == 'save':
-            if a.input:
-                with open(a.input, encoding='utf-8') as f:
-                    raw = f.read(MAX_DOCUMENT_BYTES * 4 + 1)
-            else:
-                raw = sys.stdin.read(MAX_DOCUMENT_BYTES * 4 + 1)
-            if len(raw) > MAX_DOCUMENT_BYTES * 4:
-                raise ValueError('Draft exceeds input limit; keep it and reduce the mandatory core.')
-            draft = json.loads(raw)
             request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
             result = save(a.root, a.session, request, draft)
         else:

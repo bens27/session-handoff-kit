@@ -21,19 +21,19 @@ For installation/customization only, read `reference.md`.
    needed for that next action; keep source files and background as optional paths.
    Continuing an existing topic requires its authoritative `predecessor` path;
    use a distinct topic for independent work.
-2. Run `python3 <ledger> save --input <draft.json>`. Session defaults to the
-   hook's terminal pointer and the request ID to a hash of the draft, so an
-   identical retry is idempotent; pass `--session`/`--request-id` to override.
+2. Run `python3 <ledger> save --input <draft.json>` (or `--topic T
+   --description D --body file.md`; `--attach <file>` adds a required reference).
+   Session, request ID, project, your own predecessor and `verify` are deduced;
+   pass flags only to override. Identical retries are idempotent.
    Success requires `outcome: saved` and a path; metadata and publication are
    generated. Keep `.published` sidecars with their checkpoints.
 3. On any failure, follow the returned action and preserve the draft/session.
    A permission denial never authorizes bypassing the host or clearing. If no
    destination is allowed, give the checkpoint text to the user and report that
    automatic resumption is blocked.
-4. Tell the user the handoff is complete and give its path. With autoresume,
-   tell them to type `/clear`; otherwise start a new session in this project.
-   Fully automatic mode handles the transition after this turn ends: in
-   AgentsRoom, call `agents_restart` for this agent with prompt `resume`.
+4. Tell the user the handoff is complete and give its path, then follow the
+   save result's `transition.action` (new session, `/clear`, tmux/runner, or
+   AgentsRoom `agents_restart` with prompt `resume`).
 5. Stop. Remaining authorized work belongs to the receiving session.
 
 ## §2 Retrieval

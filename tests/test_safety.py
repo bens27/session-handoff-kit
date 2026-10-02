@@ -20,7 +20,7 @@ class SafetyReview(unittest.TestCase):
         self.root = Path(self.tmp.name) / 'project'
         self.root.mkdir()
         (self.root / '.handoffs').mkdir()
-        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('CONTEXT_WATCH_', 'HANDOFF_', 'AUTORESUME', 'TYPESAFE_'))}
+        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('CONTEXT_WATCH_', 'HANDOFF_', 'AUTORESUME', 'TYPESAFE_', 'AGENTSROOM_'))}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_LOG='0',
                         CONTEXT_WATCH_RESUME_LOG='0', CONTEXT_WATCH_ORIGIN='test', TYPESAFE_API_KEY='')
 
