@@ -60,9 +60,12 @@ session, enforced by a latch file keyed on session id. One SECOND NOTICE
 fires if the first was not acted on: only after the model has taken a turn
 since the first (parallel tool results arriving together do not count), and
 once occupancy is a further 25% of the threshold past the first and at least
-1.25x the threshold. Both latches
-re-arm when occupancy falls below half the threshold (after a compaction or
-a clear).
+1.25x the threshold, capped at 5,000 tokens under the window so it stays
+reachable. Both latches re-arm when occupancy falls below half the threshold
+(after a compaction or a clear). A floored session (threshold under its
+startup context) is watched against window minus reserve instead and re-arms
+below half of that, or once occupancy is back within 10,000 tokens of its
+startup floor.
 
 ## 3. Architecture
 
@@ -209,7 +212,8 @@ if an open handoff was written after the first notice. After that, checks
 exit silently until occupancy falls below half the threshold, which means a
 compaction happened. That re-arms both notices. For a floored session
 (threshold under the startup context) the half is taken of the effective
-limit, window minus reserve. Usage recorded before a
+limit, window minus reserve, and occupancy within 10,000 tokens of the
+recorded startup floor also re-arms. Usage recorded before a
 `compact_boundary` transcript entry is ignored. On `SessionStart` with
 source `compact` the announcer adds a one-line note: context was just
 compacted, so check the work against the handoff or the files instead of

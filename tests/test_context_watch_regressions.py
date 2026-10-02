@@ -147,6 +147,26 @@ class FlooredCompaction(HookCase):
         self.assertIn("SECOND NOTICE", self.hook())
 
 
+class FlooredHighStartup(FlooredCompaction):
+    """Default 130k threshold under a ~135k startup context: compaction lands near the floor."""
+    ENV = {"CONTEXT_WATCH_THINKING": "0"}
+
+    def floor_and_first_notice(self):
+        self.write([claude_call(135000)])
+        self.assertIn("startup context", self.hook())
+        self.write([claude_call(196000)], "a")
+        self.assertIn("reason: context-pressure", self.hook())
+
+    def test_floored_session_rearms_after_compaction(self):
+        self.floor_and_first_notice()
+        self.write([claude_call(140000)], "a")  # compaction back to near-startup
+        self.assertEqual(self.hook(), "")
+        self.write([claude_call(196000)], "a")
+        self.assertIn("reason: context-pressure", self.hook())
+
+    test_second_notice_reachable_when_limit_near_window = None
+
+
 class SessionNoteTrigger(HookCase):
     def test_stale_unfired_hook_does_not_blank_trigger_id(self):
         # Hook B read "no latch" before hook A created it, then wrote its note after A's.
