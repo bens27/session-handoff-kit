@@ -118,7 +118,8 @@ class ResumeCliTests(unittest.TestCase):
             self.assertIn('--session', out['action'])
 
     def failing(self, *ids):
-        return "printf '%s'; exit 1" % ''.join('FAILED %s - AssertionError\\n' % i for i in ids)
+        summary = '%d failed in 0.10s\\n' % len(ids)
+        return "printf '%s'; exit 1" % (''.join('FAILED %s - AssertionError\\n' % i for i in ids) + summary)
 
     def test_verify_accepts_failures_already_recorded_at_save_time(self):
         known = 'tests/test_x.py::Case::test_known'
@@ -130,6 +131,18 @@ class ResumeCliTests(unittest.TestCase):
         self.assertIn('already recorded at save time', out['action'])
         code, out = self.run_cli('acknowledge', path, '--session', 'new')
         self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+
+    def test_verify_baseline_match_does_not_hide_errors_or_a_missing_summary(self):
+        known = 'tests/test_x.py::Case::test_known'
+        failed = 'FAILED %s - AssertionError\\n' % known
+        for name, output in (('error', failed + 'ERROR tests/t2.py - ImportError\\n1 failed, 1 error in 0.10s\\n'),
+                             ('crash', failed)):
+            path = self.save(topic=name, verify="printf '%s'; exit 1" % output, verify_baseline=[known])
+            self.run_cli('prepare', path, '--session', 'new', '--execute')
+            code, out = self.run_cli('verify', path, '--session', 'new')
+            self.assertEqual((code, out['outcome']), (1, 'verification-failed'), (name, out))
+            code, out = self.run_cli('acknowledge', path, '--session', 'new')
+            self.assertEqual(out['outcome'], 'blocked', name)
 
     def test_verify_reports_new_and_fixed_failures_against_baseline(self):
         old, gone, new = 'tests/a.py::t_old', 'tests/a.py::t_gone', 'tests/b.py::C::t_new'

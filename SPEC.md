@@ -364,7 +364,8 @@ it claims a validated, bounded package and records a recoverable preparation
 receipt. Claims expire after two hours or can be released explicitly. Checkpoint
 and dependency fingerprints bind preparation to the material actually delivered.
 `verify PATH --session ID` preserves pipeline failure, stores complete output in
-a log, and returns a bounded excerpt. `acknowledge PATH --session ID` transfers
+a log, and returns a bounded excerpt. A `verify_baseline` match is accepted only when pytest printed its
+summary line and no `ERROR` lines; otherwise the failure is unknown and stays `verification-failed`. `acknowledge PATH --session ID` transfers
 only after preparation and any recorded verification pass. Failure/expiry/change
 requires retry or release; it never silently marks work resumed.
 `resume [TOPIC-OR-PATH] --session ID` chains selection, `prepare --execute`

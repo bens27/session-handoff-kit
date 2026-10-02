@@ -515,7 +515,8 @@ def verify(path, root, session, timeout=60):
             code = process.wait()
     outcome = 'verification-timeout' if timed_out else 'verified' if code == 0 else 'verification-failed'
     failures = failed_tests(log) if code and not timed_out and baseline else []
-    known = bool(failures) and set(failures) == set(baseline)
+    # A baseline match is trusted only when pytest finished its summary and reported no ERROR lines.
+    known = bool(failures) and set(failures) == set(baseline) and clean_pytest_summary(log)
     # Recheck content and ownership after the command; never bless a changed checkpoint.
     receipt = prepared_receipt(path, root, session)
     receipt['verified'] = (code == 0 or known) and not timed_out
@@ -545,6 +546,18 @@ def failed_tests(log, limit=200):
             if line.startswith('FAILED ') and len(found) < limit:
                 found.setdefault(line[7:].split(' - ', 1)[0].strip(), None)
     return [f for f in found if f]
+
+
+def clean_pytest_summary(log):
+    """True when the log ends a pytest run ('... in 1.2s') and has no 'ERROR <id>' summary lines."""
+    import re
+    done = errors = False
+    with open(log, 'rb') as f:
+        for raw in f:
+            line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
+            errors = errors or line.startswith('ERROR ')
+            done = done or bool(re.search(r'\bin \d+(\.\d+)?s\b', line) and re.search(r'\b(failed|passed|error)', line))
+    return done and not errors
 
 
 def section(body, title):
