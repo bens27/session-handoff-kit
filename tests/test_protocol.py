@@ -73,6 +73,20 @@ class ProtocolTests(unittest.TestCase):
             other = paths['agent-b' if tid == 'agent-a' else 'agent-a']
             self.assertNotIn(other, note)
 
+    def test_startup_reports_other_terminals_handoffs_without_adopting(self):
+        # 695f27d9: a terminal with no handoff of its own must not claim
+        # "no open handoff" when other terminals hold some.
+        doc = json.dumps({'topic': 'alpha-work', 'description': 'alpha-work',
+            'body': '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun checks.\n'})
+        self.env['AGENTSROOM_AGENT_ID'] = 'agent-a'
+        self.cli('save', '--session', 'old-a', '--request-id', 'c1', input=doc)
+        self.env['HANDOFF_AUTO'] = '1'
+        self.env['AGENTSROOM_AGENT_ID'] = 'agent-z'
+        note = json.dumps(self.hook('SessionStart', session='new-z', source='startup'))
+        self.assertNotIn('No open handoff found', note)
+        self.assertIn('other session', note)
+        self.assertNotIn(' resume ', note)
+
     def test_informational_hooks_do_not_activate_handoff_skill(self):
         self.put()
         compact = json.dumps(self.hook('SessionStart', source='compact'))

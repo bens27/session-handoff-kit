@@ -47,7 +47,9 @@ NO_SESSION = dict(outcome='blocked', action='No session identity found: pass --s
 def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
     stats = {}
     items = ledger.scan(root, max_age, stats)
+    hidden = 0
     if terminal:
+        hidden = sum(1 for h in items if h.get('terminal') != terminal)
         items = [h for h in items if h.get('terminal') == terminal]
     if topic is not None:
         items = [h for h in items if h['topic'] == topic or os.path.realpath(h['path']) == os.path.realpath(topic)]
@@ -71,6 +73,11 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
                   stale=stats['stale'], claimed=stats['claimed'], incomplete=stats['incomplete'], errors=stats['errors'][:5])
     if selected:
         result['selected'] = selected
+    if hidden:
+        result['other_sessions'] = hidden
+        if outcome == 'none':
+            result['action'] = ('No handoff for this terminal; %d open handoff(s) belong to other sessions '
+                                '(run lookup to list them). Continue the current task; do not adopt them automatically.' % hidden)
     return result
 
 
