@@ -1200,7 +1200,13 @@ def main():
             rearm_limit = max(window - int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE))), limit)
         except ValueError:
             rearm_limit = max(window - DEFAULT_RESERVE, limit)
-    if (fired or floored) and occupancy < rearm_limit * REARM_FACTOR:
+    near_floor = False
+    if floored:
+        # A high startup floor can never compact under half of window - reserve;
+        # back within FLOOR_MARGIN of the startup context counts as compacted.
+        startup = read_first_latch(floor_latch)[0]
+        near_floor = bool(startup) and occupancy < startup + FLOOR_MARGIN
+    if (fired or floored) and (occupancy < rearm_limit * REARM_FACTOR or near_floor):
         for path in (first, second, floor_latch, first + ".cleared",
                      first + ".nudged", first + ".announced"):
             try:
