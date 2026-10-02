@@ -60,6 +60,26 @@ def check_installer(skill_root=None):
           open(codex_p).read()[:300])
 
 
+def check_installer_no_hooks_roundtrip():
+    """Settings without a hooks key come back byte-identical after install then
+    uninstall (no leftover empty "hooks": {})."""
+    tmp = tempfile.mkdtemp(prefix="install-nohooks-")
+    cfg = os.path.join(tmp, "claude")
+    os.makedirs(cfg)
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=cfg, CODEX_HOME=os.path.join(tmp, "codex"))
+    path = os.path.join(cfg, "settings.json")
+    json.dump({"model": "x"}, open(path, "w"), indent=2)
+    original = open(path).read()
+    inst = os.path.join(REPO, "skills/session-handoff/install.py")
+    for args in ([], ["--uninstall"]):
+        p = subprocess.run([sys.executable, inst] + args, env=env,
+                           capture_output=True, text=True, timeout=30)
+        check("nohooks-install%s-exit0" % "".join(args), p.returncode == 0, p.stderr[:300])
+    after = open(path).read()
+    check("nohooks-roundtrip-restores-settings", json.loads(after) == json.loads(original),
+          after[:300])
+
+
 def check_installer_symlink():
     """A symlinked settings.json (dotfiles) stays a link; the target is updated
     in place with its mode kept, on install and on uninstall."""
@@ -187,6 +207,7 @@ def main():
 
     check_installer()
     check_installer_symlink()
+    check_installer_no_hooks_roundtrip()
 
     # 3c. The skill/plugin version lives in three files that must agree;
     #     scripts/bump-version is the single tool that rewrites all of them.

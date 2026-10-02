@@ -86,7 +86,6 @@ def claude(uninstall):
     if uninstall and not os.path.exists(path):
         return
     data = load(path)
-    had_hooks = "hooks" in data
     hooks = data.setdefault("hooks", {})
     strip(hooks)
     if not uninstall:
@@ -95,7 +94,7 @@ def claude(uninstall):
             if event == "PostToolUse":
                 group = dict(matcher="", **group)
             hooks.setdefault(event, []).append(group)
-    if not hooks and not had_hooks:
+    if not hooks:
         del data["hooks"]
     save(path, data)
     print("%s Claude Code hooks: %s" % ("Removed" if uninstall else "Registered", path))
