@@ -451,13 +451,66 @@ from them, which costs a full extra read of every changed interface.
 
 A coordinator that is asked to save while workers are live saves immediately,
 then waits for them to report (or confirms their results are durable in commits
-or backlog comments) before it follows the transition. An Agent-tool subagent's
+or the AgentsRoom mailbox) before it follows the transition. An Agent-tool subagent's
 report reaches only the session that spawned it, so `/clear` or `agents_restart`
 would discard it. For long-running parallel lanes prefer AgentsRoom workers
-(`agents_spawn`, reported back through the mailbox or a backlog comment): they
-outlive the coordinator. The context watcher stays silent inside subagents (it
+(`agents_spawn`, reported back through the mailbox): they outlive the
+coordinator. Workers report with `agents_send`, not `backlog_comment`, which
+only works on user-feedback backlog items; the coordinator records each report
+on the backlog item with a `descriptionAppend` update. The context watcher stays silent inside subagents (it
 detects them by the `agent_id` field Claude Code adds to their hook events), so
 a subagent never receives the parent's handoff notice.
+
+### Lane ownership and side branches
+
+Concurrent workers never write the same file region. Each lane owns its files
+and doc sections for the whole batch. A worker that needs to change something it
+doesn't own keeps going, but puts that change on a side branch: the lane branch
+never carries it, and the worker never picks the wording of a shared section.
+The coordinator merges the lane branches, then the side branches, and resolves
+shared sections itself.
+
+`skills/session-handoff/lane.py` (stdlib only, ships with the skill) enforces
+this. The coordinator writes the manifest once per batch to
+`<git-common-dir>/lanes.json` (`git rev-parse --git-common-dir`). Every worktree
+shares it and it's never committed. Pass `--manifest` to use another path.
+
+```json
+{"base": "<sha of local main>", "target": "main", "order": ["D", "E"],
+ "checks": ["python3 -m pytest -q", "bash tests/verify-extension.sh"],
+ "lanes": {"D": {"branch": "batch4/lane-d",
+                 "paths": ["skills/session-handoff/hooks/context_watch.py", "tests/test_context_watch_*.py"],
+                 "sections": ["SPEC.md#5", "README.md#Parallel workers"]}}}
+```
+
+`paths` are files, directory prefixes or globs. `FILE#PREFIX` owns each heading
+whose title is PREFIX, or starts with PREFIX followed by a non-alphanumeric
+character (`SPEC.md#5` owns `5.1 Retrieval`, not `50`), plus everything nested
+under it. Give each shared section to exactly one lane, or all doc edits to one
+doc lane.
+
+| Command | Who | What it does |
+|---|---|---|
+| `lane.py start LANE` | worker, first | Resets a fresh branch to `base`. `agents_spawn` branches from `origin/main`, which can trail local main. Refuses a branch that has diverged from `base`. |
+| `lane.py check LANE` | worker | Classifies each change since the merge-base with `target` as owned or not (`owner` is the lane that owns it, null if none). Exits 1 if anything isn't owned. |
+| `lane.py split LANE` | worker | Moves committed changes the lane doesn't own onto `<branch>-shared-<file>` side branches (one per file, cut from the merge-base), and removes them from the lane. Refuses a hunk that spans sections. |
+| `lane.py sync LANE` | worker | Merges `target`. Runs `git merge --abort` when any conflict falls outside the lane, so the worker carries on from its starting point. |
+| `lane.py report LANE` | worker, last | Prints branch SHAs and `Starting point: <sha> (expected <sha>); shared-file branches: none \| <branch: file#section>`. Exits 1 on a wrong start. |
+| `lane.py integrate` | coordinator | On `target`: merges the lanes in `order`, then their side branches, then runs `checks`. Stops at the first conflict (naming the file, section and owner) or failing check. Already-merged branches are skipped, so it can be re-run after resolving. |
+
+Every command prints one JSON line and exits 0 (ok), 1 (action needed) or 2
+(usage).
+
+A worker brief therefore contains:
+
+- the lane name, its branch, and the files and sections it owns (as in the manifest);
+- run `lane.py start LANE` before editing, `check` and `split` before reporting,
+  and `sync` instead of a bare `git merge main`;
+- report through the AgentsRoom mailbox (`agents_send`), quoting the `report`
+  line verbatim along with the commands run and their results.
+
+Before integrating, the coordinator checks that every reported starting point
+matches `base`.
 
 ## Layout
 
@@ -470,6 +523,7 @@ session-handoff-kit/
 │   ├── handoff-template.md              # the handoff's shape — edit this to experiment
 │   ├── reference.md                     # installing, customizing, mechanics; read on demand
 │   ├── install.py                       # registers/removes the hooks (settings.json, hooks.json)
+│   ├── lane.py                          # parallel-lane ownership: start/check/split/sync/report/integrate
 │   ├── claude-auto                      # launcher: Claude Code with automatic save, clear, resume in tmux
 │   ├── codex-auto                       # launcher: bounded Codex runs with automatic resumption
 │   ├── agents/openai.yaml               # Codex skill metadata

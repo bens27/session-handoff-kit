@@ -35,7 +35,7 @@ For installation/customization only, read `reference.md`.
    save result's `transition.action` (new session, `/clear`, tmux/runner, or
    AgentsRoom `agents_restart` with prompt `resume`). If delegated workers
    (Agent-tool subagents) are still running, the save stands, but wait for their
-   reports, or confirm their results are durable in commits or backlog comments,
+   reports, or confirm their results are durable in commits or the AgentsRoom mailbox,
    before that transition: clearing ends the session that receives their reports.
 5. Stop. Remaining authorized work belongs to the receiving session.
 

@@ -138,7 +138,7 @@ original command and may require native `/hooks` trust review.
 Live delegated workers: a session that saves while Agent-tool subagents are
 running saves now but defers the transition (`/clear`, `agents_restart`, runner
 restart) until they report or their results are confirmed durable in commits or
-backlog comments; their reports reach only the spawning session. Prefer
+the AgentsRoom mailbox; their reports reach only the spawning session. Prefer
 AgentsRoom workers (`agents_spawn` + mailbox) for long parallel lanes. The
 watcher ignores hook events that carry `agent_id` (subagents).
 

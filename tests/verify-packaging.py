@@ -184,7 +184,8 @@ def main():
                     archive.extractall(tmp)
                 root = os.path.join(tmp, "session-handoff")
                 for name in ("SKILL.md", "continuation.md", "reference.md", "handoff-template.md",
-                             "agents/openai.yaml", "hooks/thresholds.example.json", "claude-auto", "codex-auto"):
+                             "agents/openai.yaml", "hooks/thresholds.example.json", "claude-auto", "codex-auto",
+                             "lane.py"):
                     check("standalone:" + name, os.path.isfile(os.path.join(root, name)))
                 check_installer(root)
                 workspace = os.path.join(tmp, "workspace")
