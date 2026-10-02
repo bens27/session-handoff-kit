@@ -37,6 +37,18 @@ Optional sections: `## Decisions and rationale` for a decision that changes the
 next action; `## In flight` for an interrupted operation; `## Gotchas` for a
 replay hazard. Omit them when the core already covers those facts.
 
+When the next steps plan code changes, `## Decisions and rationale` is required:
+one line per change giving the chosen behaviour and its code anchor
+(`path:START-END`, with the excerpt in `references` when the change depends on
+it), or `undecided: ask the user`. A one-line idea makes the receiver redesign
+the change; the receiver should only implement it.
+
+```markdown
+## Decisions and rationale
+- `--attach` with a line range: keep the range; anchor hooks/handoff_protocol.py:763-769.
+- Same-terminal match as own lineage: undecided: ask the user.
+```
+
 ## Selection and size rules
 
 - Aim for a core of roughly 1,500–2,500 characters or less for an ordinary
