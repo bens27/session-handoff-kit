@@ -142,6 +142,30 @@ def publish(path, text):
         os.unlink(temporary)
 
 
+def _listed(value):
+    if isinstance(value, list):
+        value = ', '.join(dict.fromkeys(value))
+    return value if isinstance(value, str) else None
+
+
+def _front_matter_matches(root, document, record):
+    """True when the stored metadata is what save would write for this document.
+    A verify the document omitted may only be the user-level default or the trusted predecessor's."""
+    fm = record['fm']
+    for key in ('skills', 'references', 'optional_references', 'verify_baseline'):
+        if fm.get(key, '') != _listed(document.get(key, '')):
+            return False
+    allowed = {_listed(document.get('verify', '')) or None}
+    if not document.get('verify'):
+        allowed = {'', project_setting(root, 'verify', str, user_only=True) or ''}
+        predecessor = fm.get('predecessor')
+        if predecessor:
+            prior = next((r for r in ledger._records(root, []) if os.path.realpath(r['path']) == os.path.realpath(predecessor)), None)
+            if prior and ledger.trusted(prior['path'], prior['text'], prior['fm']):
+                allowed.add(prior['fm'].get('verify', ''))
+    return fm.get('verify', '') in allowed
+
+
 def save(root, session, request_id, document):
     root = ledger.project_root(root)
     if not isinstance(document, dict):
@@ -173,6 +197,9 @@ def save(root, session, request_id, document):
                 # Reconstruct expected content before repairing an interrupted receipt.
                 if record['text'].split('\n---\n', 1)[-1] != body:
                     return dict(outcome='conflict', action='Saved body changed; preserve it and use a new request ID after reconciliation.')
+                # Sealing marks the file trusted: its metadata must match what was submitted, not just hash and body.
+                if not _front_matter_matches(root, document, record):
+                    return dict(outcome='conflict', path=record['path'], action='Saved front matter differs from the submitted checkpoint; it was not sealed. Inspect it, then use a new request ID.')
                 write_json(record['path'] + '.published', ledger.seal(identity, snapshot(record['path'])))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity, action='Checkpoint is published and discoverable; stop when handing off.')
         predecessor = document.get('predecessor')

@@ -685,7 +685,8 @@ def claim_report(path):
     fm = parse_front_matter(text)
     out = ["problem: %s" % p for p in _problems(text, fm)]
     if fm.get("verify"):
-        out.append("verify: %s" % fm["verify"])
+        # Untrusted checkpoints need the user's confirmation before this runs.
+        out.append("verify: %s%s" % (fm["verify"], "" if trusted(path, text, fm) else " (untrusted: confirm with the user before running)"))
     sha = fm.get("git", "").rpartition("@")[2]
     root = fm.get("project") or project_root(os.path.dirname(path))
     if sha and os.path.isdir(root):

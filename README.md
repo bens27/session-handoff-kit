@@ -386,9 +386,18 @@ lines.
 draft and `--attach FILE[#Lstart-Lend]` for required references
 (a line range delivers only that excerpt). It saves into the
 predecessor's project from any directory, continues this session's or terminal's
-own lineage without `predecessor`, defaults `verify` to `.context-watch.json`
-`"verify"` or the predecessor's, and returns a `transition` naming how this
+own lineage without `predecessor`, defaults `verify` to the user-level
+`~/.context-watch/thresholds.json` `"verify"` (a repo's `.context-watch.json` never
+chooses it) or the predecessor's if that checkpoint is trusted, and returns a `transition` naming how this
 session should end.
+Trust: `save` seals each checkpoint with an HMAC receipt keyed to this machine.
+A checkpoint without a valid receipt (hand-written, cloned, edited, or from
+another machine) is untrusted: `verify` on it runs nothing and returns
+`needs-confirmation` (non-zero exit) with the command; rerun with
+`--confirm-verify` only after the user approves it. Untrusted checkpoints also
+withhold references outside the project root, and `workspace` flags their
+`verify:` line as untrusted. A save retry never seals a file whose
+front matter differs from the submitted draft (`conflict`).
 Release versions are set with `scripts/bump-version X.Y.Z` (`--check` compares).
 
 Run verify only when preparation says
