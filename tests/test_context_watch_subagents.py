@@ -15,6 +15,29 @@ import test_context_watch_regressions as base  # noqa: E402
 
 NOTE = {"CONTEXT_WATCH_THINKING": "0"}
 
+# A real PostToolUse event from an Agent-tool subagent (`claude -p`, haiku,
+# 2026-10-02; tool_input/tool_response trimmed). session_id and transcript_path
+# are the PARENT's; only agent_id/agent_type mark the subagent. The same run
+# fired no UserPromptSubmit or Stop inside the subagent, and SubagentStop
+# carried the subagent's own transcript as `agent_transcript_path`
+# (.../<session_id>/subagents/agent-<agent_id>.jsonl).
+CAPTURED_SUBAGENT_POST_TOOL_USE = {
+    "session_id": "853d82ae-a9f0-48fd-a092-7f05baf0ccc1",
+    "transcript_path": "/Users/u/.claude/projects/-private-tmp-capture/"
+                       "853d82ae-a9f0-48fd-a092-7f05baf0ccc1.jsonl",
+    "cwd": "/private/tmp/capture",
+    "prompt_id": "10f3989d-3d72-4cd8-8830-f106eece976e",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a1b2e6d85a702a7d3",
+    "agent_type": "general-purpose",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {"command": "echo hi", "description": "Run echo command"},
+    "tool_response": {"stdout": "hi", "stderr": "", "interrupted": False},
+    "tool_use_id": "toolu_01A6ovvkTwRxozBe9Egs4qcp",
+    "duration_ms": 2019,
+}
+
 
 class SubagentEvents(base.HookCase):
     def run_hook(self, event="PostToolUse", transcript=None, extra=None, evt_extra=None):
@@ -37,6 +60,15 @@ class SubagentEvents(base.HookCase):
         self.assertEqual(self.run_hook(extra=NOTE, evt_extra=sub), "")
         self.assertEqual(self.run_hook("UserPromptSubmit", extra=NOTE, evt_extra=sub), "")
         # The parent's own event still fires its notice: the subagent did not eat the latch.
+        self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=NOTE)))
+
+    def test_captured_subagent_payload_gets_no_parent_notice(self):
+        self.write([base.claude_call(20000), base.claude_call(140000)])
+        captured = dict(CAPTURED_SUBAGENT_POST_TOOL_USE)
+        self.assertNotIn("subagents", captured["transcript_path"])  # parent's transcript
+        # Point the payload at this test's parent session: only agent_id can tell them apart.
+        captured.update(session_id=self.sid, transcript_path=self.transcript, cwd=self.tmp)
+        self.assertEqual(self.run_hook(extra=NOTE, evt_extra=captured), "")
         self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=NOTE)))
 
     def test_subagent_transcript_path_alone_is_detected(self):

@@ -288,8 +288,9 @@ def auto_count_path(cwd):
 def in_subagent(evt):
     """True when the event fired inside an Agent-tool subagent. Claude Code runs
     these hooks there with the parent's session_id, so a notice would reach a
-    worker that cannot save the parent's handoff. `agent_id` is documented for
-    subagents only; a transcript under .../subagents/ is the fallback signal."""
+    worker that cannot save the parent's handoff. `agent_id` is the signal: a
+    captured subagent PostToolUse (2026-10-02) also carried the parent's
+    transcript_path. A transcript under .../subagents/ stays as a fallback."""
     if evt.get("agent_id"):
         return True
     return "subagents" in (evt.get("transcript_path") or "").replace("\\", "/").split("/")
