@@ -106,6 +106,7 @@ MEDIA_URL_KEYS = ("image_url", "audio_url")
 BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
 SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
+SECOND_NOTICE_MARGIN = 5_000  # the second notice is capped this far under the window
 FLOOR_MARGIN = 10_000        # a threshold within this (or 10%) of startup context is useless
 
 
@@ -1186,7 +1187,15 @@ def main():
     fired = os.path.exists(first)
     floor_latch = first + ".floor"
     floored = os.path.exists(floor_latch)
-    if (fired or floored) and occupancy < limit * REARM_FACTOR:
+    rearm_limit = limit
+    if floored:
+        # A floored session is watched against window - reserve; compaction
+        # cannot drop it under the configured (startup-floor) threshold.
+        try:
+            rearm_limit = max(window - int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE))), limit)
+        except ValueError:
+            rearm_limit = max(window - DEFAULT_RESERVE, limit)
+    if (fired or floored) and occupancy < rearm_limit * REARM_FACTOR:
         for path in (first, second, floor_latch, first + ".cleared"):
             try:
                 os.remove(path)  # the window was compacted: re-arm
@@ -1238,6 +1247,8 @@ def main():
             sys.exit(0)  # the handoff was written; the notice was acted on
         need = max(limit * SECOND_NOTICE_FACTOR,
                    first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
+        # Occupancy cannot pass the window: keep the second notice reachable.
+        need = max(limit, min(need, window - SECOND_NOTICE_MARGIN))
     note_only = below_floor and not floored and occupancy < need
     if occupancy < need and not note_only:
         sys.exit(0)

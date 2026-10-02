@@ -203,10 +203,13 @@ a latch. Nothing is latched when neither is known.
 
 One SECOND NOTICE follows if the first is not acted on. It needs a model turn
 after the first notice, and occupancy at or above
-max(1.25 × threshold, first occupancy + 0.25 × threshold). It stays quiet
+max(1.25 × threshold, first occupancy + 0.25 × threshold), capped at 5,000
+tokens under the window so it stays reachable. It stays quiet
 if an open handoff was written after the first notice. After that, checks
 exit silently until occupancy falls below half the threshold, which means a
-compaction happened. That re-arms both notices. Usage recorded before a
+compaction happened. That re-arms both notices. For a floored session
+(threshold under the startup context) the half is taken of the effective
+limit, window minus reserve. Usage recorded before a
 `compact_boundary` transcript entry is ignored. On `SessionStart` with
 source `compact` the announcer adds a one-line note: context was just
 compacted, so check the work against the handoff or the files instead of

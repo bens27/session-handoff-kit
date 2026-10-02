@@ -107,6 +107,34 @@ class NormalPolicyUnchanged(HookCase):
                       self.context(self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})))
 
 
+class FlooredCompaction(HookCase):
+    """Threshold 30k under a 50k startup context: the limit becomes window - reserve."""
+    ENV = {"CONTEXT_WATCH_THINKING": "0", "CONTEXT_WATCH_TOKENS": "30000"}
+
+    def hook(self):
+        return self.context(self.run_hook(extra=self.ENV))
+
+    def floor_and_first_notice(self):
+        self.write([claude_call(50000)])
+        self.assertIn("startup context", self.hook())
+        self.write([claude_call(185000)], "a")
+        first = self.hook()
+        self.assertIn("reason: context-pressure", first)
+        self.assertNotIn("SECOND NOTICE", first)
+
+    def test_floored_session_rearms_after_compaction(self):
+        self.floor_and_first_notice()
+        self.write([claude_call(60000)], "a")  # compaction cannot drop under the floor
+        self.assertEqual(self.hook(), "")
+        self.write([claude_call(199000)], "a")
+        self.assertIn("reason: context-pressure", self.hook())
+
+    def test_second_notice_reachable_when_limit_near_window(self):
+        self.floor_and_first_notice()
+        self.write([claude_call(197000)], "a")
+        self.assertIn("SECOND NOTICE", self.hook())
+
+
 class AgentsRoomRestart(HookCase):
     def trigger(self, extra):
         self.write([claude_call(20000), claude_call(140000)])
