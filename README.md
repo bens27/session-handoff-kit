@@ -311,6 +311,11 @@ case-insensitive substring:
 7. `CONTEXT_WATCH_PERCENT` x window — only if PERCENT is explicitly set
 8. Built-in default: 130,000 tokens
 
+The same config files also accept `"auto"` (bool, like `HANDOFF_AUTO`), `"at"`
+(int tokens, like `HANDOFF_AT`) and `"auto_max"` (int, like `HANDOFF_AUTO_MAX`).
+A non-empty environment variable wins, then the project file, then the user file.
+Values of the wrong JSON type are ignored, and these keys are never thresholds.
+
 Config file format (see `hooks/thresholds.example.json`):
 
 ```json
@@ -354,6 +359,9 @@ The preferred workflow is:
 
 ```sh
 python3 skills/session-handoff/hooks/handoff_ledger.py lookup
+# One-shot authorized continuation (select, prepare, verify, acknowledge):
+python3 skills/session-handoff/hooks/handoff_ledger.py resume --session SESSION [TOPIC]
+# Or step by step:
 python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION
 # After continuation is authorized, reuse content still in this context:
 python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION --execute --reuse-receipt RECEIPT
@@ -361,10 +369,18 @@ python3 skills/session-handoff/hooks/handoff_ledger.py verify PATH --session SES
 python3 skills/session-handoff/hooks/handoff_ledger.py acknowledge PATH --session SESSION
 # At the next checkpoint, generate a draft and replace its example facts:
 python3 skills/session-handoff/hooks/handoff_ledger.py save --template
-python3 skills/session-handoff/hooks/handoff_ledger.py save --session SESSION --request-id CHECKPOINT --input draft.json
+python3 skills/session-handoff/hooks/handoff_ledger.py save --input draft.json
 ```
 
-Use the session ID printed by the hook. Run verify only when preparation says
+`--session` defaults to `$HANDOFF_SESSION_ID`, then the hook's per-terminal
+pointer; `save --request-id` defaults to a hash of the draft. `lookup` marks
+this terminal's handoffs `mine` and names a `selected` path when unambiguous.
+`--fields a,b` trims any command's JSON output; `wait TOPIC --status
+saved|resumed` polls the ledger. A draft's optional `verify_baseline` lists
+known failing test ids so `verify` passes when only those fail.
+Release versions are set with `scripts/bump-version X.Y.Z` (`--check` compares).
+
+Run verify only when preparation says
 it is required. Omit `--reuse-receipt` unless the preceding retrieval content
 is still in this session context; compaction invalidates it. Supply an installed skill catalog when the checkpoint names
 execution dependencies; see [the protocol reference](skills/session-handoff/reference.md).

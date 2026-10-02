@@ -279,7 +279,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('prepare', json.dumps(retrieved))
         self.assertNotIn('--execute', json.dumps(retrieved))
         resumed = self.hook('UserPromptSubmit', prompt='resume')
-        self.assertIn('--execute', json.dumps(resumed))
+        # Explicit resume points at the one-shot command, not the prepare/verify/acknowledge chain.
+        self.assertIn('handoff_ledger.py resume ', json.dumps(resumed))
+        self.assertNotIn('--execute', json.dumps(resumed))
         self.assertNotIn('First load', json.dumps(resumed))
 
     def test_session_checkpoint_identity_ignores_old_file_mtime(self):
@@ -295,6 +297,7 @@ class ProtocolTests(unittest.TestCase):
         self.cli('resume', unrelated['path'])
         stopped = self.hook('Stop', session=sid)
         self.assertEqual(stopped.get('decision'), 'block')
+        self.assertNotIn('--request-id', stopped['reason'])  # save derives it from the draft
         doc = {'topic':'actual', 'description':'Required checkpoint', 'body':'## Objective\nFix it.\n## Current state\nReady.\n## Next steps\nTest.\n'}
         result = json.loads(self.cli('save', '--session', sid, '--request-id', 'fired', input=json.dumps(doc)).stdout)
         self.assertIn(sid, Path(result['path']).read_text())
@@ -385,9 +388,9 @@ class ProtocolTests(unittest.TestCase):
             p = self.hd / ('topic-%d.md' % i)
             p.write_text('---\ntopic: topic-%d\nstatus: open\ncreated: 2026-09-28T10:0%d\n---\n' % (i, i))
         response = json.dumps(self.hook('UserPromptSubmit', prompt='resume topic-0'))
-        self.assertIn('prepare', response)
+        self.assertIn(' resume ', response)
         self.assertIn('topic-0.md', response)
-        self.assertIn('--execute', response)
+        self.assertNotIn('--execute', response)  # one-shot resume replaces prepare --execute
 
     def test_interrupted_publication_is_recoverable_by_same_request(self):
         saved = json.loads(self.save().stdout)

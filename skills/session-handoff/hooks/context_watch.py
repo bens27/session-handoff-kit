@@ -24,6 +24,7 @@ Occupancy measure (what the window holds heading into the NEXT call):
 
 Threshold resolution (first match wins; model id matched by longest substring):
   1. HANDOFF_AT                 global absolute, highest-precedence override
+                                (else the "at" config key, see below)
   2. CONTEXT_WATCH_TOKENS_MAP   e.g. "opus=120000,sonnet=140000,gpt-5.5=180000"
   3. ./.context-watch.json      per-model keys (project-local)
   4. ~/.context-watch/thresholds.json   per-model keys (user-global)
@@ -35,6 +36,10 @@ Threshold resolution (first match wins; model id matched by longest substring):
 Config file format (flat; keys are case-insensitive substrings of model ids):
   {"claude-opus": 120000, "claude-sonnet": 140000, "gpt-5.5": 180000,
    "default": 130000}
+Optional auto-mode keys in the same files (never model thresholds):
+  "auto" (bool), "at" (int), "auto_max" (int) = HANDOFF_AUTO, HANDOFF_AT,
+  HANDOFF_AUTO_MAX; a non-empty environment variable wins, then the project
+  file, then the user file.
 
 Other environment variables:
   CONTEXT_WATCH_WINDOW        window size for the PERCENT path (default 200000;
@@ -102,7 +107,21 @@ BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
 SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
 FLOOR_MARGIN = 10_000        # a threshold within this (or 10%) of startup context is useless
-LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff_ledger.py")
+
+
+def canonical_ledger():
+    """One printed ledger path whichever registration ran the hook: the installed
+    path when it resolves to this hook's sibling, else the sibling's realpath."""
+    sibling = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff_ledger.py"))
+    installed = os.path.join(os.path.expanduser("~"), ".agents", "skills", "session-handoff",
+                             "hooks", "handoff_ledger.py")
+    return installed if os.path.exists(installed) and os.path.realpath(installed) == sibling else sibling
+
+
+LEDGER = canonical_ledger()
+# handoff_protocol prints paths from its own __file__: import it from the same directory.
+if os.path.dirname(LEDGER) not in sys.path:
+    sys.path.insert(0, os.path.dirname(LEDGER))
 REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
 DEFAULT_RESERVE = 20_000     # room kept free for writing the handoff (reported windows only)
 STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
@@ -120,8 +139,25 @@ def _truthy(value):
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+def config_setting(name, key, cwd=None):
+    """Auto-mode setting: environment when set and non-empty, then the project
+    .context-watch.json, then ~/.context-watch/thresholds.json; None if unset."""
+    value = env(name).strip()
+    if value:
+        return value
+    value = _load_config_files(cwd or (_EVT or {}).get("cwd") or os.getcwd(), settings=True).get(key)
+    return None if value is None else str(value).lower()
+
+
 def auto_mode_on():
-    return _truthy(env("HANDOFF_AUTO"))
+    return _truthy(config_setting("HANDOFF_AUTO", "auto") or "")
+
+
+def auto_max(cwd=None):
+    try:
+        return int(config_setting("HANDOFF_AUTO_MAX", "auto_max", cwd) or 10)
+    except ValueError:
+        return 10
 
 
 def autoresume_on():
@@ -129,9 +165,6 @@ def autoresume_on():
 
 
 def _ledger():
-    here = os.path.dirname(os.path.abspath(__file__))
-    if here not in sys.path:
-        sys.path.insert(0, here)
     import handoff_ledger
     return handoff_ledger
 
@@ -184,6 +217,29 @@ def write_session_note(cwd, evt, fired):
         tmp = "%s.%d" % (path, os.getpid())
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(note, f)
+        os.replace(tmp, path)
+        write_terminal_pointer(cwd, sid)
+    except Exception:
+        pass
+
+
+def terminal_pointer_path(cwd, terminal):
+    root = os.path.realpath(_ledger().project_root(cwd))
+    digest = hashlib.sha1((root + "\0" + terminal).encode("utf-8", "replace")).hexdigest()[:20]
+    return os.path.join(tempfile.gettempdir(), "context-watch-terminal-%s.json" % digest)
+
+
+def write_terminal_pointer(cwd, sid):
+    """This terminal's current session, so a shell command can find it without hook stdin."""
+    try:
+        from handoff_protocol import terminal_id
+        terminal = terminal_id()
+        if not terminal:
+            return
+        path = terminal_pointer_path(cwd, terminal)
+        tmp = "%s.%d" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"session_id": sid, "ts": time.time()}, f)
         os.replace(tmp, path)
     except Exception:
         pass
@@ -566,7 +622,11 @@ def _parse_map(raw):
     return out
 
 
-def _load_config_files(cwd):
+SETTING_KEYS = {"auto": bool, "at": int, "auto_max": int}  # not model thresholds
+
+
+def _load_config_files(cwd, settings=False):
+    """Model thresholds (int keys), or with settings=True the auto-mode settings."""
     merged = {}
     for path in (
         os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json"),
@@ -577,8 +637,12 @@ def _load_config_files(cwd):
                 data = json.load(f)
             if isinstance(data, dict):
                 for k, v in data.items():
-                    if isinstance(v, int):
-                        merged[str(k).strip().lower()] = v
+                    k = str(k).strip().lower()
+                    if k in SETTING_KEYS:
+                        if settings and type(v) is SETTING_KEYS[k]:
+                            merged[k] = v
+                    elif not settings and isinstance(v, int) and not isinstance(v, bool):
+                        merged[k] = v
         except Exception:
             continue
     return merged
@@ -598,6 +662,9 @@ def resolve_threshold(model, window, cwd):
     handoff_at = env("HANDOFF_AT").strip()
     if handoff_at.isdigit():
         return int(handoff_at), "HANDOFF_AT"
+    at = None if handoff_at else _load_config_files(cwd, settings=True).get("at")
+    if at is not None and at > 0:
+        return at, "config:at"
 
     env_map = _parse_map(env("CONTEXT_WATCH_TOKENS_MAP"))
     key = _best_model_match(env_map, model)
@@ -746,7 +813,7 @@ def nudge_unwritten_handoff(evt):
     print(json.dumps({"decision": "block", "reason": (
         "[context-watch] No published checkpoint matches this session's trigger. "
         "For the JSON draft format run python3 %s save --template. Preserve the draft and publish with python3 %s save --session %s "
-        "--request-id <stable-checkpoint-id> --input <draft.json>; stop after outcome saved. "
+        "--input <draft.json>; stop after outcome saved. "
         "If blocked, report the failed location and keep this session; do not clear. "
         "Searched project: %s."
         % (shlex.quote(LEDGER), shlex.quote(LEDGER), shlex.quote(key),
@@ -889,10 +956,7 @@ def handle_stop(evt):
         sys.exit(0)
     # Loop guard: a session that starts close to the threshold hands off again at
     # once, so without a cap it would clear and resume forever.
-    try:
-        max_clears = int(env("HANDOFF_AUTO_MAX", "10"))
-    except ValueError:
-        max_clears = 10
+    max_clears = auto_max(cwd)
     try:
         count = int(open(counter).read().strip() or 0)
     except Exception:
@@ -1216,7 +1280,7 @@ def main():
     import shlex
     message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
                             agent, second=fired, usage_age=usage_age)
-    message += " Session identity: %s. Publish with python3 %s save --session %s --request-id <stable-checkpoint-id> --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
+    message += " Session identity: %s. Publish with python3 %s save --session %s --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
     if auto_mode_on() and env("AGENTSROOM_AGENT_ID") and not env("TMUX_PANE"):
         # No pane to type /clear into: the AgentsRoom agent restarts its own tab.
         message += (" Fully automatic mode in AgentsRoom: after save returns outcome saved,"

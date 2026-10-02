@@ -4,6 +4,11 @@ Explicit resume/continue or active autoresume authorizes preparation. Follow
 the hook's command; live authorization remains authoritative. Semantic routing
 can select a checkpoint but cannot grant execution permission.
 
+The one-shot `resume --session <id> [topic-or-path]` runs steps 1-4 with an
+auto-discovered skill catalog (`$HANDOFF_SKILL_ROOTS`, `~/.agents/skills`,
+`~/.claude/skills`, Codex skills). Use the steps below as the fallback when it
+reports a failed `stage`. `resume <path>` with no flags is the legacy transfer.
+
 1. If the body and references from a prior retrieval remain in this session context,
    pass its `--reuse-receipt <delivery_receipt>`; omit after compaction or context loss.
    Run `prepare <topic-or-path> --session <id> --execute`. When required skills

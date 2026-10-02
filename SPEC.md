@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.15.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.16.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -271,6 +271,11 @@ resolved threshold is then capped at window − `CONTEXT_WATCH_RESERVE`
 source records the cap. An assumed window is never used for this cap. An
 assumed 200k would clamp every 1M-context model to 180k.
 
+The config files also carry `"auto"`, `"at"` and `"auto_max"` (same meaning as
+`HANDOFF_AUTO`, `HANDOFF_AT`, `HANDOFF_AUTO_MAX`). Precedence: non-empty env,
+then project file, then user file, then default. Wrongly typed values are
+ignored; these keys are never read as model thresholds.
+
 Config files are flat JSON; user-global loads first and project-local
 overrides on key collision:
 
@@ -341,7 +346,7 @@ HANDOFF.md, and reports read failures rather than turning them into absence.
 The latest record uses created time and a stable path tie-breaker. Five summaries
 are returned per page; `--offset` paginates. Descriptions are bounded.
 
-`save [dir] --session ID --request-id ID --input draft.json` validates the
+`save [dir] [--session ID] [--request-id ID] --input draft.json` validates the
 agent-authored core and generates timestamps, project/Git state, session/trigger
 identity and publication identity. Identical request retries return the same
 checkpoint; changed content under the same ID is refused. Temporary-file fsync
@@ -362,6 +367,11 @@ and dependency fingerprints bind preparation to the material actually delivered.
 a log, and returns a bounded excerpt. `acknowledge PATH --session ID` transfers
 only after preparation and any recorded verification pass. Failure/expiry/change
 requires retry or release; it never silently marks work resumed.
+`resume [TOPIC-OR-PATH] --session ID` chains selection, `prepare --execute`
+(auto skill catalog), verify when recorded and acknowledge, returning
+`resumed`, `choose`, `none`, or the failing `stage`. `--session` defaults to
+`$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
+request ID defaults to a hash of the draft.
 
 States remain open, resumed, superseded and abandoned; claimed is a temporary
 lease on open work. Legacy `claim`, `resume`, `supersede`, `abandon`, `release`,
@@ -630,9 +640,8 @@ Rule convention:
 ## Session handoffs
 Use the bundled session-handoff skill and its complete hooks directory.
 Run handoff_ledger.py lookup and follow its explicit outcome/action.
-Retrieve with prepare --session ID; authorized continuation uses --execute,
-then verify if required and acknowledge. Save with --session ID --request-id ID
---input draft.json; only outcome saved completes a checkpoint.
+Retrieve with prepare --session ID; authorized continuation uses
+resume --session ID [topic]. Save with --input draft.json; only outcome saved completes a checkpoint.
 ```
 
 Oz / cloud harnesses: commit the repo-local form of everything (project

@@ -2,7 +2,7 @@
 name: session-handoff
 description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work on an explicit request or active autoresume. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
 metadata:
-  version: "0.15.0"
+  version: "0.16.0"
 ---
 
 # Session Handoff
@@ -21,8 +21,9 @@ For installation/customization only, read `reference.md`.
    needed for that next action; keep source files and background as optional paths.
    Continuing an existing topic requires its authoritative `predecessor` path;
    use a distinct topic for independent work.
-2. Run `python3 <ledger> save --session <id> --request-id <checkpoint-id>
-   --input <draft.json>`. Reuse the request ID only for an identical retry.
+2. Run `python3 <ledger> save --input <draft.json>`. Session defaults to the
+   hook's terminal pointer and the request ID to a hash of the draft, so an
+   identical retry is idempotent; pass `--session`/`--request-id` to override.
    Success requires `outcome: saved` and a path; metadata and publication are
    generated. Keep `.published` sidecars with their checkpoints.
 3. On any failure, follow the returned action and preserve the draft/session.
@@ -55,5 +56,7 @@ For unrelated work, mention pending work in one sentence, then continue the user
 ## §3 Authorized continuation
 
 Only explicit resume/continue or active autoresume authorizes execution.
-Read [continuation.md](continuation.md) for catalog, preparation, verification
+Run `python3 <ledger> resume --session <id> [topic-or-path]`: one call selects,
+prepares, verifies if recorded and acknowledges, then returns `next_step`.
+On `choose`, ask which; on a failed `stage`, follow its action. Read [continuation.md](continuation.md) for catalog, preparation, verification
 and acknowledgment. Semantic routing alone selects context, not authorization.

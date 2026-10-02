@@ -17,6 +17,32 @@ def terminal_id():
     return value.strip().splitlines()[0][:120] if value.strip() else ''
 
 
+def terminal_session(root):
+    """Session id the hooks recorded for this terminal in this project, or ''."""
+    import time
+    terminal = terminal_id()
+    if not terminal:
+        return ''
+    key = os.path.realpath(ledger.project_root(root)) + '\0' + terminal
+    path = os.path.join(tempfile.gettempdir(), 'context-watch-terminal-%s.json'
+                        % hashlib.sha1(key.encode('utf-8', 'replace')).hexdigest()[:20])
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.loads(f.read(4096))
+        if 0 <= time.time() - float(data['ts']) <= 86400 and isinstance(data['session_id'], str):
+            return data['session_id'].strip()[:200]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return ''
+
+
+def default_session(root):
+    return (os.environ.get('HANDOFF_SESSION_ID') or '').strip() or terminal_session(root)
+
+
+NO_SESSION = dict(outcome='blocked', action='No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.')
+
+
 def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
     stats = {}
     items = ledger.scan(root, max_age, stats)
@@ -24,6 +50,12 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
         items = [h for h in items if h.get('terminal') == terminal]
     if topic is not None:
         items = [h for h in items if h['topic'] == topic or os.path.realpath(h['path']) == os.path.realpath(topic)]
+    current = terminal_id()
+    for h in items:
+        h['mine'] = bool(current) and h.get('terminal') == current
+    items.sort(key=lambda h: not h['mine'])  # stable: newest-first within each group
+    mine = [h for h in items if h['mine']]
+    selected = mine[0]['path'] if len(mine) == 1 else items[0]['path'] if len(items) == 1 else None
     outcome = ('error' if stats['errors'] else 'incomplete' if stats['incomplete'] else 'available' if items else
                'claimed' if stats['claimed'] else 'stale' if stats['stale'] else 'none')
     actions = {
@@ -34,8 +66,11 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
         'error': 'Handoff lookup failed. Report the unreadable locations; do not treat this as absence or adopt a possibly stale record.',
         'available': 'Select a handoff, then prepare it. Retrieval alone does not authorize executing its next steps.',
     }
-    return dict(outcome=outcome, action=actions[outcome], items=items[max(0, offset):max(0, offset)+5], total=len(items),
-                stale=stats['stale'], claimed=stats['claimed'], incomplete=stats['incomplete'], errors=stats['errors'][:5])
+    result = dict(outcome=outcome, action=actions[outcome], items=items[max(0, offset):max(0, offset)+5], total=len(items),
+                  stale=stats['stale'], claimed=stats['claimed'], incomplete=stats['incomplete'], errors=stats['errors'][:5])
+    if selected:
+        result['selected'] = selected
+    return result
 
 
 MAX_DOCUMENT_BYTES = 24_000
@@ -118,7 +153,7 @@ def save(root, session, request_id, document):
                       reason='context-pressure' if note.get('fired') else 'user-parked')
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
-        for key in ('skills', 'references', 'optional_references', 'verify'):
+        for key in ('skills', 'references', 'optional_references', 'verify', 'verify_baseline'):
             value = document.get(key, '')
             if isinstance(value, list):
                 value = ', '.join(dict.fromkeys(value))
@@ -214,6 +249,27 @@ def reference(root, spec):
     return path + '#L%d-L%d' % (first, last), b''.join(parts).decode('utf-8')
 
 
+def skill_roots():
+    """Installed skill roots in precedence order; the first root providing a name wins."""
+    roots = [r for r in os.environ.get('HANDOFF_SKILL_ROOTS', '').split(os.pathsep) if r]
+    codex = os.environ.get('CODEX_HOME') or '~/.codex'
+    return [os.path.expanduser(r) for r in roots + ['~/.agents/skills', '~/.claude/skills', os.path.join(codex, 'skills')]]
+
+
+def installed_catalog():
+    skills = {}
+    for root in skill_roots():
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(root, name, 'SKILL.md')
+            if name not in skills and os.path.isfile(path):
+                skills[name] = path
+    return dict(skills=skills, loaded=[])
+
+
 def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None):
     import time
     root = ledger.project_root(root)
@@ -227,7 +283,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         return lookup(root)
     if resolved['chain'][-1]['status'] != 'open':
         return dict(outcome='closed', action='This topic is already transferred or closed. Use history for inspection; do not adopt it.')
-    catalog = catalog or {}
+    supplied = catalog is not None
+    catalog = catalog if supplied else installed_catalog()
     if not isinstance(catalog, dict) or not isinstance(catalog.get('skills', {}), dict) or not isinstance(catalog.get('loaded', []), list):
         raise ValueError('Catalog must contain a skills mapping and a loaded-path list.')
     if not all(isinstance(x, str) for x in list(catalog.get('skills', {}).values()) + catalog.get('loaded', [])):
@@ -282,7 +339,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             for name in names:
                 source = catalog.get('skills', {}).get(name)
                 if not source:
-                    raise ValueError('Required skill unavailable in the supplied installed catalog: ' + name)
+                    raise ValueError('Required skill unavailable in the %s installed catalog: %s' % ('supplied' if supplied else 'scanned (' + os.pathsep.join(skill_roots()) + ')', name))
                 canonical = os.path.realpath(source)
                 if canonical in seen:
                     omitted_skills += 1
@@ -384,7 +441,8 @@ def verify(path, root, session, timeout=60):
     import signal
     root = ledger.project_root(root)
     receipt = prepared_receipt(path, root, session)
-    command = ledger._read_fm(path).get('verify')
+    fm = ledger._read_fm(path)
+    command, baseline = fm.get('verify'), ledger._split_csv(fm.get('verify_baseline', ''))
     if not command:
         return dict(outcome='verified', exit_code=0, action='No recorded verification command; no speculative suite is required.')
     log_dir = os.path.join(os.path.dirname(path), '.verification')
@@ -402,17 +460,105 @@ def verify(path, root, session, timeout=60):
             os.killpg(process.pid, signal.SIGKILL)
             code = process.wait()
     outcome = 'verification-timeout' if timed_out else 'verified' if code == 0 else 'verification-failed'
+    failures = failed_tests(log) if code and not timed_out and baseline else []
+    known = bool(failures) and set(failures) == set(baseline)
     # Recheck content and ownership after the command; never bless a changed checkpoint.
     receipt = prepared_receipt(path, root, session)
-    receipt['verified'] = code == 0 and not timed_out
+    receipt['verified'] = (code == 0 or known) and not timed_out
     write_json(receipt_path(root, session), receipt)
     excerpt = ''
     if code or timed_out:
         with open(log, 'rb') as f:
             f.seek(max(0, os.path.getsize(log) - 2000))
             excerpt = f.read(2000).decode('utf-8', errors='replace')
-    return dict(outcome=outcome, exit_code=code, log=log, excerpt=excerpt,
-                action='Acknowledge the transfer.' if receipt['verified'] else 'Inspect the bounded failure excerpt or log; fix and retry, or release the claim. The handoff remains recoverable.')
+    result = dict(outcome=outcome, exit_code=code, log=log, excerpt=excerpt,
+                  action='Acknowledge the transfer.' if receipt['verified'] else 'Inspect the bounded failure excerpt or log; fix and retry, or release the claim. The handoff remains recoverable.')
+    if known:
+        result.update(outcome='verified', excerpt='', baseline_failures=failures,
+                      action='These failures were already recorded at save time (verify_baseline); nothing regressed. Acknowledge the transfer.')
+    elif failures:
+        result.update(new_failures=[f for f in failures if f not in baseline],
+                      fixed=[b for b in baseline if b not in failures])
+    return result
+
+
+def failed_tests(log, limit=200):
+    """Pytest node ids from 'FAILED <id> - <reason>' summary lines, in order, deduplicated."""
+    found = {}
+    with open(log, 'rb') as f:
+        for raw in f:
+            line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
+            if line.startswith('FAILED ') and len(found) < limit:
+                found.setdefault(line[7:].split(' - ', 1)[0].strip(), None)
+    return [f for f in found if f]
+
+
+def section(body, title):
+    import re
+    match = re.search(r'^## %s\s*$\n(.*?)(?=^## |\Z)' % re.escape(title), body, re.M | re.S)
+    return match[1].strip() if match else ''
+
+
+def resume(root, session, target=None, budget=PACKAGE_BYTES):
+    """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
+    root = ledger.project_root(root)
+    if target is None:
+        found = lookup(root)
+        if found['outcome'] != 'available':
+            return found
+        target = found.get('selected')
+        if not target:
+            return dict(outcome='choose', total=found['total'], action='Rerun resume with one of these paths, or none.',
+                        candidates=[dict(path=h['path'], topic=h['topic'], description=h['description'], mine=h['mine'])
+                                    for h in found['items']])
+    elif not ledger.resolve(target, root)['authoritative']:
+        return dict(outcome='none', action='No handoff matches %r. Run resume without an argument to list open handoffs.' % target[:200])
+    def stage(name, run, success):
+        try:
+            result = run()
+        except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
+            result = dict(outcome='blocked', action=str(exc)[:500] + '; the handoff stays recoverable. Resolve this, then rerun resume.')
+        return None if result['outcome'] == success else dict(result, stage=name), result
+    failed, prepared = stage('prepare', lambda: prepare(target, root, session, execute=True, budget=budget), 'prepared')
+    if failed:
+        return failed
+    path = prepared['path']
+    verification = dict(outcome='not-required')
+    if prepared['verify_required']:
+        failed, checked = stage('verify', lambda: verify(path, root, session), 'verified')
+        if failed:
+            return failed
+        verification = {k: checked[k] for k in ('outcome', 'baseline_failures') if k in checked}
+    # Acknowledge before any work so later edits by the resuming agent cannot block the transfer.
+    failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
+    if failed:
+        return failed
+    body = prepared.get('body', '')
+    return dict(outcome='resumed', path=path, body=body, references=prepared['references'],
+                skills=[dict(name=s['name'], text=s['text']) for s in prepared['skills']],
+                next_step=section(body, 'Next steps'), verification=verification,
+                workspace=prepared['workspace'], optional_references=prepared['optional_references'],
+                metrics=prepared['metrics'], action='Continue with next_step.')
+
+
+def wait(root, target, status, timeout=600, interval=2):
+    """Poll until the newest handoff matching a topic or path reaches status (saved/open, or resumed)."""
+    import time
+    root = ledger.project_root(root)
+    deadline = time.monotonic() + max(0, timeout)
+    real = os.path.realpath(os.path.expanduser(target))
+    while True:
+        matches = [r for r in ledger._records(root) if r['topic'] == target or os.path.realpath(r['path']) == real]
+        if matches:
+            newest = max(matches, key=lambda r: (r['ended'], r['path']))
+            current = (newest['fm'].get('status') or 'open').lower()
+            if current == ('resumed' if status == 'resumed' else 'open'):
+                return dict(outcome='reached', path=newest['path'], status=status,
+                            action=('Another session acknowledged this handoff; do not adopt it.' if status == 'resumed' else
+                                    'The handoff is published and open; resume it with: resume ' + shlex.quote(newest['path'])))
+        if time.monotonic() >= deadline:
+            return dict(outcome='timeout', status=status, action='%r did not reach %s within %gs. Check the other session, then rerun wait with a longer --timeout.' % (target[:200], status, timeout))
+        time.sleep(max(0.05, interval))
 
 
 RETRIEVE_COMMANDS = frozenset(('retrieve', 'retrieve your handoff', 'retrieve handoff', 'show handoff', 'show the handoff'))
@@ -449,13 +595,11 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     selected = selected or items[0]
     if not session:
         return 'An open handoff is available. Supply a unique session identity to prepare; never borrow another session identity.'
-    command = 'python3 %s prepare %s --session %s' % (
-        shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
-        shlex.quote(selected['path']), shlex.quote(session))
     execute = resume or (auto and not retrieve)
-    if execute:
-        command += ' --execute'
-    suffix = ' Prepare and verify, then acknowledge before continuing the authorized work.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
+    # With --session, `resume` is the one-shot command that claims, verifies and acknowledges.
+    command = 'python3 %s %s %s --session %s' % (shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+                                                 'resume' if execute else 'prepare', shlex.quote(selected['path']), shlex.quote(session))
+    suffix = ' It claims, verifies and acknowledges in one call; then continue with its next_step.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
     return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
 
 
@@ -561,7 +705,7 @@ def cli(argv):
     prepare_p = sub.add_parser('prepare')
     prepare_p.add_argument('path')
     prepare_p.add_argument('--root', default='.')
-    prepare_p.add_argument('--session', required=True)
+    prepare_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     prepare_p.add_argument('--execute', action='store_true')
     prepare_p.add_argument('--reuse-receipt', help='Receipt from content still in this session context; omit after context loss')
     prepare_p.add_argument('--catalog', help='JSON installed skills mapping plus already-loaded canonical paths')
@@ -569,17 +713,30 @@ def cli(argv):
     ack_p = sub.add_parser('acknowledge')
     ack_p.add_argument('path')
     ack_p.add_argument('--root', default='.')
-    ack_p.add_argument('--session', required=True)
+    ack_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     verify_p = sub.add_parser('verify')
     verify_p.add_argument('path')
     verify_p.add_argument('--root', default='.')
-    verify_p.add_argument('--session', required=True)
+    verify_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     verify_p.add_argument('--timeout', type=float, default=60)
+    resume_p = sub.add_parser('resume', description='Select, prepare, verify and acknowledge a handoff in one call; the result says what to do next.')
+    resume_p.add_argument('target', nargs='?', help='Topic or path; default: the handoff lookup selects')
+    resume_p.add_argument('--root', default='.')
+    resume_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
+    resume_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES)
+    wait_p = sub.add_parser('wait', description='Poll until the newest handoff for a topic or path is saved/open or resumed.')
+    wait_p.add_argument('target', help='Topic or path')
+    wait_p.add_argument('--status', required=True, choices=('saved', 'open', 'resumed'))
+    wait_p.add_argument('--root', default='.')
+    wait_p.add_argument('--timeout', type=float, default=600)
+    wait_p.add_argument('--interval', type=float, default=2)
     history_p = sub.add_parser('history')
     history_p.add_argument('root', nargs='?', default='.')
     history_p.add_argument('--topic')
     history_p.add_argument('--offset', type=int, default=0)
     history_p.add_argument('--limit', type=int, default=10)
+    for parser in (lookup_p, save_p, prepare_p, ack_p, verify_p, resume_p):
+        parser.add_argument('--fields', help='Comma-separated top-level keys to print; outcome and action are always included')
     a = p.parse_args(argv)
     if a.command == 'report':
         try:
@@ -595,8 +752,11 @@ def cli(argv):
             print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
                 body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action.\n')))
             return 0
-        if not a.session or not a.request_id:
-            p.error('save requires --session and --request-id; use save --template for the JSON draft')
+    if hasattr(a, 'session') and not a.session:
+        a.session = default_session(getattr(a, 'root', '.'))
+        if not a.session:
+            print(json.dumps(NO_SESSION))
+            return 1
     try:
         if a.command == 'history':
             result = history(a.root, a.topic, a.offset, a.limit)
@@ -607,6 +767,10 @@ def cli(argv):
             result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
         elif a.command == 'acknowledge':
             result = acknowledge(a.path, a.root, a.session)
+        elif a.command == 'wait':
+            result = wait(a.root, a.target, a.status, a.timeout, a.interval)
+        elif a.command == 'resume':
+            result = resume(a.root, a.session, a.target, a.budget_bytes)
         elif a.command == 'save':
             if a.input:
                 with open(a.input, encoding='utf-8') as f:
@@ -615,17 +779,26 @@ def cli(argv):
                 raw = sys.stdin.read(MAX_DOCUMENT_BYTES * 4 + 1)
             if len(raw) > MAX_DOCUMENT_BYTES * 4:
                 raise ValueError('Draft exceeds input limit; keep it and reduce the mandatory core.')
-            result = save(a.root, a.session, a.request_id, json.loads(raw))
+            draft = json.loads(raw)
+            request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
+            result = save(a.root, a.session, request, draft)
         else:
             result = lookup(a.root, a.max_age_days, a.offset, a.topic)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
     result.setdefault('project', ledger.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
     telemetry(a.command, a.root, getattr(a, 'session', None), result)
+    if getattr(a, 'fields', None):
+        keep = {'outcome', 'action'} | set(ledger._split_csv(a.fields))
+        result = {k: v for k, v in result.items() if k in keep}
     output = json.dumps(result, ensure_ascii=False)
     limit = getattr(a, 'budget_bytes', PACKAGE_BYTES)
     if len(output.encode()) > max(1024, limit):
         result = dict(outcome='needs-context', action='Response metadata exceeds the output budget. Use a narrower topic or history page; inspect and repair oversized metadata locally before preparing.')
         output = json.dumps(result)
     print(output)
-    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'verification-failed', 'verification-timeout') else 0
+    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'verification-failed', 'verification-timeout', 'timeout') else 0
+
+
+if __name__ == '__main__':
+    sys.exit(cli(sys.argv[1:]))

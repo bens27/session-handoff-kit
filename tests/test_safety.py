@@ -47,7 +47,7 @@ class SafetyReview(unittest.TestCase):
     def test_control_complete_checkpoint_round_trip(self):
         saved=self.save()
         self.assertEqual(saved['outcome'],'saved')
-        self.assertIn(' prepare ',self.hook('resume'))
+        self.assertIn(' resume ',self.hook('resume'))
         prepared=self.cli('prepare',saved['path'],'--session','reader','--execute')
         self.assertEqual(prepared['outcome'],'prepared')
         self.assertEqual(self.cli('acknowledge',saved['path'],'--session','reader')['outcome'],'resumed')
@@ -94,7 +94,7 @@ class SafetyReview(unittest.TestCase):
         for prompt in ['retrieve handoff','resume handoff','Retrieve handoff!','show handoff','resume the handoff','retrieve work']:
             with self.subTest(prompt=prompt):
                 response=self.hook(prompt)
-                self.assertIn(' prepare ',response)
+                self.assertRegex(response,' (prepare|resume) ')
                 if prompt.lower().startswith(('retrieve', 'show')):
                     self.assertNotIn('--execute',response)
 
@@ -176,7 +176,7 @@ urllib.request.urlopen=fake_urlopen
         self.hook('Add a README badge.')
         self.hook('Add a different README badge.')
         self.assertEqual(len(calls.read_text().splitlines()),1)
-        self.assertIn(' prepare ',self.hook('resume'))
+        self.assertIn(' resume ',self.hook('resume'))
         self.assertEqual(len(calls.read_text().splitlines()),1)
 
 if __name__=='__main__':

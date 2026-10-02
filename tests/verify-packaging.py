@@ -156,6 +156,18 @@ def main():
 
     check_installer()
 
+    # 3c. The skill/plugin version lives in three files that must agree;
+    #     scripts/bump-version is the single tool that rewrites all of them.
+    bump = subprocess.run([sys.executable, os.path.join(REPO, "scripts/bump-version"), "--check",
+                           "--root", REPO], capture_output=True, text=True, timeout=30)
+    try:
+        bumped = json.loads(bump.stdout)
+    except ValueError:
+        bumped = {}
+    check("versions-agree", bump.returncode == 0 and bumped.get("outcome") == "consistent",
+          "per-file versions: %r; fix with scripts/bump-version X.Y.Z"
+          % (bumped.get("versions") or bump.stdout + bump.stderr[:300],))
+
     # 4. Root README layout must mention the actually-shipped files.
     readme = open(os.path.join(REPO, "README.md")).read()
     for needle in ("handoff_ledger.py", "thresholds.example.json", "package.sh",

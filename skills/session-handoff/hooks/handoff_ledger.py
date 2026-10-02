@@ -660,11 +660,14 @@ def mark_superseded(path):
 
 def _cli(argv):
     if not argv or argv[0] in ('--help', '-h'):
-        print('Preferred workflow: lookup | save | prepare | verify | acknowledge | history | report.\nRun a command with --help for arguments. Legacy interfaces below:')
+        print('Preferred workflow: resume [--session S] (one-shot) | lookup | save | prepare | verify | acknowledge | wait | history | report.\nRun a command with --help for arguments. Legacy interfaces below:')
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
-    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history", "report"):
+    # Legacy `resume <path> [--owner X]` keeps its direct transfer; any other resume form is the one-shot protocol command.
+    legacy_resume = cmd == "resume" and args and not args[0].startswith("-") and all(
+        not a.startswith("-") or a == "--owner" for a in args[1:])
+    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history", "report", "resume", "wait") and not legacy_resume:
         from handoff_protocol import cli
         return cli(argv)
     if cmd == "list":

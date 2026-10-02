@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Set the session-handoff skill/plugin version in every place that carries it.
+
+  scripts/bump-version X.Y.Z [--root DIR]   rewrite all three occurrences
+  scripts/bump-version --check [--root DIR] report whether they agree
+
+Prints exactly one JSON line with "outcome" and "next"; exit 0 ok, 1 mismatch, 2 usage/invalid."""
+import argparse
+import json
+import os
+import re
+import sys
+
+# (file, pattern) — group 1 is the prefix kept, group 2 the version. Each
+# pattern matches only the session-handoff occurrence (first match in file;
+# for SPEC.md, line 4 only, so the chat skill and extension versions are untouched).
+TARGETS = (
+    ("plugins/session-handoff/.claude-plugin/plugin.json", re.compile(r'^(  "version": ")([^"]*)(?=")', re.M)),
+    ("skills/session-handoff/SKILL.md", re.compile(r'^(  version: ")([^"]*)(?="$)', re.M)),
+    ("SPEC.md", re.compile(r'^(Component versions: `session-handoff` skill/plugin )(\S+?)(?= ·|$)')),
+)
+SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+
+def emit(code, **out):
+    print(json.dumps(out))
+    return code
+
+
+def locate(root, rel, pattern):
+    """(text, match) for a target; SPEC.md is matched against line 4 only."""
+    try:
+        with open(os.path.join(root, rel)) as f:
+            text = f.read()
+    except OSError:
+        return None, None
+    if rel == "SPEC.md":
+        lines = text.splitlines(True)
+        if len(lines) < 4:
+            return text, None
+        offset = sum(map(len, lines[:3]))
+        m = pattern.match(lines[3].rstrip("\n"))
+        return text, (m, offset) if m else None
+    m = pattern.search(text)
+    return text, (m, 0) if m else None
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("version", nargs="?")
+    ap.add_argument("--root", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    ap.add_argument("--check", action="store_true")
+    a = ap.parse_args(argv)
+    if a.check == bool(a.version):
+        return emit(2, outcome="usage", next="Run `scripts/bump-version X.Y.Z` or `scripts/bump-version --check`.")
+    if a.version and not SEMVER.match(a.version):
+        return emit(2, outcome="invalid", version=a.version,
+                    next="Pass a plain semver X.Y.Z (no leading v, no leading zeros).")
+
+    found = [(rel, pattern) + locate(a.root, rel, pattern) for rel, pattern in TARGETS]
+    versions = {rel: hit[0].group(2) if hit else None for rel, _, _, hit in found}
+    if None in versions.values() or len(set(versions.values())) != 1:
+        return emit(1, outcome="mismatch", versions=versions,
+                    next="Edit the files so every listed value is the same version "
+                         "(null = occurrence not found), then rerun with --check.")
+    current = versions[TARGETS[0][0]]
+    if a.check:
+        return emit(0, outcome="consistent", version=current, next="Nothing to do.")
+
+    for rel, _, text, (m, offset) in found:
+        if current != a.version:
+            start, end = offset + m.start(2), offset + m.end(2)
+            with open(os.path.join(a.root, rel), "w") as f:
+                f.write(text[:start] + a.version + text[end:])
+    return emit(0, outcome="bumped", **{"from": current}, to=a.version, files=[rel for rel, _ in TARGETS],
+                next="Review the diff, then run `python3 tests/verify-packaging.py`.")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

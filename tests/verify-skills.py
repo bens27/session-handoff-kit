@@ -101,7 +101,7 @@ def main():
         report = re.search(r"Tell the user the handoff is complete", sect)
         stop = re.search(r"\bStop\b", sect)
         check("agent-wind-down-requires-published-receipt",
-              verify is not None and "save --session" in sect,
+              verify is not None and "<ledger> save --input" in sect,
               "§1 must publish with save and require outcome: saved")
         check("agent-wind-down-verify-precedes-report",
               verify is not None and report is not None and stop is not None
