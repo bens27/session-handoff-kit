@@ -196,15 +196,19 @@ message *replaces* a tool result, making that path token-neutral or better.
 The watcher runs on `PostToolUse` (covers long agentic turns, where context
 actually burns) and `UserPromptSubmit` (per-turn check). On first threshold
 crossing it writes a latch file
-(`$TMPDIR/context-watch-<key>.fired`, containing `occupancy/limit`) and
-emits. The key is the sanitized `session_id`. When that is missing, the key
+(`$TMPDIR/context-watch-<key>.fired`, containing `occupancy/limit/base`,
+where `base` is the transcript's own usage at that moment) and emits. State
+files in the shared temp dir are opened without following symlinks (temp
+files exclusively), and the auto-clear counter is keyed by
+sha1(realpath(project root))[:20]. The key is the sanitized `session_id`. When that is missing, the key
 is `t-` + sha1(transcript_path)[:16], so sessions without an id never share
 a latch. Nothing is latched when neither is known.
 
 One SECOND NOTICE follows if the first is not acted on. It needs a model turn
 after the first notice, and occupancy at or above
 max(1.25 × threshold, first occupancy + 0.25 × threshold). It stays quiet
-if an open handoff was written after the first notice. After that, checks
+if a validated checkpoint was published for this session's trigger (any
+status: it was acted on, whether or not it has been resumed since). After that, checks
 exit silently until occupancy falls below half the threshold, which means a
 compaction happened. That re-arms both notices. Usage recorded before a
 `compact_boundary` transcript entry is ignored. On `SessionStart` with
@@ -258,6 +262,8 @@ substring key ("claude-opus" beats "claude"):
 1. `HANDOFF_AT` — env, global absolute; the ergonomic per-launch knob
    (`HANDOFF_AT=20000 claude`), so it beats every map and config file
 2. `CONTEXT_WATCH_TOKENS_MAP` — env, e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
+   (model keys only; a `default=` entry is ignored, use `CONTEXT_WATCH_TOKENS`
+   or the config files' `"default"` key)
 3. `./.context-watch.json` — project-local per-model config
 4. `~/.context-watch/thresholds.json` — user-global per-model config
 5. `CONTEXT_WATCH_TOKENS` — global absolute, env

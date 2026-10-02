@@ -656,9 +656,18 @@ def main():
     check("stop-nudge-silent-after-handoff-from-main-checkout", p_n.stdout.strip() == "",
           "stdout=%r" % p_n.stdout[:300])
     sid_n3 = "verify-" + uuid.uuid4().hex[:8]
-    with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n3), "w") as f:
-        f.write("30000/25000/28000\n")
-    open(os.path.join(latchdir, "context-watch-%s.fired2" % sid_n3), "w").close()
+    # Real floor path: a threshold under the startup context yields a floor note
+    # (a .floor latch, no first latch), so the Stop hook has nothing to nudge about.
+    trace_n3 = os.path.join(tmp, "floor-nudge.jsonl")
+    with open(trace_n3, "w") as f:
+        f.write(STARTUP_CLAUDE)
+    floor_evt = dict(nudge_evt, hook_event_name="PostToolUse", session_id=sid_n3,
+                     cwd=os.path.join(tmp, "proj-nudge-floor"), transcript_path=trace_n3)
+    p_n = run_hook(floor_evt, dict(env_n, HANDOFF_AT="10000"))
+    check("stop-floor-note-fires-via-real-path",
+          os.path.exists(os.path.join(latchdir, "context-watch-%s.fired.floor" % sid_n3))
+          and not os.path.exists(os.path.join(latchdir, "context-watch-%s.fired" % sid_n3)),
+          "stdout=%r" % p_n.stdout[:200])
     p_n = run_hook(dict(nudge_evt, session_id=sid_n3, cwd=os.path.join(tmp, "proj-nudge-floor")), env_n)
     check("stop-nudge-silent-floor-note", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
     sid_n4 = "verify-" + uuid.uuid4().hex[:8]
