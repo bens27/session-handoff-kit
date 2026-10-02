@@ -273,7 +273,7 @@ def publication_valid(path, text, fm):
     try:
         with open(path + '.published') as f:
             receipt = json.loads(f.read(4096))
-        return (receipt.get('checkpoint_id') == fm.get('checkpoint_id')
+        return (isinstance(receipt, dict) and receipt.get('checkpoint_id') == fm.get('checkpoint_id')
                 and receipt.get('fingerprint') == content_fingerprint(text))
     except (OSError, ValueError):
         return False
@@ -364,8 +364,9 @@ def _records(root, errors=None):
                 "path": path, "fm": fm, "text": text, "mtime": mtime, "topic": topic,
                 "legacy": _is_legacy_single_file(path, legacy),
                 "problems": _problems(text, fm) + (["document exceeds bounded read limit"] if len(text) > 64_000 else []),
-                "ended": (fm.get("created") if fm.get("checkpoint_id") else name_ended or fm.get("created")
-                          or datetime.fromtimestamp(mtime).strftime(STAMP)),
+                "ended": ((fm.get("created") or name_ended) if fm.get("checkpoint_id")
+                          else name_ended or fm.get("created"))
+                         or datetime.fromtimestamp(mtime).strftime(STAMP),
             })
         except OSError as exc:
             if errors is not None:

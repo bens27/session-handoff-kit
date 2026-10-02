@@ -347,7 +347,9 @@ or `error`, each with a concrete action. It chooses authoritative topic state
 before filtering availability, scans local and fallback directories plus legacy
 HANDOFF.md, and reports read failures rather than turning them into absence.
 The latest record uses created time and a stable path tie-breaker. Five summaries
-are returned per page; `--offset` paginates. Descriptions are bounded.
+are returned per page; `--offset` paginates. Descriptions are bounded. Malformed metadata never crashes
+scan: a missing `created` falls back to the filename date, then mtime, and a
+non-object `.published` receipt makes the checkpoint `incomplete`.
 
 `save [dir] [--session ID] [--request-id ID] --input draft.json` validates the
 agent-authored core and generates timestamps, project/Git state, session/trigger

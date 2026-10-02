@@ -430,6 +430,22 @@ class ProtocolTests(unittest.TestCase):
         self.put(fields='created: ' + 'bad-date' * 5000)
         self.assertLess(len(self.cli('history').stdout), 32000)
 
+    def test_checkpoint_without_created_does_not_break_lookup(self):
+        self.put('20260101-1000-other.md', fields='created: 2026-01-01T10:00:00').write_text(
+            '---\ntopic: other\nstatus: open\ncreated: 2026-01-01T10:00:00\n---\n## Objective\nA.\n## Current state\nB.\n## Next steps\nC.\n')
+        self.put('nodate.md', fields='checkpoint_id: abc')
+        for command in ('lookup', 'history'):
+            out = json.loads(self.cli(command).stdout)
+            self.assertNotIn('TypeError', json.dumps(out))
+        self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'incomplete')
+        self.assertEqual(json.loads(self.cli('lookup').stdout)['total'], 1)
+
+    def test_non_object_publication_sidecar_is_incomplete_not_a_crash(self):
+        p = self.put(fields='checkpoint_id: abc\ncreated: 2026-01-01T10:00:00')
+        Path(str(p) + '.published').write_text('[]')
+        out = json.loads(self.cli('lookup').stdout)
+        self.assertEqual(out['outcome'], 'incomplete')
+
 
 if __name__ == '__main__':
     unittest.main()
