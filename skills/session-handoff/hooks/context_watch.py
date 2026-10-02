@@ -52,9 +52,9 @@ Other environment variables:
   CONTEXT_WATCH_THINKING      tokens assumed for the not-yet-written current
                               response (default: session's largest response,
                               capped at 25000; Claude only)
-  CONTEXT_WATCH_JEV           0 to skip asking Jev (TypeSafe System One,
+  CONTEXT_WATCH_JEV           1 to ask Jev (TypeSafe System One, needs
                               TYPESAFE_API_KEY) whether a session's opening
-                              prompt continues an open handoff
+                              prompt continues an open handoff (default off)
   CONTEXT_WATCH_LOG           analytics path (default ~/.context-watch/events.jsonl;
                               0 to disable)
   CONTEXT_WATCH_MAX_AGE_DAYS  announcer: ignore open handoffs older than this (14)

@@ -47,6 +47,8 @@ def run_hook(event, env_extra, script=PLUGIN):
     env.pop("CONTEXT_WATCH_TOKENS", None)
     env.pop("CONTEXT_WATCH_TOKENS_MAP", None)
     env.pop("CONTEXT_WATCH_PERCENT", None)
+    env.pop("CONTEXT_WATCH_JEV", None)  # a developer opt-in must not send fixtures to the network
+    env.pop("TYPESAFE_API_KEY", None)
     env.update(env_extra)
     p = subprocess.run([PY, script], input=json.dumps(event), env=env,
                        capture_output=True, text=True, timeout=30)
