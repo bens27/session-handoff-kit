@@ -4,6 +4,8 @@ For changes to handoff lifecycle, context hooks, resumption, or harness architec
 
 For behavior changes to hooks, ledger state, or automatic resumption, read `~/.agents/skills/tdd/SKILL.md` and use a focused regression test. Documentation-only and metadata-only changes do not need a test-first workflow.
 
+When briefing parallel workers on this kit, read "Parallel workers" in `README.md` and assign doc-section ownership in each brief.
+
 The optional workflow index is `~/.agents/skills/skill-index/SKILL.md`; consult it when choosing a requested specialist workflow. If a referenced personal skill is unavailable on another machine, continue with repository documentation and report the missing guidance when material.
 
 ## Cross-session messages

@@ -425,6 +425,17 @@ Design guarantees: stdlib-only Python, fail-open (any error exits 0), fires
 once per session via a temp-dir latch keyed on `session_id`, and only scans
 the tail of large transcripts so it stays fast on every tool call.
 
+## Parallel workers
+
+When a coordinator splits kit work across parallel workers, each worker brief
+names the user-facing doc sections that worker owns (in `SKILL.md`,
+`continuation.md`, `reference.md`, `README.md` or `SPEC.md`). The worker
+updates those sections in its own change, alongside the code and tests. The
+coordinator then reconciles overlaps only. When two workers would touch the same
+section, assign each a distinct section or give all doc edits to one doc lane.
+Interface notes kept in scratch files leave the coordinator to rebuild the docs
+from them, which costs a full extra read of every changed interface.
+
 ## Layout
 
 ```
