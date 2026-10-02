@@ -123,9 +123,10 @@ agent never guesses them independently.
 ~/.agents/skills/session-handoff/claude-auto --at 120000 -- "Continue this project"
 ```
 
-The launcher requires `claude` and `tmux` on PATH, makes the skill discoverable
-in Claude's configuration directory, registers its hooks, and opens tmux when
-you are not already in a pane. It enables the save → clear → retrieve → resume
+The launcher requires `claude` on PATH (and `tmux` outside AgentsRoom), makes the
+skill discoverable in Claude's configuration directory, registers its hooks, and
+opens tmux when you are neither already in a pane nor in AgentsRoom (where it
+runs `claude` directly). It enables the save → clear → retrieve → resume
 cycle for this launch. It preserves normal Claude permissions and uses three
 consecutive automatic clears by default (`--max-clears N`); this is not a total
 session or spending limit. Existing project threshold configuration still applies
