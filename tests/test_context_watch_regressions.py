@@ -106,6 +106,18 @@ class NormalPolicyUnchanged(HookCase):
         self.assertIn("reason: context-pressure",
                       self.context(self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})))
 
+    def test_rearm_clears_stop_latches_so_next_cycle_nudges_again(self):
+        extra = {"CONTEXT_WATCH_THINKING": "0"}
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
+        self.assertIn('"decision": "block"', self.run_hook(event="Stop", extra=extra))
+        self.assertEqual(self.run_hook(event="Stop", extra=extra), "")  # nudged once
+        self.write([claude_call(20000)], "a")  # compaction
+        self.assertEqual(self.run_hook(extra=extra), "")  # re-armed
+        self.write([claude_call(140000)], "a")
+        self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
+        self.assertIn('"decision": "block"', self.run_hook(event="Stop", extra=extra))
+
 
 class FlooredCompaction(HookCase):
     """Threshold 30k under a 50k startup context: the limit becomes window - reserve."""

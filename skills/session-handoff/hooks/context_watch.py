@@ -1196,7 +1196,8 @@ def main():
         except ValueError:
             rearm_limit = max(window - DEFAULT_RESERVE, limit)
     if (fired or floored) and occupancy < rearm_limit * REARM_FACTOR:
-        for path in (first, second, floor_latch, first + ".cleared"):
+        for path in (first, second, floor_latch, first + ".cleared",
+                     first + ".nudged", first + ".announced"):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:
