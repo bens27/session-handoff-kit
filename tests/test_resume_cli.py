@@ -179,6 +179,23 @@ class ResumeCliTests(unittest.TestCase):
         self.assertNotIn('status: resumed', Path(path).read_text())
         self.assertNotIn('resumed_by', Path(path).read_text())
 
+    def test_resume_within_budget_before_project_field_is_still_delivered(self):
+        # resume() sizes its output without the CLI's added "project" key; the CLI must not then withhold it.
+        body = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\n' + 'x' * 15000 + '\n'
+        doc = json.dumps(dict(topic='edge', description='Edge', body=body))
+        probe = Path(self.tmp.name) / 'projecp'  # same name length as 'project' so sizes match
+        (probe / '.handoffs').mkdir(parents=True)
+        real = self.root
+        self.root = probe
+        self.run_cli('save', '--session', 'old', '--request-id', 'r', input=doc)
+        _, full = self.run_cli('resume', '--session', 'new', '--budget-bytes', '60000')
+        self.root = real
+        inner = len(json.dumps({k: v for k, v in full.items() if k != 'project'}, ensure_ascii=False).encode())
+        self.run_cli('save', '--session', 'old', '--request-id', 'r', input=doc)
+        code, out = self.run_cli('resume', '--session', 'new', '--budget-bytes', str(inner + 10))
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+        self.assertEqual(self.run_cli('lookup')[1]['outcome'], 'none', 'acknowledged work must have been delivered')
+
     def test_stale_session_cannot_save_over_a_handoff_another_session_resumed(self):
         path = self.save('work', session='a')
         code, out = self.run_cli('resume', '--session', 'b')

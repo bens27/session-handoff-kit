@@ -950,7 +950,8 @@ def cli(argv):
         result = {k: v for k, v in result.items() if k in keep}
     output = json.dumps(result, ensure_ascii=False)
     limit = getattr(a, 'budget_bytes', PACKAGE_BYTES)
-    if len(output.encode()) > max(1024, limit):
+    # A resumed result is already acknowledged (resume() size-checked it first); withholding it now would lose the handoff.
+    if result['outcome'] != 'resumed' and len(output.encode()) > max(1024, limit):
         result = dict(outcome='needs-context', action='Response metadata exceeds the output budget. Use a narrower topic or history page; inspect and repair oversized metadata locally before preparing.')
         output = json.dumps(result)
     print(output)
