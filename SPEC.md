@@ -369,7 +369,9 @@ only after preparation and any recorded verification pass. Failure/expiry/change
 requires retry or release; it never silently marks work resumed.
 `resume [TOPIC-OR-PATH] --session ID` chains selection, `prepare --execute`
 (auto skill catalog), verify when recorded and acknowledge, returning
-`resumed`, `choose`, `none`, or the failing `stage`. `--session` defaults to
+`resumed`, `choose`, `none`, or the failing `stage`. The final output is size-checked
+against `--budget-bytes` before `acknowledge`; over budget returns `needs-context`
+and the checkpoint stays open. `--session` defaults to
 `$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
 request ID defaults to a hash of the draft. Save resolves the project from the
 predecessor (an explicit root that disagrees is a `conflict` naming both),

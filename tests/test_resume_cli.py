@@ -155,6 +155,17 @@ class ResumeCliTests(unittest.TestCase):
         self.assertEqual(out['action'], 'Continue with next_step.')
         self.assertIn('status: resumed', Path(path).read_text())
 
+    def test_oversized_resume_output_leaves_the_checkpoint_open(self):
+        big = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\n' + 'x' * 19000 + '\n'
+        code, out = self.run_cli('save', '--session', 'old', '--request-id', 'r-big',
+                                 input=json.dumps(dict(topic='big', description='Big', body=big)))
+        self.assertEqual(code, 0, out)
+        path = out['path']
+        code, out = self.run_cli('resume', '--session', 'new')
+        self.assertEqual((code, out['outcome']), (1, 'needs-context'), out)
+        self.assertNotIn('status: resumed', Path(path).read_text())
+        self.assertNotIn('resumed_by', Path(path).read_text())
+
     def test_resume_asks_to_choose_among_several_and_accepts_a_topic(self):
         self.save('alpha')
         beta = self.save('beta')
