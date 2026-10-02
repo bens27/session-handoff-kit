@@ -2,7 +2,7 @@
 name: session-handoff
 description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work on an explicit request or active autoresume. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
 metadata:
-  version: "0.16.1"
+  version: "0.17.0"
 ---
 
 # Session Handoff

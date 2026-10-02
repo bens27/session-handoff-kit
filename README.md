@@ -537,7 +537,7 @@ session-handoff-kit/
 │   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop
 │   └── skills/session-handoff -> ../../../skills/session-handoff
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
-├── scripts/bump-version                 # rewrites (or --check) the version in all three files
+├── scripts/bump-version                 # rewrites (or --check) the version in every file that carries it (incl. product page)
 ├── chat/session-handoff-chat/
 │   ├── SKILL.md                         # behavioral variant for claude.ai
 │   └── handoff-template.md              # chat handoff shape — edit this to experiment

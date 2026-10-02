@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Set the session-handoff skill/plugin version in every place that carries it.
 
-  scripts/bump-version X.Y.Z [--root DIR]   rewrite all three occurrences
+  scripts/bump-version X.Y.Z [--root DIR]   rewrite every occurrence
   scripts/bump-version --check [--root DIR] report whether they agree
 
 Prints exactly one JSON line with "outcome" and "next"; exit 0 ok, 1 mismatch, 2 usage/invalid."""
@@ -18,6 +18,7 @@ TARGETS = (
     ("plugins/session-handoff/.claude-plugin/plugin.json", re.compile(r'^(  "version": ")([^"]*)(?=")', re.M)),
     ("skills/session-handoff/SKILL.md", re.compile(r'^(  version: ")([^"]*)(?="$)', re.M)),
     ("SPEC.md", re.compile(r'^(Component versions: `session-handoff` skill/plugin )(\S+?)(?= ·|$)')),
+    ("docs/product-page.html", re.compile(r'(>Plugin )([^\s<]+)(?= · chat skill )')),
 )
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 

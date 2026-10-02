@@ -14,7 +14,7 @@ import unittest
 REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SCRIPT = os.path.join(REPO, "scripts", "bump-version")
 FILES = ("plugins/session-handoff/.claude-plugin/plugin.json",
-         "skills/session-handoff/SKILL.md", "SPEC.md")
+         "skills/session-handoff/SKILL.md", "SPEC.md", "docs/product-page.html")
 
 
 class BumpVersion(unittest.TestCase):
@@ -59,6 +59,7 @@ class BumpVersion(unittest.TestCase):
         self.assertIn('  version: "9.8.7"\n', self.read(FILES[1]))
         line4 = self.read("SPEC.md").splitlines()[3]
         self.assertIn("`session-handoff` skill/plugin 9.8.7", line4)
+        self.assertIn(">Plugin 9.8.7 · chat skill ", self.read(FILES[3]))
         old_line4 = before["SPEC.md"].splitlines()[3]
         self.assertEqual(line4, old_line4.replace("skill/plugin " + old, "skill/plugin 9.8.7"))
         for rel in FILES:  # nothing else changed
@@ -75,7 +76,8 @@ class BumpVersion(unittest.TestCase):
             rc, out = self.run_script(*args)
             self.assertEqual(rc, 1, out)
             self.assertEqual(out["outcome"], "mismatch")
-            self.assertEqual(out["versions"], {FILES[0]: old, FILES[1]: "0.0.1", FILES[2]: old})
+            self.assertEqual(out["versions"], {FILES[0]: old, FILES[1]: "0.0.1", FILES[2]: old,
+                                             FILES[3]: old})
             self.assertTrue(out.get("next"))
         self.assertEqual(self.snapshot(), before)
 
