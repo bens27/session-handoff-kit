@@ -186,6 +186,20 @@ def latch_path(session_id, stage=1):
                         "context-watch-%s.fired%s" % (safe, "" if stage == 1 else stage))
 
 
+def open_private(path, temp=False):
+    """Text-mode write handle that never follows a symlink planted at `path` in a
+    shared temp dir. A temp file (always `<final>.<pid>`) is created exclusively,
+    clearing a stale one first (unlink does not follow links); anything else is
+    created or truncated in place."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if temp else os.O_TRUNC)
+    if temp:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    return os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8")
+
+
 def write_session_note(cwd, evt, fired):
     """Leave this session's facts where handoff_ledger.py new-path (run from
     the agent's shell, no hook stdin) can read them: reason and skills."""
@@ -221,7 +235,7 @@ def write_session_note(cwd, evt, fired):
             note["trigger_id"] = ''
         note["fired"] = bool(fired) or bool(note["trigger_id"])
         tmp = "%s.%d" % (path, os.getpid())
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open_private(tmp, temp=True) as f:
             json.dump(note, f)
         os.replace(tmp, path)
         write_terminal_pointer(cwd, sid)
@@ -244,7 +258,7 @@ def write_terminal_pointer(cwd, sid):
             return
         path = terminal_pointer_path(cwd, terminal)
         tmp = "%s.%d" % (path, os.getpid())
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open_private(tmp, temp=True) as f:
             json.dump({"session_id": sid, "ts": time.time()}, f)
         os.replace(tmp, path)
     except Exception:
@@ -265,8 +279,8 @@ def auto_count_path(cwd):
         root = _ledger().project_root(cwd)
     except Exception:
         root = cwd
-    safe = "".join(c if c.isalnum() else "_" for c in os.path.realpath(root))[-80:]
-    return os.path.join(tempfile.gettempdir(), "context-watch-auto-%s.count" % safe)
+    digest = hashlib.sha1(os.path.realpath(root).encode("utf-8", "replace")).hexdigest()[:20]
+    return os.path.join(tempfile.gettempdir(), "context-watch-auto-%s.count" % digest)
 
 
 # ---------------------------------------------------------------- transcript
@@ -493,7 +507,7 @@ def usage_age_seconds(entries):
     return None
 
 
-def handoff_written_since(cwd, since, session=None, require_open=False):
+def handoff_written_since(cwd, session=None, require_open=False):
     """Only a validated publication for this session's trigger satisfies it."""
     if not session:
         return False
@@ -787,7 +801,8 @@ def handle_session_start(evt, agent):
     result = lookup(cwd, terminal=terminal_id() if auto_mode_on() else None)
     policy = opening_action('', result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
     label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' and autoresume_on() else 'handoff-status:'
-    note = label + ' ' + policy + (' This status requires no skill loading.' if label == 'handoff-status:' else '')
+    note = label + ' ' + policy + (' This status requires no skill loading.' if label == 'handoff-status:'
+                                   else ' An untrusted checkpoint with a verify command asks the user first.')
     print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
     sys.exit(0)
 
@@ -805,11 +820,8 @@ def nudge_unwritten_handoff(evt):
     latch = latch_path(key) if key else None
     if not latch or not os.path.exists(latch):
         return
-    second = latch_path(key, 2)
-    if os.path.exists(second) and os.path.getsize(second) == 0:
-        return  # floor note: no handoff was asked for
     cwd = evt.get("cwd") or os.getcwd()
-    if handoff_written_since(cwd, os.path.getmtime(latch) - 60, key):
+    if handoff_written_since(cwd, key):
         return
     try:
         os.close(os.open(latch + ".nudged", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
@@ -920,7 +932,7 @@ def announce_manual_clear(evt):
     if not latch or not os.path.exists(latch):
         return
     cwd = evt.get("cwd") or os.getcwd()
-    if not handoff_written_since(cwd, os.path.getmtime(latch), key, require_open=True):
+    if not handoff_written_since(cwd, key, require_open=True):
         return
     try:
         os.close(os.open(latch + ".announced", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
@@ -954,9 +966,7 @@ def handle_stop(evt):
         except OSError:
             pass
         sys.exit(0)
-    fired_at = os.path.getmtime(latch)
-    handoffs = _ledger().scan(cwd, 1)
-    if not handoff_written_since(cwd, fired_at, key, require_open=True):
+    if not handoff_written_since(cwd, key, require_open=True):
         sys.exit(0)  # still writing it; the next Stop will check again
     try:
         os.close(os.open(latch + ".cleared", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
@@ -977,7 +987,7 @@ def handle_stop(evt):
             "(or HANDOFF_AUTO_MAX), then type /clear and resume." % count)}))
         sys.exit(0)
     try:
-        with open(counter, "w") as f:
+        with open_private(counter) as f:
             f.write("%d\n" % (count + 1))
     except OSError:
         pass
@@ -1166,7 +1176,7 @@ def main():
     # after the hook runs; assume it is as large as the session's largest so far.
     thinking = min(breakdown.get("max_output", 0), PENDING_CAP) \
         if agent == "claude" and env("CONTEXT_WATCH_PENDING", "1") != "0" else 0
-    if env("CONTEXT_WATCH_THINKING") is not None:
+    if env("CONTEXT_WATCH_THINKING").strip():
         try:
             thinking = int(env("CONTEXT_WATCH_THINKING"))
         except ValueError:
@@ -1241,7 +1251,7 @@ def main():
     if below_floor:
         if not floored:
             try:
-                with open(floor_latch, "w") as f:
+                with open_private(floor_latch) as f:
                     f.write("%d/0/0\n" % (floor or 0))
             except OSError:
                 pass
@@ -1255,7 +1265,7 @@ def main():
             # No model turn since the first notice (e.g. parallel tool results
             # landing together): it has not been seen yet, so it was not ignored.
             sys.exit(0)
-        if handoff_written_since(cwd, os.path.getmtime(first), session_id):
+        if handoff_written_since(cwd, session_id):
             sys.exit(0)  # the handoff was written; the notice was acted on
         need = max(limit * SECOND_NOTICE_FACTOR,
                    first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
