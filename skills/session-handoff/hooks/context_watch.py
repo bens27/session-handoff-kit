@@ -193,10 +193,8 @@ def write_session_note(cwd, evt, fired):
         sid = session_key(evt)
         if not sid:
             return
-        trigger = str(os.stat(latch_path(sid)).st_mtime_ns) if fired and os.path.exists(latch_path(sid)) else ''
-        note = {"session_id": sid, "trigger_id": trigger, "cwd": cwd,
-                "transcript_path": evt.get("transcript_path") or "",
-                "fired": bool(fired), "ts": time.time()}
+        note = {"session_id": sid, "cwd": cwd,
+                "transcript_path": evt.get("transcript_path") or "", "ts": time.time()}
         path = _ledger().session_note_path(cwd, sid)
         previous = _ledger().read_session_note(cwd, session=sid)
         entries = load_transcript_tail(evt.get('transcript_path') or '') if evt.get('transcript_path') else []
@@ -215,6 +213,13 @@ def write_session_note(cwd, evt, fired):
             note['startup_input_tokens'] = next((input_size(b) for e in entries
                 if (b := usage_fn([e])[0]) is not None), None)
         note['observed_input_tokens'] = input_size(usage)
+        # Read the latch last: a parallel hook may have created it after this
+        # hook's caller looked, and its trigger must not be blanked.
+        try:
+            note["trigger_id"] = str(os.stat(latch_path(sid)).st_mtime_ns)
+        except OSError:
+            note["trigger_id"] = ''
+        note["fired"] = bool(fired) or bool(note["trigger_id"])
         tmp = "%s.%d" % (path, os.getpid())
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(note, f)

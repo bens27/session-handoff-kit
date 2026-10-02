@@ -147,6 +147,27 @@ class FlooredCompaction(HookCase):
         self.assertIn("SECOND NOTICE", self.hook())
 
 
+class SessionNoteTrigger(HookCase):
+    def test_stale_unfired_hook_does_not_blank_trigger_id(self):
+        # Hook B read "no latch" before hook A created it, then wrote its note after A's.
+        self.write([claude_call(20000), claude_call(140000)])
+        self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})  # hook A: fires, latch exists
+        code = (
+            "import importlib.util, json\n"
+            "spec = importlib.util.spec_from_file_location('cw', %r)\n"
+            "cw = importlib.util.module_from_spec(spec); spec.loader.exec_module(cw)\n"
+            "evt = {'session_id': %r, 'cwd': %r, 'transcript_path': %r}\n"
+            "cw.write_session_note(%r, evt, False)\n"
+            "print(json.dumps(cw._ledger().read_session_note(%r, session=%r)))\n"
+        ) % (HOOK, self.sid, self.tmp, self.transcript, self.tmp, self.tmp, self.sid)
+        env = {k: v for k, v in os.environ.items() if k not in CLEAN}
+        env.update(HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_AGENT="claude")
+        p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30)
+        note = json.loads(p.stdout)
+        self.assertTrue(note["trigger_id"], p.stderr)
+        self.assertTrue(note["fired"])
+
+
 class AgentsRoomRestart(HookCase):
     def trigger(self, extra):
         self.write([claude_call(20000), claude_call(140000)])
