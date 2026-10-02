@@ -42,15 +42,30 @@ its `install.py` does the same job for Claude Code and Codex.
   then stops. Handles both the single- and multiple-handoff resume flows.
 
 What it touches (review before installing, as with any hook that runs code):
-stdlib-only Python, no network, no subprocesses except in fully automatic
-mode (`HANDOFF_AUTO=1`), where the `Stop` hook runs `tmux send-keys` to type
-`/clear` and `resume` into your own pane, and the `auto` runner launches the
-agent command you give it. The watcher reads the session
-transcript path it is handed on stdin and keeps a once-per-session latch (and
-optional analytics log) under the system temp dir; the announcer and ledger
-read the handoff locations above, and the only files the ledger writes are
-the status front-matter lines (`status:`, `resumed:`/`superseded:` stamps,
-`superseded_by:`) of handoff files you point it at.
+stdlib-only Python. The hooks run no subprocesses and make no network calls
+except as listed here.
+
+- **Subprocesses.** The ledger runs `git` (`rev-parse`, and `-C <root>` queries
+  for the checkpoint's git position and ancestry). `resume` runs the
+  checkpoint's recorded `verify` command through `bash -c` in the project root
+  and logs its output under `.verification/`, subject to the trust rules in
+  SPEC §7.2. In fully automatic mode (`HANDOFF_AUTO=1`) outside AgentsRoom, the
+  `Stop` hook runs `tmux send-keys` to type `/clear` and `resume` into your own
+  pane, and the `auto` runner launches the agent command you give it. In
+  AgentsRoom the `Stop` hook instead tells the agent to call the AgentsRoom
+  `agents_restart` tool.
+- **Network, opt-in only.** With `CONTEXT_WATCH_JEV=1` and a `TYPESAFE_API_KEY`,
+  the `UserPromptSubmit` router POSTs to `https://api.typesafe.ai/v1/systemone`
+  (3 s timeout, fails open): up to 4,000 characters of your opening prompt,
+  plus each parked handoff's topic and the first 200 characters of its
+  description. It is off by default; with it off nothing leaves the machine.
+- **Files read.** The watcher reads the session transcript path it is handed on
+  stdin; the announcer and ledger read the handoff locations above.
+- **Files written.** `save` writes the whole checkpoint file, a `.published`
+  sidecar next to it, and `.verification/` logs. The ledger also updates the
+  status front-matter lines (`status:`, `resumed:`/`superseded:` stamps,
+  `superseded_by:`) of handoff files you point it at. The watcher keeps a
+  once-per-session latch (and optional analytics log) under the system temp dir.
 
 Configuration via environment variables: `HANDOFF_AT` (per-launch threshold,
 highest precedence) and `AUTORESUME` (with `HANDOFF_AT`, makes the whole
