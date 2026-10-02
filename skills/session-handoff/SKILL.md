@@ -33,7 +33,10 @@ For installation/customization only, read `reference.md`.
    automatic resumption is blocked.
 4. Tell the user the handoff is complete and give its path, then follow the
    save result's `transition.action` (new session, `/clear`, tmux/runner, or
-   AgentsRoom `agents_restart` with prompt `resume`).
+   AgentsRoom `agents_restart` with prompt `resume`). If delegated workers
+   (Agent-tool subagents) are still running, the save stands, but wait for their
+   reports, or confirm their results are durable in commits or backlog comments,
+   before that transition: clearing ends the session that receives their reports.
 5. Stop. Remaining authorized work belongs to the receiving session.
 
 ## §2 Retrieval

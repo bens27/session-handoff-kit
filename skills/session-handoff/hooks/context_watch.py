@@ -285,6 +285,16 @@ def auto_count_path(cwd):
 
 # ---------------------------------------------------------------- transcript
 
+def in_subagent(evt):
+    """True when the event fired inside an Agent-tool subagent. Claude Code runs
+    these hooks there with the parent's session_id, so a notice would reach a
+    worker that cannot save the parent's handoff. `agent_id` is documented for
+    subagents only; a transcript under .../subagents/ is the fallback signal."""
+    if evt.get("agent_id"):
+        return True
+    return "subagents" in (evt.get("transcript_path") or "").replace("\\", "/").split("/")
+
+
 def read_event():
     try:
         evt = json.load(sys.stdin)
@@ -1124,6 +1134,8 @@ def main():
 
     global _DIAG, _AGENT, _EVT
     evt = _EVT = read_event()
+    if in_subagent(evt):
+        sys.exit(0)
     event_name = evt.get("hook_event_name") or ""
     if event_name == "Stop":
         handle_stop(evt)
