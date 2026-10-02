@@ -312,8 +312,8 @@ def _records(root, errors=None):
     replaced = {os.path.realpath(r["fm"]["predecessor"]) for r in out
                 if r["fm"].get("checkpoint_id") and r["fm"].get("predecessor") and not r["problems"]}
     for r in out:
-        if os.path.realpath(r["path"]) in replaced:
-            r["fm"]["status"] = "superseded"
+        if os.path.realpath(r["path"]) in replaced and r["fm"].get("status") != "resumed":
+            r["fm"]["status"] = "superseded"  # never erase the record of a transfer
     return out
 
 

@@ -191,6 +191,10 @@ def save(root, session, request_id, document):
                 return dict(outcome='conflict', action='Predecessor is not authoritative in this project. Refresh lookup and select the intended lineage.')
             locks.enter_context(ledger.locked(predecessor))
             ledger._check_owner(predecessor, session)
+            # Re-read under the lock: another session may have resumed it; only the resumer may continue it.
+            held = ledger._read_fm(predecessor)
+            if held.get('status') == 'resumed' and held.get('resumed_by') != session:
+                return dict(outcome='conflict', path=predecessor, action='Another session already resumed this handoff; do not supersede it. Run lookup, or use a distinct topic for independent work.')
             if not document.get('verify'):
                 document = dict(document, verify=record['fm'].get('verify', ''))
         if not document.get('verify'):

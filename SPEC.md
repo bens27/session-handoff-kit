@@ -354,7 +354,9 @@ and exclusive atomic publication prevent partial Markdown files. Directory
 failures try the other supported location, then return `blocked` with recovery
 instructions. Neither CLI nor skill bypasses host permission denial.
 
-Lineage is explicit through `predecessor`; branch equality never supersedes work.
+Lineage is explicit through `predecessor`; branch equality never supersedes work. A resumed predecessor
+can be continued only by the session that resumed it (others get `conflict`), and a
+successor never rewrites a `resumed` record to `superseded`.
 The published successor is the committed replacement record, so a crash after
 publication cannot resurrect its predecessor. All state changes check owner
 under a sidecar lock. Omitted owners do not bypass another session's claim.

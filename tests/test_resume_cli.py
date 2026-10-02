@@ -179,6 +179,27 @@ class ResumeCliTests(unittest.TestCase):
         self.assertNotIn('status: resumed', Path(path).read_text())
         self.assertNotIn('resumed_by', Path(path).read_text())
 
+    def test_stale_session_cannot_save_over_a_handoff_another_session_resumed(self):
+        path = self.save('work', session='a')
+        code, out = self.run_cli('resume', '--session', 'b')
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+        doc = dict(topic='work', description='Again', body=BODY)
+        code, out = self.run_cli('save', '--session', 'a', '--request-id', 'r-again', input=json.dumps(doc))
+        self.assertEqual((code, out['outcome']), (1, 'conflict'), out)
+        _, out = self.run_cli('lookup')
+        self.assertEqual(out['outcome'], 'none', out)
+        self.assertIn('status: resumed', Path(path).read_text())
+
+    def test_resumer_can_continue_the_lineage_and_keeps_the_transfer_record(self):
+        path = self.save('work', session='a')
+        self.run_cli('resume', '--session', 'b')
+        doc = dict(topic='work', description='Next', body=BODY, predecessor=path)
+        code, out = self.run_cli('save', '--session', 'b', '--request-id', 'r-next', input=json.dumps(doc))
+        self.assertEqual((code, out['outcome']), (0, 'saved'), out)
+        _, out = self.run_cli('history', '--topic', 'work')
+        statuses = {Path(i['path']).name: i.get('status') for i in out['items']}
+        self.assertEqual(statuses[Path(path).name], 'resumed', out)
+
     def test_resume_asks_to_choose_among_several_and_accepts_a_topic(self):
         self.save('alpha')
         beta = self.save('beta')
