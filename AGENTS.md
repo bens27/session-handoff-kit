@@ -11,5 +11,5 @@ The optional workflow index is `~/.agents/skills/skill-index/SKILL.md`; consult 
 ## Cross-session messages
 
 - Reports, bugs and questions for another project go in as a backlog ticket in that project (AgentsRoom `backlog_create`), so they outlive the sender's session.
-- For live coordination with an agent, use the AgentsRoom mailbox (`agents_list_live` / `agents_send` / `agents_read_inbox`); it persists and works across CLIs.
+- For live coordination with an agent, in this project or another, use the AgentsRoom mailbox (`agents_list_live` / `agents_send` / `agents_read_inbox`; pass `project` for another project, which must be open in the desktop); it persists and works across CLIs.
 - Never rely on a CLI's own session messaging (e.g. Claude Code `SendMessage`): names change per launch, delivery can be held, nothing persists.
