@@ -118,7 +118,8 @@ class ResumeCliTests(unittest.TestCase):
             self.assertIn('--session', out['action'])
 
     def failing(self, *ids):
-        return "printf '%s'; exit 1" % ''.join('FAILED %s - AssertionError\\n' % i for i in ids)
+        summary = '%d failed in 0.10s\\n' % len(ids)
+        return "printf '%s'; exit 1" % (''.join('FAILED %s - AssertionError\\n' % i for i in ids) + summary)
 
     def test_verify_accepts_failures_already_recorded_at_save_time(self):
         known = 'tests/test_x.py::Case::test_known'
@@ -130,6 +131,18 @@ class ResumeCliTests(unittest.TestCase):
         self.assertIn('already recorded at save time', out['action'])
         code, out = self.run_cli('acknowledge', path, '--session', 'new')
         self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+
+    def test_verify_baseline_match_does_not_hide_errors_or_a_missing_summary(self):
+        known = 'tests/test_x.py::Case::test_known'
+        failed = 'FAILED %s - AssertionError\\n' % known
+        for name, output in (('error', failed + 'ERROR tests/t2.py - ImportError\\n1 failed, 1 error in 0.10s\\n'),
+                             ('crash', failed)):
+            path = self.save(topic=name, verify="printf '%s'; exit 1" % output, verify_baseline=[known])
+            self.run_cli('prepare', path, '--session', 'new', '--execute')
+            code, out = self.run_cli('verify', path, '--session', 'new')
+            self.assertEqual((code, out['outcome']), (1, 'verification-failed'), (name, out))
+            code, out = self.run_cli('acknowledge', path, '--session', 'new')
+            self.assertEqual(out['outcome'], 'blocked', name)
 
     def test_verify_reports_new_and_fixed_failures_against_baseline(self):
         old, gone, new = 'tests/a.py::t_old', 'tests/a.py::t_gone', 'tests/b.py::C::t_new'
@@ -154,6 +167,38 @@ class ResumeCliTests(unittest.TestCase):
         self.assertIn('## Objective', out['body'])
         self.assertEqual(out['action'], 'Continue with next_step.')
         self.assertIn('status: resumed', Path(path).read_text())
+
+    def test_oversized_resume_output_leaves_the_checkpoint_open(self):
+        big = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\n' + 'x' * 19000 + '\n'
+        code, out = self.run_cli('save', '--session', 'old', '--request-id', 'r-big',
+                                 input=json.dumps(dict(topic='big', description='Big', body=big)))
+        self.assertEqual(code, 0, out)
+        path = out['path']
+        code, out = self.run_cli('resume', '--session', 'new')
+        self.assertEqual((code, out['outcome']), (1, 'needs-context'), out)
+        self.assertNotIn('status: resumed', Path(path).read_text())
+        self.assertNotIn('resumed_by', Path(path).read_text())
+
+    def test_stale_session_cannot_save_over_a_handoff_another_session_resumed(self):
+        path = self.save('work', session='a')
+        code, out = self.run_cli('resume', '--session', 'b')
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+        doc = dict(topic='work', description='Again', body=BODY)
+        code, out = self.run_cli('save', '--session', 'a', '--request-id', 'r-again', input=json.dumps(doc))
+        self.assertEqual((code, out['outcome']), (1, 'conflict'), out)
+        _, out = self.run_cli('lookup')
+        self.assertEqual(out['outcome'], 'none', out)
+        self.assertIn('status: resumed', Path(path).read_text())
+
+    def test_resumer_can_continue_the_lineage_and_keeps_the_transfer_record(self):
+        path = self.save('work', session='a')
+        self.run_cli('resume', '--session', 'b')
+        doc = dict(topic='work', description='Next', body=BODY, predecessor=path)
+        code, out = self.run_cli('save', '--session', 'b', '--request-id', 'r-next', input=json.dumps(doc))
+        self.assertEqual((code, out['outcome']), (0, 'saved'), out)
+        _, out = self.run_cli('history', '--topic', 'work')
+        statuses = {Path(i['path']).name: i.get('status') for i in out['items']}
+        self.assertEqual(statuses[Path(path).name], 'resumed', out)
 
     def test_resume_asks_to_choose_among_several_and_accepts_a_topic(self):
         self.save('alpha')

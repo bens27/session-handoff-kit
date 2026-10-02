@@ -191,6 +191,10 @@ def save(root, session, request_id, document):
                 return dict(outcome='conflict', action='Predecessor is not authoritative in this project. Refresh lookup and select the intended lineage.')
             locks.enter_context(ledger.locked(predecessor))
             ledger._check_owner(predecessor, session)
+            # Re-read under the lock: another session may have resumed it; only the resumer may continue it.
+            held = ledger._read_fm(predecessor)
+            if held.get('status') == 'resumed' and held.get('resumed_by') != session:
+                return dict(outcome='conflict', path=predecessor, action='Another session already resumed this handoff; do not supersede it. Run lookup, or use a distinct topic for independent work.')
             if not document.get('verify'):
                 document = dict(document, verify=record['fm'].get('verify', ''))
         if not document.get('verify'):
@@ -515,7 +519,8 @@ def verify(path, root, session, timeout=60):
             code = process.wait()
     outcome = 'verification-timeout' if timed_out else 'verified' if code == 0 else 'verification-failed'
     failures = failed_tests(log) if code and not timed_out and baseline else []
-    known = bool(failures) and set(failures) == set(baseline)
+    # A baseline match is trusted only when pytest finished its summary and reported no ERROR lines.
+    known = bool(failures) and set(failures) == set(baseline) and clean_pytest_summary(log)
     # Recheck content and ownership after the command; never bless a changed checkpoint.
     receipt = prepared_receipt(path, root, session)
     receipt['verified'] = (code == 0 or known) and not timed_out
@@ -545,6 +550,18 @@ def failed_tests(log, limit=200):
             if line.startswith('FAILED ') and len(found) < limit:
                 found.setdefault(line[7:].split(' - ', 1)[0].strip(), None)
     return [f for f in found if f]
+
+
+def clean_pytest_summary(log):
+    """True when the log ends a pytest run ('... in 1.2s') and has no 'ERROR <id>' summary lines."""
+    import re
+    done = errors = False
+    with open(log, 'rb') as f:
+        for raw in f:
+            line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
+            errors = errors or line.startswith('ERROR ')
+            done = done or bool(re.search(r'\bin \d+(\.\d+)?s\b', line) and re.search(r'\b(failed|passed|error)', line))
+    return done and not errors
 
 
 def section(body, title):
@@ -583,16 +600,19 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES):
         if failed:
             return failed
         verification = {k: checked[k] for k in ('outcome', 'baseline_failures') if k in checked}
+    body = prepared.get('body', '')
+    result = dict(outcome='resumed', path=path, body=body, references=prepared['references'],
+                  skills=[dict(name=s['name'], text=s['text']) for s in prepared['skills']],
+                  next_step=section(body, 'Next steps'), verification=verification,
+                  workspace=prepared['workspace'], optional_references=prepared['optional_references'],
+                  metrics=prepared['metrics'], action='Continue with next_step.')
+    # Size-check the final output before mutating state: an over-budget package must never be acknowledged.
+    if len(json.dumps(result, ensure_ascii=False).encode()) > max(1024, budget):
+        return dict(outcome='needs-context', stage='prepare', path=path,
+                    action='The resume output (body plus next_step) exceeds %d bytes; the handoff stays open. Shorten the checkpoint, or explicitly authorize a larger --budget-bytes.' % budget)
     # Acknowledge before any work so later edits by the resuming agent cannot block the transfer.
     failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
-    if failed:
-        return failed
-    body = prepared.get('body', '')
-    return dict(outcome='resumed', path=path, body=body, references=prepared['references'],
-                skills=[dict(name=s['name'], text=s['text']) for s in prepared['skills']],
-                next_step=section(body, 'Next steps'), verification=verification,
-                workspace=prepared['workspace'], optional_references=prepared['optional_references'],
-                metrics=prepared['metrics'], action='Continue with next_step.')
+    return failed or result
 
 
 def wait(root, target, status, timeout=600, interval=2):

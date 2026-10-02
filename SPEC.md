@@ -357,7 +357,9 @@ and exclusive atomic publication prevent partial Markdown files. Directory
 failures try the other supported location, then return `blocked` with recovery
 instructions. Neither CLI nor skill bypasses host permission denial.
 
-Lineage is explicit through `predecessor`; branch equality never supersedes work.
+Lineage is explicit through `predecessor`; branch equality never supersedes work. A resumed predecessor
+can be continued only by the session that resumed it (others get `conflict`), and a
+successor never rewrites a `resumed` record to `superseded`.
 The published successor is the committed replacement record, so a crash after
 publication cannot resurrect its predecessor. All state changes check owner
 under a sidecar lock. Omitted owners do not bypass another session's claim.
@@ -367,12 +369,15 @@ it claims a validated, bounded package and records a recoverable preparation
 receipt. Claims expire after two hours or can be released explicitly. Checkpoint
 and dependency fingerprints bind preparation to the material actually delivered.
 `verify PATH --session ID` preserves pipeline failure, stores complete output in
-a log, and returns a bounded excerpt. `acknowledge PATH --session ID` transfers
+a log, and returns a bounded excerpt. A `verify_baseline` match is accepted only when pytest printed its
+summary line and no `ERROR` lines; otherwise the failure is unknown and stays `verification-failed`. `acknowledge PATH --session ID` transfers
 only after preparation and any recorded verification pass. Failure/expiry/change
 requires retry or release; it never silently marks work resumed.
 `resume [TOPIC-OR-PATH] --session ID` chains selection, `prepare --execute`
 (auto skill catalog), verify when recorded and acknowledge, returning
-`resumed`, `choose`, `none`, or the failing `stage`. `--session` defaults to
+`resumed`, `choose`, `none`, or the failing `stage`. The final output is size-checked
+against `--budget-bytes` before `acknowledge`; over budget returns `needs-context`
+and the checkpoint stays open. `--session` defaults to
 `$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
 request ID defaults to a hash of the draft. Save resolves the project from the
 predecessor (an explicit root that disagrees is a `conflict` naming both),
