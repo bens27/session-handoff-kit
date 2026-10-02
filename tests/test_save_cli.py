@@ -98,12 +98,14 @@ class SaveCliTests(unittest.TestCase):
         code, out = self.save('--attach', self.root / 'missing.txt')
         self.assertEqual((code, out['outcome']), (1, 'invalid'))
 
-    # 16: verify defaults to project config, then predecessor
-    def test_verify_defaults_from_project_config_then_predecessor(self):
-        (self.root / '.context-watch.json').write_text(json.dumps({'verify': 'make check'}))
+    # 16: verify defaults to user config (never the repo's), then predecessor
+    def test_verify_defaults_from_user_config_then_predecessor(self):
+        config = Path(self.tmp.name) / '.context-watch'
+        config.mkdir(exist_ok=True)
+        (config / 'thresholds.json').write_text(json.dumps({'verify': 'make check'}))
         _, first = self.save()
         self.assertEqual(self.frontmatter(first['path'])['verify'], 'make check')
-        (self.root / '.context-watch.json').unlink()
+        (config / 'thresholds.json').unlink()
         _, second = self.save(body=BODY + 'Later.\n')
         self.assertEqual(self.frontmatter(second['path'])['verify'], 'make check')
 

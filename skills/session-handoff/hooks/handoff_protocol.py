@@ -81,11 +81,12 @@ def _truthy(value):
     return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def project_setting(root, key, kind):
+def project_setting(root, key, kind, user_only=False):
     """A typed key from ~/.context-watch/thresholds.json overridden by <root>/.context-watch.json."""
     value = None
-    for path in (os.path.join(os.path.expanduser('~'), '.context-watch', 'thresholds.json'),
-                 os.path.join(root, '.context-watch.json')):
+    paths = (os.path.join(os.path.expanduser('~'), '.context-watch', 'thresholds.json'),
+             os.path.join(root, '.context-watch.json'))
+    for path in paths[:1] if user_only else paths:
         try:
             with open(path, encoding='utf-8') as f:
                 data = json.load(f)
@@ -173,7 +174,7 @@ def save(root, session, request_id, document):
                 # Reconstruct expected content before repairing an interrupted receipt.
                 if record['text'].split('\n---\n', 1)[-1] != body:
                     return dict(outcome='conflict', action='Saved body changed; preserve it and use a new request ID after reconciliation.')
-                write_json(record['path'] + '.published', dict(checkpoint_id=identity, fingerprint=snapshot(record['path'])))
+                write_json(record['path'] + '.published', ledger.seal(identity, snapshot(record['path'])))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity, action='Checkpoint is published and discoverable; stop when handing off.')
         predecessor = document.get('predecessor')
         current = ledger.resolve(topic, root)['authoritative']
@@ -195,10 +196,12 @@ def save(root, session, request_id, document):
             held = ledger._read_fm(predecessor)
             if held.get('status') == 'resumed' and held.get('resumed_by') != session:
                 return dict(outcome='conflict', path=predecessor, action='Another session already resumed this handoff; do not supersede it. Run lookup, or use a distinct topic for independent work.')
-            if not document.get('verify'):
+            # Only a command this machine saved is inherited; an untrusted predecessor's would be laundered into a trusted successor.
+            if not document.get('verify') and ledger.trusted(record['path'], record['text'], record['fm']):
                 document = dict(document, verify=record['fm'].get('verify', ''))
         if not document.get('verify'):
-            document = dict(document, verify=project_setting(root, 'verify', str) or '')
+            # User-level config only: a repo's .context-watch.json must not choose a command this machine will trust.
+            document = dict(document, verify=project_setting(root, 'verify', str, user_only=True) or '')
         note = ledger.read_session_note(root, session=session)
         now = datetime.now()
         fields = dict(topic=topic, created=now.isoformat(timespec='microseconds'), status='open',
@@ -230,7 +233,7 @@ def save(root, session, request_id, document):
             path = os.path.join(directory, filename)
             try:
                 publish(path, text)
-                write_json(path + '.published', dict(checkpoint_id=identity, fingerprint=ledger.content_fingerprint(text)))
+                write_json(path + '.published', ledger.seal(identity, ledger.content_fingerprint(text)))
                 # The successor's predecessor field is the committed lineage record.
                 # Old-file cleanup is optional and never makes a saved successor vanish.
                 return dict(outcome='saved', path=path, checkpoint_id=identity, transition=transition(root),
@@ -307,6 +310,12 @@ def reference(root, spec):
     return path + '#L%d-L%d' % (first, last), b''.join(parts).decode('utf-8')
 
 
+def _inside(real_root, spec, root):
+    name = re.sub(r'#L[0-9]+-L[0-9]+$', '', spec)
+    target = os.path.realpath(os.path.join(root, os.path.expanduser(name)))
+    return target == real_root or target.startswith(real_root + os.sep)
+
+
 def skill_roots():
     """Installed skill roots in precedence order; the first root providing a name wins."""
     roots = [r for r in os.environ.get('HANDOFF_SKILL_ROOTS', '').split(os.pathsep) if r]
@@ -360,7 +369,13 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         required = ledger._split_csv(fm.get('references', ''))
         if len(required) > ledger.MAX_REFS:
             raise ValueError('Too many required references; consolidate constraints and make background optional.')
+        own = ledger.trusted(path, text, fm)
+        real_root = os.path.realpath(root)
+        withheld = []
         for spec in required:
+            if not own and not _inside(real_root, spec, root):
+                withheld.append(spec)  # untrusted checkpoints cannot pull files from outside the project
+                continue
             canonical, content = reference(root, spec)
             if canonical in seen:
                 continue
@@ -414,8 +429,12 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                       action=('Run verify if requested, reconcile reported workspace changes, then acknowledge before executing next steps.' if execute else
                               'Report the objective and next step. Retrieval is complete; do not claim, verify, load execution skills or execute next steps without authorization.'),
                       verify_required=bool(fm.get('verify')) if execute else False,
+                      trusted=own,
                       workspace=ledger.claim_report(path) if execute else [],
                       optional_references=ledger._split_csv(fm.get('optional_references', ''))[:8])
+        if withheld:
+            result['withheld_references'] = withheld
+            result['action'] += ' References outside the project root were not loaded (untrusted checkpoint): ' + ', '.join(withheld[:8])
         import uuid
         delivery_token = uuid.uuid4().hex
         result['delivery_receipt'] = delivery_token
@@ -494,7 +513,12 @@ def acknowledge(path, root, session):
     return dict(outcome='resumed', path=path, action='Transfer acknowledged. Continue the authorized next step.')
 
 
-def verify(path, root, session, timeout=60):
+def needs_confirmation(path, command):
+    return dict(outcome='needs-confirmation', stage='verify', path=path, verify=command[:500],
+                action='This checkpoint was not saved by this machine, so its verify command was not run. Show the user the command and ask whether to run it. If they approve, rerun with --confirm-verify. To read it without running anything: prepare <path> (retrieval).')
+
+
+def verify(path, root, session, timeout=60, confirm=False):
     import subprocess
     import signal
     root = ledger.project_root(root)
@@ -503,6 +527,8 @@ def verify(path, root, session, timeout=60):
     command, baseline = fm.get('verify'), ledger._split_csv(fm.get('verify_baseline', ''))
     if not command:
         return dict(outcome='verified', exit_code=0, action='No recorded verification command; no speculative suite is required.')
+    if not confirm and not ledger.trusted(path):
+        return needs_confirmation(path, command)
     log_dir = os.path.join(os.path.dirname(path), '.verification')
     os.makedirs(log_dir, exist_ok=True)
     fd, log = tempfile.mkstemp(prefix='verify-', suffix='.log', dir=log_dir)
@@ -570,7 +596,7 @@ def section(body, title):
     return match[1].strip() if match else ''
 
 
-def resume(root, session, target=None, budget=PACKAGE_BYTES):
+def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
     root = ledger.project_root(root)
     if target is None:
@@ -584,6 +610,16 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES):
                                     for h in found['items']])
     elif not ledger.resolve(target, root)['authoritative']:
         return dict(outcome='none', action='No handoff matches %r. Run resume without an argument to list open handoffs.' % target[:200])
+    if not confirm_verify:
+        # Untrusted verify commands are refused before any claim, so nothing is left to release.
+        try:
+            resolved = ledger.resolve(target, root)
+            if resolved['chain'] and resolved['chain'][-1]['status'] == 'open':
+                command = ledger._read_fm(resolved['authoritative']).get('verify')
+                if command and not ledger.trusted(resolved['authoritative']):
+                    return needs_confirmation(resolved['authoritative'], command)
+        except OSError:
+            pass  # prepare reports unreadable state
     def stage(name, run, success):
         try:
             result = run()
@@ -596,7 +632,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES):
     path = prepared['path']
     verification = dict(outcome='not-required')
     if prepared['verify_required']:
-        failed, checked = stage('verify', lambda: verify(path, root, session), 'verified')
+        failed, checked = stage('verify', lambda: verify(path, root, session, confirm=confirm_verify), 'verified')
         if failed:
             return failed
         verification = {k: checked[k] for k in ('outcome', 'baseline_failures') if k in checked}
@@ -836,11 +872,13 @@ def cli(argv):
     verify_p.add_argument('--root', default='.')
     verify_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     verify_p.add_argument('--timeout', type=float, default=60)
+    verify_p.add_argument('--confirm-verify', action='store_true', help='The user approved running this untrusted checkpoint\'s verify command')
     resume_p = sub.add_parser('resume', description='Select, prepare, verify and acknowledge a handoff in one call; the result says what to do next.')
     resume_p.add_argument('target', nargs='?', help='Topic or path; default: the handoff lookup selects')
     resume_p.add_argument('--root', default='.')
     resume_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     resume_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES)
+    resume_p.add_argument('--confirm-verify', action='store_true', help='The user approved running the verify command of a checkpoint this machine did not save')
     wait_p = sub.add_parser('wait', description='Poll until the newest handoff for a topic or path is saved/open or resumed.')
     wait_p.add_argument('target', help='Topic or path')
     wait_p.add_argument('--status', required=True, choices=('saved', 'open', 'resumed'))
@@ -888,7 +926,7 @@ def cli(argv):
         if a.command == 'history':
             result = history(a.root, a.topic, a.offset, a.limit)
         elif a.command == 'verify':
-            result = verify(a.path, a.root, a.session, a.timeout)
+            result = verify(a.path, a.root, a.session, a.timeout, a.confirm_verify)
         elif a.command == 'prepare':
             catalog = json.loads(read_bounded(a.catalog)) if a.catalog else None
             result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
@@ -897,7 +935,7 @@ def cli(argv):
         elif a.command == 'wait':
             result = wait(a.root, a.target, a.status, a.timeout, a.interval)
         elif a.command == 'resume':
-            result = resume(a.root, a.session, a.target, a.budget_bytes)
+            result = resume(a.root, a.session, a.target, a.budget_bytes, a.confirm_verify)
         elif a.command == 'save':
             request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
             result = save(a.root, a.session, request, draft)
@@ -916,7 +954,7 @@ def cli(argv):
         result = dict(outcome='needs-context', action='Response metadata exceeds the output budget. Use a narrower topic or history page; inspect and repair oversized metadata locally before preparing.')
         output = json.dumps(result)
     print(output)
-    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'verification-failed', 'verification-timeout', 'timeout') else 0
+    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'verification-failed', 'verification-timeout', 'timeout', 'needs-confirmation') else 0
 
 
 if __name__ == '__main__':

@@ -279,6 +279,67 @@ def publication_valid(path, text, fm):
         return False
 
 
+def _receipt_key(create=False):
+    """Per-user secret outside any repo (~/.context-watch/receipt.key, 0600), or b''.
+    A cloned repo cannot read it, so it cannot forge a checkpoint receipt."""
+    path = os.path.join(os.path.expanduser("~"), ".context-watch", "receipt.key")
+    for attempt in (0, 1):
+        try:
+            with open(path, "rb") as f:
+                key = f.read(256)
+            if len(key) >= 32:
+                return key
+        except OSError:
+            pass
+        if not create or attempt:
+            break
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(os.urandom(32))
+        except FileExistsError:
+            pass  # a concurrent first use won; read its key
+        except OSError:
+            break
+    return b""
+
+
+def _mac(key, checkpoint_id, fingerprint):
+    import hmac
+    import hashlib
+    return hmac.new(key, ("%s\0%s" % (checkpoint_id, fingerprint)).encode(), hashlib.sha256).hexdigest()
+
+
+def seal(checkpoint_id, fingerprint):
+    """The publication receipt this machine writes: id, content fingerprint, HMAC under the local key."""
+    key = _receipt_key(create=True)
+    return dict(checkpoint_id=checkpoint_id, fingerprint=fingerprint,
+                mac=_mac(key, checkpoint_id, fingerprint) if key else "")
+
+
+def trusted(path, text=None, fm=None):
+    """True only when this machine's own save published exactly this content.
+    Legacy, hand-written, cloned or edited checkpoints are untrusted: their
+    verify command and out-of-project references need explicit confirmation."""
+    import hmac
+    try:
+        if text is None:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read(64_001)
+        fm = fm if fm is not None else parse_front_matter(text)
+        with open(path + ".published") as f:
+            receipt = json.loads(f.read(4096))
+        key = _receipt_key()
+        mac = receipt.get("mac")
+        return bool(key and isinstance(mac, str) and fm.get("checkpoint_id")
+                    and receipt.get("checkpoint_id") == fm["checkpoint_id"]
+                    and receipt.get("fingerprint") == content_fingerprint(text)
+                    and hmac.compare_digest(mac, _mac(key, fm["checkpoint_id"], receipt["fingerprint"])))
+    except (OSError, ValueError, AttributeError, StopIteration):
+        return False
+
+
 def _records(root, errors=None):
     """Every handoff belonging to root: {path, fm, text, mtime, topic, ended}.
     Fallback-dir files that name a different `project:` belong to another

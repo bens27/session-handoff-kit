@@ -243,14 +243,14 @@ class ProtocolTests(unittest.TestCase):
         p = self.put(fields="verify: printf 'failure'; false | tail -1")
         self.cli('prepare', p, '--session', 'one', '--execute')
         self.assertNotEqual(self.cli('acknowledge', p, '--session', 'one', ok=False).returncode, 0)
-        result = json.loads(self.cli('verify', p, '--session', 'one', ok=False).stdout)
+        result = json.loads(self.cli('verify', p, '--session', 'one', '--confirm-verify', ok=False).stdout)
         self.assertEqual(result['outcome'], 'verification-failed')
         self.assertNotEqual(result['exit_code'], 0)
         self.assertNotEqual(self.cli('acknowledge', p, '--session', 'one', ok=False).returncode, 0)
         self.cli('release', p, '--owner', 'one')
         p = self.put(fields="verify: python3 -c \"print('x'*100000)\"")
         self.cli('prepare', p, '--session', 'one', '--execute')
-        response = self.cli('verify', p, '--session', 'one').stdout
+        response = self.cli('verify', p, '--session', 'one', '--confirm-verify').stdout
         self.assertLess(len(response), 4000)
         self.assertEqual(json.loads(response)['outcome'], 'verified')
         self.assertGreater(Path(json.loads(response)['log']).stat().st_size, 100000)
@@ -266,7 +266,7 @@ class ProtocolTests(unittest.TestCase):
     def test_verification_timeout_keeps_handoff_recoverable(self):
         p = self.put(fields='verify: sleep 10')
         self.cli('prepare', p, '--session', 'one', '--execute')
-        result = json.loads(self.cli('verify', p, '--session', 'one', '--timeout', '0.1', ok=False).stdout)
+        result = json.loads(self.cli('verify', p, '--session', 'one', '--timeout', '0.1', '--confirm-verify', ok=False).stdout)
         self.assertEqual(result['outcome'], 'verification-timeout')
         self.cli('release', p, '--owner', 'one')
         self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'available')
