@@ -168,16 +168,40 @@ class ResumeCliTests(unittest.TestCase):
         self.assertEqual(out['action'], 'Continue with next_step.')
         self.assertIn('status: resumed', Path(path).read_text())
 
-    def test_oversized_resume_output_leaves_the_checkpoint_open(self):
+    def test_oversized_resume_output_is_delivered_and_acknowledged(self):
         big = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\n' + 'x' * 19000 + '\n'
         code, out = self.run_cli('save', '--session', 'old', '--request-id', 'r-big',
                                  input=json.dumps(dict(topic='big', description='Big', body=big)))
         self.assertEqual(code, 0, out)
         path = out['path']
         code, out = self.run_cli('resume', '--session', 'new')
-        self.assertEqual((code, out['outcome']), (1, 'needs-context'), out)
-        self.assertNotIn('status: resumed', Path(path).read_text())
-        self.assertNotIn('resumed_by', Path(path).read_text())
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+        self.assertEqual(out['body'], big)
+        self.assertEqual(out['next_step'], 'x' * 19000)
+        self.assertIn('status: resumed', Path(path).read_text())
+
+    def test_large_dependencies_and_small_budget_are_advisory(self):
+        content = 'required material ' * 20000
+        refs = []
+        for i in range(9):
+            name = 'notes-%d.txt' % i
+            (self.root / name).write_text(content)
+            refs.append(name + '#L1-L1')
+        self.skill(Path(self.tmp.name) / '.agents/skills', 'large-skill', content)
+        skills = ['large-skill']
+        for i in range(16):
+            name = 'required-skill-%d' % i
+            self.skill(Path(self.tmp.name) / '.agents/skills', name, 'Required instruction.')
+            skills.append(name)
+        path = self.save(references=refs, skills=skills)
+        code, out = self.run_cli('resume', path, '--session', 'new', '--budget-bytes', '1024')
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+        self.assertEqual(len(out['references']), 9)
+        self.assertTrue(all(r['text'] == content for r in out['references']))
+        self.assertEqual(out['skills'][0]['text'], content)
+        self.assertEqual(len(out['skills']), 17)
+        self.assertTrue(out['warnings'])
+        self.assertEqual(self.run_cli('lookup')[1]['outcome'], 'none')
 
     def test_resume_within_budget_before_project_field_is_still_delivered(self):
         # resume() sizes its output without the CLI's added "project" key; the CLI must not then withhold it.

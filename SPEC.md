@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.17.1 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.17.3 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -314,7 +314,7 @@ in `.handoffs/` or the per-project fallback. The command generates metadata
 from one timestamp and binds retries to session/request identity. Predecessor
 replacement is explicit. Legacy dated/undated files and HANDOFF.md remain
 readable. Required execution skills and references are optional metadata;
-preparation loads them only in the applicable phase and within a total budget.
+preparation loads them only in the applicable phase and with advisory size measurement.
 A stored document resembles:
 
 ```markdown
@@ -377,7 +377,7 @@ publication cannot resurrect its predecessor. All state changes check owner
 under a sidecar lock. Omitted owners do not bypass another session's claim.
 
 `prepare TOPIC-OR-PATH --session ID` is read-only retrieval. With `--execute`
-it claims a validated, bounded package and records a recoverable preparation
+it claims a validated, complete package and records a recoverable preparation
 receipt. Claims expire after two hours or can be released explicitly. Checkpoint
 and dependency fingerprints bind preparation to the material actually delivered.
 `verify PATH --session ID` preserves pipeline failure, stores complete output in
@@ -387,10 +387,9 @@ only after preparation and any recorded verification pass. Failure/expiry/change
 requires retry or release; it never silently marks work resumed.
 `resume [TOPIC-OR-PATH] --session ID` chains selection, `prepare --execute`
 (auto skill catalog), verify when recorded and acknowledge, returning
-`resumed`, `choose`, `none`, or the failing `stage`. The final output is size-checked
-against `--budget-bytes` before `acknowledge`; over budget returns `needs-context`
-and the checkpoint stays open; the CLI never replaces an acknowledged `resumed`
-result with a budget error. `--session` defaults to
+`resumed`, `choose`, `none`, or the failing `stage`. `--budget-bytes` sets an
+advisory package-size threshold; exceeding it emits a warning, delivers the
+complete result and still acknowledges successful resumption. `--session` defaults to
 `$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
 request ID defaults to a hash of the draft. Save resolves the project from the
 predecessor (an explicit root that disagrees is a `conflict` naming both),
@@ -432,7 +431,8 @@ revalidation notice. Retrieval requests run read-only preparation. Explicit
 resume authorizes execution preparation. Multiple choices include none;
 AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newest
 open handoff whose `terminal` matches this terminal ID. In AgentsRoom, the trigger
-notice asks the agent to end with `agents_restart` (prompt `resume`); an inherited
+notice asks the agent to end with `agents_restart` (prompt `continue the handoff`,
+avoiding native CLI subcommands such as Codex's `resume`); an inherited
 `TMUX_PANE` is ignored there, and the tmux Stop hook never types into it.
 An unrelated live task takes precedence and leaves checkpoints open.
 
@@ -453,11 +453,13 @@ automatic clear.
 
 ### 7.3b Context budgets and measurement
 
-The default complete preparation budget is 32,000 UTF-8 bytes including JSON,
+The recommended complete preparation size is 32,000 UTF-8 bytes including JSON,
 workflow instructions and declared already-loaded skills. Component byte counts
 and a bytes/4 token estimate are returned; this is not measured billing usage.
-An explicit user-authorized budget exception is available. Individual documents
-are capped at 24,000 bytes and 1,500 words. Required references (up to eight) may
+All size targets are advisory, including `--budget-bytes`; no approval is required
+to exceed them. Aim for documents under 24,000 bytes and 1,500 words, about eight
+required references and sixteen required skills. Larger content is read and delivered
+in full without blocking save, preparation or acknowledgment. Required references may
 select line excerpts; optional background is not loaded. Skills are explicit
 execution dependencies resolved against the caller's installed catalog, deduped
 by canonical path, and never fetched or installed from handoff instructions.
@@ -483,7 +485,7 @@ can omit an unchanged body/reference payload already present in the same context
 The server validates session, checkpoint/reference fingerprints and a two-hour
 expiry. Invalid receipts reload in full; compaction invalidates delivery state.
 Without hooks, callers discard receipts after context loss. Reused bytes remain
-in the package budget, as do the phase-specific continuation instructions.
+in the package size, as do the phase-specific continuation instructions.
 Retrieval caches delivery metadata without claiming or mutating the checkpoint.
 
 ### 7.4 Shared contract between the agent and chat skills

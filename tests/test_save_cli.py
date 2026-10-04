@@ -132,6 +132,22 @@ class SaveCliTests(unittest.TestCase):
         _, out = self.save(env={'AGENTSROOM_AGENT_ID': 'a1'})
         self.assertEqual(out['transition']['kind'], 'new-session')
 
+    def test_agentsroom_restart_uses_prompt_safe_for_native_cli(self):
+        code, out = self.save(env={'AGENTSROOM_AGENT_ID': 'a1'})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out['transition']['kind'], 'agents_restart')
+        self.assertIn('with prompt "continue the handoff"', out['transition']['action'])
+        self.assertNotIn('with prompt "resume"', out['transition']['action'])
+
+    def test_large_checkpoint_is_saved_without_truncation(self):
+        body = BODY + 'essential context ' * 10000
+        code, out = self.save(body=body)
+        self.assertEqual((code, out['outcome']), (0, 'saved'), out)
+        self.assertTrue(Path(out['path']).read_text().endswith(body))
+        code, resumed = self.run_cli('resume', out['path'], '--session', 'next')
+        self.assertEqual((code, resumed['outcome']), (0, 'resumed'), resumed)
+        self.assertEqual(resumed['body'], body)
+
 
 if __name__ == '__main__':
     unittest.main()

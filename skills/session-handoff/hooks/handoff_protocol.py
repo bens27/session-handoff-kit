@@ -1,4 +1,4 @@
-"""Bounded public handoff workflow. Stdlib only; legacy ledger is the file adapter."""
+"""Public handoff workflow with advisory size targets. Stdlib only; legacy ledger is the file adapter."""
 import argparse
 import json
 import os
@@ -10,6 +10,9 @@ import tempfile
 from datetime import datetime
 
 import handoff_ledger as ledger
+
+# A native CLI can parse a bare "resume" positional as its own subcommand.
+AGENTSROOM_RESTART_PROMPT = 'continue the handoff'
 
 
 def terminal_id():
@@ -81,7 +84,7 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
     return result
 
 
-MAX_DOCUMENT_BYTES = 24_000
+RECOMMENDED_DOCUMENT_BYTES = 24_000
 
 
 def _truthy(value):
@@ -114,8 +117,8 @@ def transition(root):
         setting = project_setting(root, 'auto', bool)
         auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
-        return dict(kind='agents_restart', action='End this turn by calling AgentsRoom agents_restart for agent %s with prompt "resume".'
-                    % os.environ['AGENTSROOM_AGENT_ID'].strip())
+        return dict(kind='agents_restart', action='End this turn by calling AgentsRoom agents_restart for agent %s with prompt "%s".'
+                    % (os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
     if auto and os.environ.get('TMUX_PANE'):
@@ -130,7 +133,7 @@ def transition(root):
 def predecessor_project(predecessor):
     """The project recorded in a predecessor checkpoint, or ''."""
     try:
-        text = read_bounded(os.path.expanduser(predecessor))
+        text = read_text(os.path.expanduser(predecessor))
     except (OSError, ValueError):
         return ''
     return ledger.parse_front_matter(text).get('project', '')
@@ -191,8 +194,8 @@ def save(root, session, request_id, document):
     if not isinstance(body, str):
         return dict(outcome='invalid', action='Supply a Markdown body.')
     problems = ledger._problems('---\nstatus: open\n---\n' + body, {'status':'open'})
-    if not body.strip() or problems or len(body.encode()) > MAX_DOCUMENT_BYTES:
-        return dict(outcome='invalid', problems=problems[:8], action='Keep the previous checkpoint and draft. Preserve constraints, current state and next steps in a smaller core; put background in optional references and retry.')
+    if not body.strip() or problems:
+        return dict(outcome='invalid', problems=problems[:8], action='Keep the previous checkpoint and draft. Repair the named document problems and retry.')
     identity = hashlib.sha256((os.path.realpath(root) + '\0' + session + '\0' + request_id).encode()).hexdigest()
     fingerprint = hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
     from contextlib import ExitStack
@@ -264,8 +267,6 @@ def save(root, session, request_id, document):
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
         text = '---\n' + ''.join('%s: %s\n' % pair for pair in fields.items()) + '---\n' + body
-        if len(text.encode()) > MAX_DOCUMENT_BYTES:
-            return dict(outcome='invalid', action='Checkpoint including metadata exceeds 24000 bytes; preserve the draft and shorten the mandatory core.')
         filename = now.strftime('%Y%m%d-%H%M%S-') + topic + '-' + identity[:12] + '.md'
         destinations = list(dict.fromkeys([ledger.save_path(root), ledger._fallback_dir(root), os.path.join(root, '.handoffs')]))
         failures = []
@@ -276,7 +277,10 @@ def save(root, session, request_id, document):
                 write_json(path + '.published', ledger.seal(identity, ledger.content_fingerprint(text)))
                 # The successor's predecessor field is the committed lineage record.
                 # Old-file cleanup is optional and never makes a saved successor vanish.
-                return dict(outcome='saved', path=path, checkpoint_id=identity, transition=transition(root),
+                warnings = []
+                if len(body.split()) > ledger.RECOMMENDED_WORDS or len(text.encode()) > RECOMMENDED_DOCUMENT_BYTES:
+                    warnings.append('Checkpoint exceeds the recommended 1500 words / 24000 bytes; keep essential context and consider optional background references.')
+                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=transition(root),
                             action='Checkpoint is published and discoverable; follow transition.action, then stop.')
             except OSError as exc:
                 if os.path.exists(path):
@@ -288,16 +292,13 @@ def save(root, session, request_id, document):
 PACKAGE_BYTES = 32_000
 
 
-def read_bounded(path, limit=MAX_DOCUMENT_BYTES):
+def read_text(path):
     with open(path, 'rb') as f:
-        raw = f.read(limit + 1)
-    if len(raw) > limit:
-        raise ValueError('Required file exceeds the context budget: ' + str(path))
-    return raw.decode('utf-8')
+        return f.read().decode('utf-8')
 
 
 def snapshot(path):
-    return ledger.content_fingerprint(read_bounded(path))
+    return ledger.content_fingerprint(read_text(path))
 
 
 def receipt_path(root, session):
@@ -330,23 +331,18 @@ def reference(root, spec):
     name = match[1] if match else spec
     path = os.path.realpath(os.path.join(root, os.path.expanduser(name)))
     if not match:
-        return path, read_bounded(path, PACKAGE_BYTES)
+        return path, read_text(path)
     first, last = int(match[2]), int(match[3])
-    if last < first or last - first > 2000 or last > 100000:
+    if last < first:
         raise ValueError('Invalid reference line range: ' + spec)
-    parts, size, count = [], 0, 0
+    parts = []
     with open(path, 'rb') as f:
         for count in range(1, last + 1):
-            line = f.readline(PACKAGE_BYTES + 1)
+            line = f.readline()
             if not line:
                 raise ValueError('Reference line range extends past EOF: ' + spec)
-            if len(line) > PACKAGE_BYTES:
-                raise ValueError('Reference line exceeds the package budget: ' + spec)
             if count >= first:
                 parts.append(line)
-                size += len(line)
-                if size > PACKAGE_BYTES:
-                    raise ValueError('Reference excerpt exceeds package budget: ' + spec)
     return path + '#L%d-L%d' % (first, last), b''.join(parts).decode('utf-8')
 
 
@@ -400,7 +396,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         raise ValueError('Installed skill paths must be strings.')
     try:
         fingerprint = snapshot(path)
-        text = read_bounded(path)
+        text = read_text(path)
         fm = ledger.parse_front_matter(text)
         problems = ledger._problems(text, fm)
         if problems or not fm:
@@ -409,8 +405,6 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         body = text.split('\n---\n', 1)[-1]
         refs, skills, seen, dependencies = [], [], set(), {}
         required = ledger._split_csv(fm.get('references', ''))
-        if len(required) > ledger.MAX_REFS:
-            raise ValueError('Too many required references; consolidate constraints and make background optional.')
         own = ledger.trusted(path, text, fm)
         real_root = os.path.realpath(root)
         withheld = []
@@ -431,7 +425,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         reused_bytes = 0
         if reuse_receipt:
             try:
-                delivered = json.loads(read_bounded(delivery_file))
+                delivered = json.loads(read_text(delivery_file))
                 if (delivered['token'] == reuse_receipt and delivered['path'] == path
                         and delivered['fingerprint'] == fingerprint
                         and delivered['references'] == reference_fingerprints
@@ -440,17 +434,15 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             except (OSError, ValueError, KeyError, TypeError):
                 pass  # Missing, expired or changed delivery safely reloads in full.
         loaded = {os.path.realpath(p) for p in catalog.get('loaded', [])}
-        # This workflow's loaded instruction file is part of the resume context budget.
+        # Include this workflow's loaded instructions in the context-size estimate.
         policy_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'SKILL.md'))
-        policy_bytes = len(read_bounded(policy_path, PACKAGE_BYTES).encode())
+        policy_bytes = len(read_text(policy_path).encode())
         if execute:
-            policy_bytes += len(read_bounded(os.path.join(os.path.dirname(policy_path), 'continuation.md'), PACKAGE_BYTES).encode())
+            policy_bytes += len(read_text(os.path.join(os.path.dirname(policy_path), 'continuation.md')).encode())
         loaded.add(policy_path)
         omitted_skills = 0
         if execute:
             names = ledger._split_csv(fm.get('skills', ''))
-            if len(names) > 16:
-                raise ValueError('Too many required skills; declare only execution dependencies.')
             for name in names:
                 source = catalog.get('skills', {}).get(name)
                 if not source:
@@ -460,7 +452,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                     omitted_skills += 1
                     continue
                 seen.add(canonical)
-                content = read_bounded(canonical, PACKAGE_BYTES)
+                content = read_text(canonical)
                 dependencies[canonical] = hashlib.sha256(content.encode()).hexdigest()
                 if canonical in loaded:
                     omitted_skills += 1
@@ -485,7 +477,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             result['references'] = []
             result['reused_from'] = reuse_receipt
         # JSON overhead counts too. Loaded skills still consume context even though not re-emitted.
-        existing_bytes = sum(len(read_bounded(p, PACKAGE_BYTES).encode()) for p in (loaded & seen) - {policy_path})
+        existing_bytes = sum(len(read_text(p).encode()) for p in (loaded & seen) - {policy_path})
         result['metrics'] = dict(body_bytes=len(body.encode()), reference_bytes=sum(len(r['text'].encode()) for r in refs),
                                  skill_bytes=sum(len(s['text'].encode()) for s in skills),
                                  already_loaded_bytes=existing_bytes, reused_bytes=reused_bytes, deduplicated_skills=omitted_skills,
@@ -494,7 +486,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         size = len(json.dumps(result, ensure_ascii=False).encode()) + existing_bytes + reused_bytes + policy_bytes + 128
         result['metrics'].update(package_bytes=size, estimated_tokens=(size + 3) // 4)
         if size > budget:
-            raise ValueError('Complete resume package exceeds %d bytes; use required excerpts and optional background or an explicitly approved larger --budget-bytes.' % budget)
+            result['warnings'] = ['Complete resume package exceeds the recommended %d bytes; consider a smaller core or narrower references.' % budget]
         if execute:
             with ledger.locked(path):
                 ledger._check_owner(path, session)
@@ -516,7 +508,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             result.pop('delivery_receipt', None)
         return result
     except (OSError, ValueError) as exc:
-        return dict(outcome='needs-context', action=str(exc)[:700] + ' Preserve the checkpoint. Resolve the named dependency or explicitly authorize a budget exception; do not acknowledge or search unrelated history.')
+        return dict(outcome='needs-context', action=str(exc)[:700] + ' Preserve the checkpoint. Resolve the named dependency; do not acknowledge or search unrelated history.')
 
 
 def prepared_receipt(path, root, session):
@@ -684,10 +676,12 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                   next_step=section(body, 'Next steps'), verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
                   metrics=prepared['metrics'], action='Continue with next_step.')
-    # Size-check the final output before mutating state: an over-budget package must never be acknowledged.
-    if len(json.dumps(result, ensure_ascii=False).encode()) > max(1024, budget):
-        return dict(outcome='needs-context', stage='prepare', path=path,
-                    action='The resume output (body plus next_step) exceeds %d bytes; the handoff stays open. Shorten the checkpoint, or explicitly authorize a larger --budget-bytes.' % budget)
+    if 'warnings' in prepared:
+        result['warnings'] = prepared['warnings']
+    output_bytes = len(json.dumps(result, ensure_ascii=False).encode())
+    if output_bytes > budget:
+        result.setdefault('warnings', []).append(
+            'Resume output exceeds the recommended %d bytes; all required content is included.' % budget)
     # Acknowledge before any work so later edits by the resuming agent cannot block the transfer.
     failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
     return failed or result
@@ -772,7 +766,7 @@ def history(root, topic=None, offset=0, limit=10):
 def protocol_version():
     import re
     path = os.path.join(os.path.dirname(__file__), '..', 'SKILL.md')
-    match = re.search(r'version:\s*"([^"\n]+)"', read_bounded(path))
+    match = re.search(r'version:\s*"([^"\n]+)"', read_text(path))
     return match[1] if match else 'unknown'
 
 
@@ -843,11 +837,9 @@ def save_draft(a):
     if a.input or not (a.topic or a.body):
         if a.input:
             with open(a.input, encoding='utf-8') as f:
-                raw = f.read(MAX_DOCUMENT_BYTES * 4 + 1)
+                raw = f.read()
         else:
-            raw = sys.stdin.read(MAX_DOCUMENT_BYTES * 4 + 1)
-        if len(raw) > MAX_DOCUMENT_BYTES * 4:
-            raise ValueError('Draft exceeds input limit; keep it and reduce the mandatory core.')
+            raw = sys.stdin.read()
         draft = json.loads(raw)
     else:
         draft = {}
@@ -858,7 +850,7 @@ def save_draft(a):
     if a.description:
         draft['description'] = a.description
     if a.body:
-        draft['body'] = read_bounded(a.body)
+        draft['body'] = read_text(a.body)
     if a.attach:
         # path#Lstart-Lend keeps its range so prepare delivers only that excerpt
         attached = [re.fullmatch(r'(.+?)(#L[1-9][0-9]*-L[1-9][0-9]*)?', p).groups('') for p in a.attach]
@@ -904,7 +896,7 @@ def cli(argv):
     prepare_p.add_argument('--execute', action='store_true')
     prepare_p.add_argument('--reuse-receipt', help='Receipt from content still in this session context; omit after context loss')
     prepare_p.add_argument('--catalog', help='JSON installed skills mapping plus already-loaded canonical paths')
-    prepare_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES)
+    prepare_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES, help='Recommended package size in bytes; advisory only')
     ack_p = sub.add_parser('acknowledge')
     ack_p.add_argument('path')
     ack_p.add_argument('--root', default='.')
@@ -919,7 +911,7 @@ def cli(argv):
     resume_p.add_argument('target', nargs='?', help='Topic or path; default: the handoff lookup selects')
     resume_p.add_argument('--root', default='.')
     resume_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
-    resume_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES)
+    resume_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES, help='Recommended package size in bytes; advisory only')
     resume_p.add_argument('--confirm-verify', action='store_true', help='The user approved running the verify command of a checkpoint this machine did not save')
     wait_p = sub.add_parser('wait', description='Poll until the newest handoff for a topic or path is saved/open or resumed.')
     wait_p.add_argument('target', help='Topic or path')
@@ -970,7 +962,7 @@ def cli(argv):
         elif a.command == 'verify':
             result = verify(a.path, a.root, a.session, a.timeout, a.confirm_verify)
         elif a.command == 'prepare':
-            catalog = json.loads(read_bounded(a.catalog)) if a.catalog else None
+            catalog = json.loads(read_text(a.catalog)) if a.catalog else None
             result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
         elif a.command == 'acknowledge':
             result = acknowledge(a.path, a.root, a.session)
@@ -991,11 +983,6 @@ def cli(argv):
         keep = {'outcome', 'action'} | set(ledger._split_csv(a.fields))
         result = {k: v for k, v in result.items() if k in keep}
     output = json.dumps(result, ensure_ascii=False)
-    limit = getattr(a, 'budget_bytes', PACKAGE_BYTES)
-    # A resumed result is already acknowledged (resume() size-checked it first); withholding it now would lose the handoff.
-    if result['outcome'] != 'resumed' and len(output.encode()) > max(1024, limit):
-        result = dict(outcome='needs-context', action='Response metadata exceeds the output budget. Use a narrower topic or history page; inspect and repair oversized metadata locally before preparing.')
-        output = json.dumps(result)
     print(output)
     return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'verification-failed', 'verification-timeout', 'timeout', 'needs-confirmation') else 0
 

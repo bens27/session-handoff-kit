@@ -544,7 +544,7 @@ def main():
     p = run(["claim", f11b], t11b)
     check("claim-prints-missing-section", "problem: missing section '## Current state'" in p.stdout,
           "stdout=%r" % p.stdout)
-    check("claim-prints-word-limit", "problem: body is 1" in p.stdout and "(limit 1500)" in p.stdout,
+    check("claim-word-count-is-not-a-problem", "problem: body is" not in p.stdout,
           "stdout=%r" % p.stdout)
     check("claim-prints-verify", "verify: python3 -c 1 (untrusted" in p.stdout, "stdout=%r" % p.stdout)
     check("claim-prints-commits-since", "commits_since: 1\n" in p.stdout, "stdout=%r" % p.stdout)
@@ -560,18 +560,19 @@ def main():
     put12("20260912-0900-refs.md", "---\ntopic: refs\nstatus: open\nreferences: %s, r9.md\n---\n"
           % ", ".join(refs[:9]))
     r = hl.resolve("refs", t12)
-    check("resolve-ref-caps", len(r["must_also_read"]) == 8 and "r9.md" not in r["must_also_read"]
-          and {u["ref"] for u in r["unresolved_references"]} == {"r8.md", "r9.md"},
+    check("resolve-all-references", r["must_also_read"] == refs
+          and r["missing_references"] == ["r9.md"] and not r["unresolved_references"],
           "resolved=%r" % r)
     big = put12("20260912-0901-bigrefs.md", "---\ntopic: bigrefs\nstatus: open\n"
                 "references: r1.md, r1.md, big2.md, r0.md\n---\n")
     with open(os.path.join(t12, "big2.md"), "w") as f:
         f.write("y" * 100_000)
     r = hl.resolve("bigrefs", t12)
-    check("resolve-byte-cap", r["must_also_read"] == ["r1.md", "r0.md"]
-          and r["unresolved_references"][0]["ref"] == "big2.md", "resolved=%r" % r)
+    check("resolve-large-references", r["must_also_read"] == ["r1.md", "big2.md", "r0.md"]
+          and not r["unresolved_references"], "resolved=%r" % r)
     p = run(["resolve", "bigrefs", t12], t12)
-    check("resolve-prints-unresolved", "unresolved_reference: big2.md" in p.stdout, "stdout=%r" % p.stdout)
+    check("resolve-prints-all-references", "must_also_read: r1.md, big2.md, r0.md" in p.stdout,
+          "stdout=%r" % p.stdout)
 
     # 12. Owner-aware claims.
     oc = put12("20260913-0900-owned.md", "---\ntopic: owned\nstatus: open\n---\n")

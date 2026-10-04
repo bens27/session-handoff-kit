@@ -53,8 +53,8 @@ the change; the receiver should only implement it.
 
 - Aim for a core of roughly 1,500–2,500 characters or less for an ordinary
   handoff; this is writing guidance, not a required minimum or enforced CLI cap.
-  Preserve essential constraints even when more space is necessary. The ledger's
-  ceiling of 1,500 words / 24,000 bytes is an emergency limit, not a writing target.
+  Preserve essential constraints even when more space is necessary. The broader
+  target of 1,500 words / 24,000 bytes is also advisory, never a rejection limit.
 - Rebuild the core around the next action on each save. Replace superseded facts
   instead of appending updates to the previous draft. Omit conversation history,
   exhaustive file inventories, implementation explanations and completed-work
@@ -88,8 +88,8 @@ the change; the receiver should only implement it.
 - Name required skills only from the current installed catalog. A checkpoint
   does not authorize installing dependencies or executing its next steps.
 - Check the complete package, not just the body: references, workflow text,
-  skills and serialization count toward the normal 32,000-byte prepare budget.
-  If preparation exceeds it, narrow the core/dependencies first. Never silently
-  raise `--budget-bytes`; an exception requires explicit user authorization.
+  skills and serialization count toward the recommended 32,000-byte package size.
+  Size warnings never block saving or resumption. Narrow unnecessary background
+  when useful; `--budget-bytes` adjusts the recommendation without approval.
 
 To change this template, read "Customizing the template" in `reference.md` first.

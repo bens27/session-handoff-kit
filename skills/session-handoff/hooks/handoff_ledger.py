@@ -60,11 +60,9 @@ STAMP = "%Y-%m-%dT%H:%M"
 CLAIM_TTL = timedelta(hours=2)  # a claim older than this is a crashed session
 KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
 REQUIRED_SECTIONS = ("Objective", "Current state", "Next steps")
-MAX_WORDS = 1500
+RECOMMENDED_WORDS = 1500
 TOPIC_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished")
-MAX_REFS = 8              # references a resume is asked to read, at most
-MAX_REF_BYTES = 256_000   # combined size of the existing referenced files
 
 
 class ConflictError(RuntimeError):
@@ -245,9 +243,6 @@ def _problems(text, fm):
         for section in REQUIRED_SECTIONS:
             if not re.search(r"^## %s\s*$" % re.escape(section), body, re.M):
                 out.append("missing section '## %s'" % section)
-        words = len(body.split())
-        if words > MAX_WORDS:
-            out.append("body is %d words (limit %d)" % (words, MAX_WORDS))
     return out
 
 
@@ -327,7 +322,7 @@ def trusted(path, text=None, fm=None):
     try:
         if text is None:
             with open(path, encoding="utf-8", errors="replace") as f:
-                text = f.read(64_001)
+                text = f.read()
         fm = fm if fm is not None else parse_front_matter(text)
         with open(path + ".published") as f:
             receipt = json.loads(f.read(4096))
@@ -351,7 +346,7 @@ def _records(root, errors=None):
         try:
             mtime = os.path.getmtime(path)
             with open(path, encoding="utf-8", errors="replace") as f:
-                text = f.read(64_001)
+                text = f.read()
             fm = parse_front_matter(text)
             if in_fallback and fm.get("project") and not _same_dir(fm["project"], root):
                 continue
@@ -364,7 +359,7 @@ def _records(root, errors=None):
             out.append({
                 "path": path, "fm": fm, "text": text, "mtime": mtime, "topic": topic,
                 "legacy": _is_legacy_single_file(path, legacy),
-                "problems": _problems(text, fm) + (["document exceeds bounded read limit"] if len(text) > 64_000 else []),
+                "problems": _problems(text, fm),
                 "ended": ((fm.get("created") or name_ended) if fm.get("checkpoint_id")
                           else name_ended or fm.get("created"))
                          or datetime.fromtimestamp(mtime).strftime(STAMP),
@@ -458,25 +453,12 @@ def resolve(topic_or_path, root):
 
     # Only the authoritative (newest) handoff's references are current: earlier
     # handoffs' references were either carried forward or deliberately dropped.
-    # Capped so a runaway references line cannot flood a resuming session.
     refs = list(dict.fromkeys(chain[-1]["references"])) if chain else []
-    must_also_read, missing, unresolved, total = [], [], [], 0
+    must_also_read, missing = [], []
     for ref in refs:
         full = os.path.join(root, os.path.expanduser(ref))
-        if len(must_also_read) >= MAX_REFS:
-            unresolved.append({"ref": ref, "reason": "over the %d-reference cap" % MAX_REFS})
-            continue
         if not os.path.exists(full):
             missing.append(ref)
-        else:
-            try:
-                size = os.path.getsize(full)
-            except OSError:
-                size = 0
-            if total + size > MAX_REF_BYTES:
-                unresolved.append({"ref": ref, "reason": "over the %d-byte cap" % MAX_REF_BYTES})
-                continue
-            total += size
         must_also_read.append(ref)
     return {
         "topic": topic,
@@ -484,7 +466,7 @@ def resolve(topic_or_path, root):
         "authoritative": chain[-1]["path"] if chain else None,
         "must_also_read": must_also_read,
         "missing_references": missing,
-        "unresolved_references": unresolved,
+        "unresolved_references": [],
     }
 
 
@@ -772,10 +754,6 @@ def _cli(argv):
             return 1
         resolved['history_count'] = len(resolved['chain'])
         resolved['chain'] = resolved['chain'][-1:]
-        if len(json.dumps(resolved).encode()) > 16000:
-            print(json.dumps(dict(outcome='needs-context', authoritative=resolved['authoritative'],
-                  action='Resolution metadata exceeds 16000 bytes. Inspect the named checkpoint metadata locally; reduce required references before preparation. History is available separately.')))
-            return 1
         if as_json:
             print(json.dumps(resolved, indent=2))
         else:

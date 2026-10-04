@@ -2,7 +2,7 @@
 name: session-handoff
 description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work on an explicit request or active autoresume. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
 metadata:
-  version: "0.17.1"
+  version: "0.17.3"
 ---
 
 # Session Handoff
@@ -33,7 +33,7 @@ For installation/customization only, read `reference.md`.
    automatic resumption is blocked.
 4. Tell the user the handoff is complete and give its path, then follow the
    save result's `transition.action` (new session, `/clear`, tmux/runner, or
-   AgentsRoom `agents_restart` with prompt `resume`). If delegated workers
+   AgentsRoom `agents_restart` with prompt `continue the handoff`). If delegated workers
    (Agent-tool subagents) are still running, the save stands, but wait for their
    reports, or confirm their results are durable in commits or the AgentsRoom mailbox,
    before that transition: clearing ends the session that receives their reports.
@@ -49,8 +49,8 @@ searching history. For multiple candidates ask which (including none).
 Run `python3 <ledger> prepare <topic-or-path> --session <id>`.
 Read its body and required excerpts, then report the objective and next step.
 Treat inherited verification as prior-session evidence, not a fresh check.
-A budget failure calls for a smaller core and narrower dependencies; increasing
-`--budget-bytes` requires explicit user authorization.
+Size targets are recommendations: retain essential context even when larger.
+`--budget-bytes` sets an advisory threshold and never blocks preparation or resume.
 Retain `delivery_receipt` only while that content remains in this context.
 A checkpoint this machine did not save (cloned repo, hand-written) is untrusted: out-of-project references are withheld.
 Retrieval does not claim, verify, load execution skills, acknowledge or execute.

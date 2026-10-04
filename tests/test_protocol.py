@@ -73,6 +73,22 @@ class ProtocolTests(unittest.TestCase):
             other = paths['agent-b' if tid == 'agent-a' else 'agent-a']
             self.assertNotIn(other, note)
 
+    def test_safe_restart_prompt_resumes_own_latest_handoff(self):
+        # A also has older work; B's record is newest in the project.
+        paths = {}
+        for tid, topic in (('agent-a', 'older-work'), ('agent-a', 'current-work'),
+                           ('agent-b', 'other-work')):
+            self.env['AGENTSROOM_AGENT_ID'] = tid
+            saved = json.loads(self.save(request=topic, topic=topic).stdout)
+            paths[topic] = os.path.basename(saved['path'])
+        self.env['AGENTSROOM_AGENT_ID'] = 'agent-a'
+        response = json.dumps(self.hook('UserPromptSubmit', session='fresh-a',
+                                        prompt='continue the handoff'))
+        self.assertIn('handoff_ledger.py resume ', response)
+        self.assertIn(paths['current-work'], response)
+        self.assertNotIn(paths['older-work'], response)
+        self.assertNotIn(paths['other-work'], response)
+
     def test_startup_reports_other_terminals_handoffs_without_adopting(self):
         # 695f27d9: a terminal with no handoff of its own must not claim
         # "no open handoff" when other terminals hold some.
@@ -250,13 +266,14 @@ class ProtocolTests(unittest.TestCase):
         self.cli('acknowledge', p, '--session', 'one')
         self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'none')
 
-    def test_large_reference_blocks_preparation_without_claiming(self):
+    def test_large_reference_is_delivered_during_preparation(self):
         p = self.put(fields='references: huge.txt')
         (self.root / 'huge.txt').write_text('a' * 250000)
-        result = json.loads(self.cli('prepare', p, '--session', 'one', '--execute', ok=False).stdout)
-        self.assertEqual(result['outcome'], 'needs-context')
-        self.assertNotIn('body', result)
-        self.assertEqual(json.loads(self.cli('lookup').stdout)['outcome'], 'available')
+        result = json.loads(self.cli('prepare', p, '--session', 'one', '--execute').stdout)
+        self.assertEqual(result['outcome'], 'prepared')
+        self.assertEqual(result['references'][0]['text'], 'a' * 250000)
+        self.assertTrue(result['warnings'])
+        self.cli('acknowledge', p, '--session', 'one')
 
     def test_verification_keeps_true_pipeline_status_and_bounded_output(self):
         p = self.put(fields="verify: printf 'failure'; false | tail -1")
@@ -396,10 +413,10 @@ class ProtocolTests(unittest.TestCase):
             self.hd.chmod(0o700)
             fallback.chmod(0o700)
 
-    def test_oversized_metadata_cannot_flood_resolution(self):
+    def test_large_reference_list_is_resolved_without_truncation(self):
         self.put(fields='references: ' + ', '.join('missing-%d' % i for i in range(4000)))
-        result = self.cli('resolve', 'work', '--json', ok=False)
-        self.assertLess(len(result.stdout), 32000)
+        result = self.cli('resolve', 'work', '--json')
+        self.assertEqual(len(json.loads(result.stdout)['must_also_read']), 4000)
         self.assertNotIn('Traceback', result.stderr)
 
     def test_explicit_topic_after_first_page_routes_without_ambiguity(self):

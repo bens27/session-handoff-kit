@@ -1338,10 +1338,11 @@ def main():
     message += " Session identity: %s. Publish with python3 %s save --session %s --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
     if auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
         # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
+        from handoff_protocol import AGENTSROOM_RESTART_PROMPT
         message += (" Fully automatic mode in AgentsRoom: after save returns outcome saved,"
                     " make your last action a call to the AgentsRoom agents_restart tool"
-                    " for this agent with prompt \"resume\", so the fresh session picks"
-                    " up this terminal's handoff.")
+                    " for this agent with prompt \"%s\", so the fresh session picks"
+                    " up this terminal's handoff." % AGENTSROOM_RESTART_PROMPT)
     emit(agent, event_name, message, mode)
 
 

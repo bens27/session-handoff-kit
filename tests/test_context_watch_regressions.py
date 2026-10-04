@@ -196,7 +196,8 @@ class AgentsRoomRestart(HookCase):
     def test_auto_agentsroom_trigger_asks_agent_to_restart_itself(self):
         msg = self.trigger({"HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "agent-7"})
         self.assertIn("agents_restart", msg)
-        self.assertIn("resume", msg.split("agents_restart", 1)[1])
+        self.assertIn('with prompt "continue the handoff"', msg)
+        self.assertNotIn('with prompt "resume"', msg)
 
     def test_no_restart_instruction_in_plain_tmux_or_without_auto(self):
         tmux = self.trigger({"HANDOFF_AUTO": "1", "TMUX_PANE": "%1"})

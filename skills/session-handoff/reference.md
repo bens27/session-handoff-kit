@@ -53,28 +53,25 @@ The server checks session, checkpoint and reference fingerprints and a two-hour
 expiry; invalid receipts cause a full reload. Compaction hooks invalidate the
 receipt. Without hooks, omit it after compaction or any context loss. Retrieval
 writes only an ephemeral delivery cache; checkpoint state remains read-only.
-Reused content still counts toward the full package budget. Execution additionally
+Reused content still counts toward the full package size. Execution additionally
 counts the phase-specific `continuation.md` instructions.
 
 State mutations use sidecar locks and atomic replacement, and all
 callers respect ownership, including those omitting an owner.
 
 The complete serialized package, workflow instructions, and declared already-loaded
-skills share a default 32,000-byte budget. The estimated token count is bytes/4,
-not a tokenizer measurement or billing total. A user-authorized `--budget-bytes`
-exception may raise the total; individual required files remain bounded.
-Checkpoints are at most 1,500 words / 24,000 bytes. At most eight required
-references and sixteen skill names are accepted for preparation. Required
-references support `path#LSTART-LEND`; background belongs in `optional_references`.
-Skill catalogs are caller-supplied installed paths, never downloaded dependencies.
-Aliases and already-loaded skills are deduplicated by canonical path. There is
-no minimum checkpoint length. The template's ordinary-core target is writing
-guidance, not an enforced size limit. Choose required excerpts for the immediate
-next action; a path used during previous work need not be loaded on resumption.
-A review-only next step normally needs artifact paths and the review question,
-not embedded implementation source. Reduce dependencies before requesting a
-budget exception; keep published checkpoints intact and use a successor save
-when revising their contents.
+skills have a recommended size of 32,000 bytes. The estimated token count is bytes/4,
+not a tokenizer measurement or billing total. `--budget-bytes` changes this advisory
+threshold; exceeding it reports a warning and still delivers all required content.
+Aim for checkpoints under 1,500 words / 24,000 bytes, about eight required references
+and sixteen skill names. These are recommendations, not rejection or truncation
+limits. Required references support `path#LSTART-LEND`; background belongs in
+`optional_references`. Skill catalogs are caller-supplied installed paths, never
+downloaded dependencies. Aliases and already-loaded skills are deduplicated by
+canonical path. There is no minimum checkpoint length. Choose required excerpts
+for the immediate next action; preserve essential context even when it exceeds
+these targets. Keep published checkpoints intact and use a successor save when
+revising their contents.
 
 Verification uses Bash pipefail, a default 60-second timeout (configurable to
 one hour), a durable full log in `.verification/`, and at most 2,000 bytes of
@@ -144,7 +141,8 @@ watcher ignores hook events that carry `agent_id` (subagents).
 
 Consoles without tmux: automatic clearing needs tmux (`claude-auto`) or the
 headless runner. With auto mode on in AgentsRoom, the context notice has the
-agent call `agents_restart` with prompt `resume`; no typing is needed. Typing
+agent call `agents_restart` with prompt `continue the handoff`; this avoids native
+CLI subcommands such as Codex's `resume`. No typing is needed. Typing
 `/clear` then `resume` yourself applies only with auto mode off, or in another
 console without `TMUX_PANE`, where the Stop hook announces the saved handoff
 once per trigger.

@@ -181,7 +181,8 @@ of its own terminal, not the project's newest. AgentsRoom turns this on by
 default (`HANDOFF_AUTO=0` or `"auto": false` opts out); elsewhere it is opt-in.
 When it is off, the save result says how to turn it on. In AgentsRoom (the default path),
 the context notice tells the agent to finish by calling `agents_restart` with
-prompt `resume`, which reopens its tab on that handoff; AgentsRoom takes precedence
+prompt `continue the handoff`, which reopens its tab on that handoff and avoids
+Codex interpreting `resume` as its native session-picker command. AgentsRoom takes precedence
 over any `TMUX_PANE` the app inherited, so nothing is typed into another terminal.
 As an optional fallback inside tmux outside AgentsRoom, a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
 is written (Claude Code hooks cannot clear a session themselves). Outside
@@ -413,10 +414,10 @@ the other supported location on filesystem write failure and returns a concrete
 blocked action if neither works. Host permission denials remain authoritative.
 Read failures are reported, and every state mutation respects existing ownership.
 
-The complete resume package defaults to 32,000 bytes, including references and
+The complete resume package has a recommended size of 32,000 bytes, including references and
 skills. Required references can select line ranges; optional background stays
-out of context. Checkpoints are limited to 1,500 words / 24,000 bytes, with no
-minimum length. Verification preserves pipeline failures while keeping full
+out of context. Size targets are advisory; larger content is delivered in full.
+Aim for checkpoints under 1,500 words / 24,000 bytes, with no minimum length. Verification preserves pipeline failures while keeping full
 output in a log and returning only a bounded excerpt. Resume metrics distinguish
 package sizes from host startup/input samples and never record checkpoint text.
 `handoff_ledger.py report` summarizes live records separately from tests and
