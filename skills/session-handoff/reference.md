@@ -56,6 +56,31 @@ writes only an ephemeral delivery cache; checkpoint state remains read-only.
 Reused content still counts toward the full package size. Execution additionally
 counts the phase-specific `continuation.md` instructions.
 
+`resume` accepts the same catalog and receipt options as `prepare`. Its default
+JSON carries a complete body and a `next_step_section` pointer to `Next steps`;
+`--legacy-next-step` (or `--fields next_step`) also emits the older text field.
+Use catalogs only for installed skills, and declare `loaded` only for content
+still in this context. Workflow sizes account for instructions, not a workflow
+text field emitted by resume. Read continuation instructions for staged recovery
+or custom catalogs, rather than loading them on every successful one-shot resume.
+
+Save returns a `paused` transition when automatic handoffs would thrash: pressure
+within ten minutes of resume, a third pressure checkpoint of one topic within
+30 minutes, five previous AgentsRoom restart intents within an hour, or another
+session's restart intent within two minutes. The hourly budget deliberately
+stops before AgentsRoom's advertised six/hour limit. Intent counts are local to
+the terminal and cannot observe restarts outside this kit. Resume timestamps
+remain in the durable ledger even if temporary hook notes disappear.
+An identical retry preserves a pause; a retry of a transferred/closed checkpoint
+returns transition `none` so it cannot request a fresh restart of completed work.
+
+Pausing preserves a full, published, open checkpoint. Automatic startup, tmux
+Stop and the headless runner respect the pause; the runner returns exit 75.
+After reducing re-entry overhead or waiting for the host budget, open a fresh
+session and explicitly ask to `continue the handoff`. A refused host restart
+uses that same recovery: keep the checkpoint open and report the refusal. Avoid
+retrying the restart or marking the work resumed without delivery.
+
 State mutations use sidecar locks and atomic replacement, and all
 callers respect ownership, including those omitting an owner.
 
@@ -86,6 +111,12 @@ host input samples, never checkpoint or verification contents. Startup baseline
 and later input samples are separate; cached tokens still occupy context.
 Events carry protocol `version` and `origin` (`live` by default; fixture callers
 set `CONTEXT_WATCH_ORIGIN=test`). Tests disable the production sinks.
+`metrics.delivery_bytes` is the actual serialized resume JSON size, including
+metrics. `estimated_delivery_tokens` uses UTF-8 bytes/4. When a hook sample exists,
+resume also reports its occupancy, threshold, window and source, then adds only
+estimated delivery tokens to estimate post-resume occupancy and working room.
+Under 60,000 remaining tokens produces an advisory warning. Schema loads, future
+reads and stale samples limit this estimate; absent telemetry stays unknown.
 `python3 hooks/handoff_ledger.py report` returns bounded aggregates, excluding
 known tests and separating old records with unknown origin. It reads at most
 the last 2 MB and reports when the window is partial. Byte counts are not billing.

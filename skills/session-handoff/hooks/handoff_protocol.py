@@ -107,7 +107,57 @@ def project_setting(root, key, kind, user_only=False):
     return value
 
 
-def transition(root):
+def restart_guard(root, session, topic=None, records=None, pressure=True):
+    """Conservative restart-intent budget, isolated to the current terminal.
+
+    Saved intents are observable; the host's actual restart counter is not.
+    Never claim these counts include restarts performed outside this kit.
+    """
+    import time
+    now = time.time()
+    note = ledger.read_session_note(root, session=session)
+    terminal = terminal_id()
+    rows = records if records is not None else ledger._records(root)
+    own = [r for r in rows if (r['fm'].get('terminal') == terminal if terminal else
+                              r['fm'].get('session_id') == session)
+           and ledger.trusted(r['path'], r['text'], r['fm'])]
+    def age(value):
+        try:
+            return now - datetime.fromisoformat(value).timestamp()
+        except (ValueError, TypeError):
+            return float('inf')
+    recent = [r for r in own if 0 <= age(r['fm'].get('created')) < 3600]
+    intents = [r for r in recent if r['fm'].get('restart_intent') == 'agents_restart'
+               or ('restart_intent' not in r['fm'] and r['fm'].get('reason') == 'context-pressure'
+                   and not r['fm'].get('automatic_paused'))]
+    transfers = [r for r in rows if r['fm'].get('resumed_by') == session
+                 and ledger.trusted(r['path'], r['text'], r['fm'])]
+    last_transfer = min(transfers, key=lambda r: age(r['fm'].get('resumed')), default=None)
+    topic = topic or note.get('resumed_topic') or (last_transfer['topic'] if last_transfer else None)
+    same = [r for r in recent if r['fm'].get('reason') == 'context-pressure' and topic and r['fm'].get('topic') == topic
+            and age(r['fm'].get('created')) < 1800]
+    resumed_at = note.get('resumed_at')
+    elapsed = now - resumed_at if type(resumed_at) in (int, float) else None
+    if elapsed is None and last_transfer:
+        elapsed = age(last_transfer['fm'].get('resumed'))
+    reasons = []
+    if pressure and elapsed is not None and 0 <= elapsed < 600:
+        reasons.append('rapid-resume')
+    if pressure and len(same) >= 2:
+        reasons.append('repeated-topic')
+    if os.environ.get('AGENTSROOM_AGENT_ID') and len(intents) >= 5:
+        reasons.append('restart-budget')
+    if os.environ.get('AGENTSROOM_AGENT_ID') and any(
+            r['fm'].get('session_id') != session and age(r['fm'].get('created')) < 120 for r in intents):
+        reasons.append('restart-cooldown')
+    return dict(reasons=reasons, seconds_since_resume=round(elapsed) if elapsed is not None else None,
+                topic_saves_30m=len(same), restart_intents_1h=len(intents),
+                startup_input_tokens=note.get('startup_input_tokens'),
+                observed_input_tokens=note.get('observed_input_tokens'),
+                resume_delivery_tokens=note.get('resume_delivery_tokens'))
+
+
+def transition(root, guard=None):
     """What ends this session after a save, deduced from the environment and config."""
     if (os.environ.get('HANDOFF_AUTO') or '').strip():
         auto = _truthy(os.environ.get('HANDOFF_AUTO'))
@@ -116,6 +166,14 @@ def transition(root):
         # the app), off elsewhere; an explicit "auto": false always wins.
         setting = project_setting(root, 'auto', bool)
         auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
+    if auto and guard and guard['reasons']:
+        return dict(kind='paused', diagnostics=guard, action=(
+            'Automatic handoff paused: %s. The saved checkpoint remains open. '
+            'Stop and report session thrashing with these diagnostics. After reducing re-entry context '
+            'or waiting for the restart budget, start a fresh session and explicitly ask to '
+            'continue the handoff. If a host restart is refused, keep this checkpoint open; '
+            'report the refusal and use the same manual continuation, without retrying the restart.'
+            % ', '.join(guard['reasons'])))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
         return dict(kind='agents_restart', action='End this turn by calling AgentsRoom agents_restart for agent %s with prompt "%s".'
                     % (os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
@@ -218,7 +276,14 @@ def save(root, session, request_id, document):
                 if not _front_matter_matches(root, document, record):
                     return dict(outcome='conflict', path=record['path'], action='Saved front matter differs from the submitted checkpoint; it was not sealed. Inspect it, then use a new request ID.')
                 write_json(record['path'] + '.published', ledger.seal(identity, snapshot(record['path'])))
-                return dict(outcome='saved', path=record['path'], checkpoint_id=identity, action='Checkpoint is published and discoverable; stop when handing off.')
+                guard = restart_guard(root, session, topic, [r for r in records if r['path'] != record['path']],
+                                      pressure=record['fm'].get('reason') == 'context-pressure')
+                if record['fm'].get('automatic_paused'):
+                    guard['reasons'] = ledger._split_csv(record['fm']['automatic_paused'])
+                next_transition = (dict(kind='none', action='Checkpoint is already transferred or closed; continue current work without restarting.')
+                                   if record['fm'].get('status') != 'open' else transition(root, guard))
+                return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
+                            transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
         predecessor = document.get('predecessor')
         current = ledger.resolve(topic, root)['authoritative']
         if current and not predecessor:
@@ -257,6 +322,11 @@ def save(root, session, request_id, document):
                       reason='context-pressure' if note.get('fired') else 'user-parked')
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
+        guard = restart_guard(root, session, topic, records, pressure=fields['reason'] == 'context-pressure')
+        next_transition = transition(root, guard)
+        fields['restart_intent'] = next_transition['kind']
+        if next_transition['kind'] == 'paused':
+            fields['automatic_paused'] = ', '.join(guard['reasons'])
         for key in ('skills', 'references', 'optional_references', 'verify', 'verify_baseline'):
             value = document.get(key, '')
             if isinstance(value, list):
@@ -280,7 +350,13 @@ def save(root, session, request_id, document):
                 warnings = []
                 if len(body.split()) > ledger.RECOMMENDED_WORDS or len(text.encode()) > RECOMMENDED_DOCUMENT_BYTES:
                     warnings.append('Checkpoint exceeds the recommended 1500 words / 24000 bytes; keep essential context and consider optional background references.')
-                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=transition(root),
+                if re.search(r'\b(?:re[- ]?read|read\s+the\s+(?:whole|entire)|load\s+(?:the\s+)?skill)\b', body, re.I):
+                    warnings.append('Potential expensive re-entry read: state when it is needed, carry the minimal commands, and defer background docs/skills until the action needs them.')
+                for spec in ledger._split_csv(fields.get('references', '')):
+                    excerpt = re.search(r'#L(\d+)-L(\d+)$', spec)
+                    if excerpt and int(excerpt[2]) - int(excerpt[1]) + 1 > 80:
+                        warnings.append('Required excerpt exceeds the recommended 80 lines: %s; keep necessary content and defer background to optional_references.' % spec)
+                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=next_transition,
                             action='Checkpoint is published and discoverable; follow transition.action, then stop.')
             except OSError as exc:
                 if os.path.exists(path):
@@ -542,8 +618,15 @@ def acknowledge(path, root, session):
         receipt = prepared_receipt(path, root, session)
         if not receipt['verified']:
             return dict(outcome='blocked', action='Verification has not passed. Run verify; keep the claim recoverable until preparation succeeds.')
-        ledger._set_fields(path, [('status', 'resumed'), ('resumed', datetime.now().strftime(ledger.STAMP)), ('resumed_by', session)],
+        ledger._set_fields(path, [('status', 'resumed'), ('resumed', datetime.now().isoformat(timespec='microseconds')), ('resumed_by', session)],
                            ('status:', 'resumed:', 'resumed_by:', 'claimed:', 'claim_owner:'))
+        import time
+        note = ledger.read_session_note(root, session=session)
+        note.update(session_id=session, ts=time.time(), resumed_at=time.time(), resumed_topic=fm.get('topic'))
+        try:
+            write_json(ledger.session_note_path(root, session), note)
+        except OSError:
+            pass  # Transfer succeeded; optional diagnostics must not turn it into a failed resume.
     return dict(outcome='resumed', path=path, action='Transfer acknowledged. Continue the authorized next step.')
 
 
@@ -630,7 +713,8 @@ def section(body, title):
     return match[1].strip() if match else ''
 
 
-def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False):
+def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
+           catalog=None, reuse_receipt=None, legacy_next_step=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
     root = ledger.project_root(root)
     if target is None:
@@ -660,7 +744,8 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
             result = dict(outcome='blocked', action=str(exc)[:500] + '; the handoff stays recoverable. Resolve this, then rerun resume.')
         return None if result['outcome'] == success else dict(result, stage=name), result
-    failed, prepared = stage('prepare', lambda: prepare(target, root, session, execute=True, budget=budget), 'prepared')
+    failed, prepared = stage('prepare', lambda: prepare(target, root, session, execute=True, budget=budget,
+                                                       catalog=catalog, reuse_receipt=reuse_receipt), 'prepared')
     if failed:
         return failed
     path = prepared['path']
@@ -671,11 +756,20 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
             return failed
         verification = {k: checked[k] for k in ('outcome', 'baseline_failures') if k in checked}
     body = prepared.get('body', '')
-    result = dict(outcome='resumed', path=path, body=body, references=prepared['references'],
+    result = dict(outcome='resumed', path=path, references=prepared['references'],
                   skills=[dict(name=s['name'], text=s['text']) for s in prepared['skills']],
-                  next_step=section(body, 'Next steps'), verification=verification,
+                  next_step_section='Next steps', verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
-                  metrics=prepared['metrics'], action='Continue with next_step.')
+                  metrics=prepared['metrics'], action='Continue with ## Next steps in the delivered body.')
+    if 'body' in prepared:
+        result['body'] = body
+    else:
+        result['reused_from'] = prepared['reused_from']
+        result['action'] = 'Continue with ## Next steps in the body still in this session context.'
+    if legacy_next_step:
+        result['next_step'] = section(body or read_text(path).split('\n---\n', 1)[-1], 'Next steps')
+    if 'withheld_references' in prepared:
+        result['withheld_references'] = prepared['withheld_references']
     if 'warnings' in prepared:
         result['warnings'] = prepared['warnings']
     output_bytes = len(json.dumps(result, ensure_ascii=False).encode())
@@ -739,13 +833,16 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     if not selected and result['total'] > 1 and not newest:
         return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (ended %s, %.0fd old): %s' % (i+1,h['topic'][:80],h['ended'][:32],h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'
     selected = selected or items[0]
+    if not prompt and ledger._read_fm(selected['path']).get('automatic_paused'):
+        return ('Automatic handoff paused; checkpoint remains open at %s. Reduce re-entry context '
+                'or wait for the restart budget, then explicitly ask to continue the handoff.' % selected['path'])
     if not session:
         return 'An open handoff is available. Supply a unique session identity to prepare; never borrow another session identity.'
     execute = resume or (auto and not retrieve)
     # With --session, `resume` is the one-shot command that claims, verifies and acknowledges.
     command = 'python3 %s %s %s --session %s' % (shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
                                                  'resume' if execute else 'prepare', shlex.quote(selected['path']), shlex.quote(session))
-    suffix = ' It claims, verifies and acknowledges in one call; then continue with its next_step.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
+    suffix = ' It claims, verifies and acknowledges in one call; then continue with ## Next steps in its body.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
     return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
 
 
@@ -832,6 +929,45 @@ def telemetry(operation, root, session, result):
         pass  # optional analytics never makes a completed checkpoint fail
 
 
+def delivery_metrics(result, root, session, fields=None):
+    """Exact JSON bytes, estimated tokens and headroom against a sampled occupancy.
+
+    Only emitted bytes are added to the host sample: loaded workflow and reused
+    content already live in that sample. Schema costs and future reads are unknown.
+    """
+    metrics = result['metrics']
+    def serialized_size():
+        keep = {'outcome', 'action'} | set(ledger._split_csv(fields)) if fields else None
+        delivered = {k: v for k, v in result.items() if k in keep} if keep else result
+        return len(json.dumps(delivered, ensure_ascii=False).encode())
+    note = ledger.read_session_note(root, session=session)
+    observed, threshold = note.get('observed_occupancy_tokens'), note.get('threshold')
+    if type(observed) is int and type(threshold) is int:
+        metrics.update(observed_occupancy_tokens=observed, handoff_threshold_tokens=threshold,
+                       threshold_source=note.get('threshold_source'), window_tokens=note.get('window'),
+                       window_source=note.get('window_source'),
+                       occupancy_estimate_basis='host sample + UTF-8 delivery bytes / 4; excludes future schemas and reads')
+        # The warning itself contributes to the delivered size.
+        if threshold - observed < 60000:
+            result.setdefault('warnings', []).append('Estimated working room after resume is below 60000 tokens; narrow deferred reads and inspect re-entry overhead.')
+    size = -1
+    while size != serialized_size():
+        size = serialized_size()
+        metrics.update(delivery_bytes=size, estimated_delivery_tokens=(size + 3) // 4)
+        if type(observed) is int and type(threshold) is int:
+            occupancy = observed + metrics['estimated_delivery_tokens']
+            metrics.update(estimated_occupancy_after_resume_tokens=occupancy,
+                           estimated_working_room_tokens=threshold - occupancy)
+            if threshold - occupancy < 60000 and not any('working room' in w for w in result.get('warnings', [])):
+                result.setdefault('warnings', []).append('Estimated working room after resume is below 60000 tokens; narrow deferred reads and inspect re-entry overhead.')
+    if result['outcome'] == 'resumed':
+        note.update(resume_delivery_tokens=metrics['estimated_delivery_tokens'])
+        try:
+            write_json(ledger.session_note_path(root, session), note)
+        except OSError:
+            pass
+
+
 def save_draft(a):
     """Build the save draft from JSON and flags, and settle a.root; a dict with outcome is a refusal."""
     if a.input or not (a.topic or a.body):
@@ -913,6 +1049,9 @@ def cli(argv):
     resume_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     resume_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES, help='Recommended package size in bytes; advisory only')
     resume_p.add_argument('--confirm-verify', action='store_true', help='The user approved running the verify command of a checkpoint this machine did not save')
+    resume_p.add_argument('--catalog', help='JSON installed skills mapping plus paths already loaded in this context')
+    resume_p.add_argument('--reuse-receipt', help='Receipt for body/references still in this session context; omit after context loss')
+    resume_p.add_argument('--legacy-next-step', action='store_true', help='Also emit the Next steps text (duplicates body) for older consumers')
     wait_p = sub.add_parser('wait', description='Poll until the newest handoff for a topic or path is saved/open or resumed.')
     wait_p.add_argument('target', help='Topic or path')
     wait_p.add_argument('--status', required=True, choices=('saved', 'open', 'resumed'))
@@ -969,7 +1108,9 @@ def cli(argv):
         elif a.command == 'wait':
             result = wait(a.root, a.target, a.status, a.timeout, a.interval)
         elif a.command == 'resume':
-            result = resume(a.root, a.session, a.target, a.budget_bytes, a.confirm_verify)
+            catalog = json.loads(read_text(a.catalog)) if a.catalog else None
+            result = resume(a.root, a.session, a.target, a.budget_bytes, a.confirm_verify, catalog,
+                            a.reuse_receipt, a.legacy_next_step or 'next_step' in ledger._split_csv(a.fields or ''))
         elif a.command == 'save':
             request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
             result = save(a.root, a.session, request, draft)
@@ -978,6 +1119,8 @@ def cli(argv):
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
     result.setdefault('project', ledger.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
+    if a.command == 'resume' and result['outcome'] == 'resumed':
+        delivery_metrics(result, a.root, a.session, a.fields)
     telemetry(a.command, a.root, getattr(a, 'session', None), result)
     if getattr(a, 'fields', None):
         keep = {'outcome', 'action'} | set(ledger._split_csv(a.fields))

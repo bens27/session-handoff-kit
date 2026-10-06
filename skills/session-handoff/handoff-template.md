@@ -63,6 +63,11 @@ the change; the receiver should only implement it.
   `path#LSTART-LEND` excerpt only when that content is necessary for the next
   action. Prefer the smallest relevant excerpt. Files used earlier are not
   automatically required now; keep background paths in `optional_references`.
+- Make reads just in time: a next step that says "re-read" or "load skill" must
+  name the action that needs it and the smallest useful excerpt. Prefer carrying
+  the few commands needed now in the body. Defer later docs and skills to the
+  action that uses them. Aim for excerpts under 80 lines when practical; save
+  warns about larger excerpts and expensive rereads, without rejecting them.
 - Content the next step edits or depends on belongs in `references` as a
   `path#LSTART-LEND` excerpt (or `save --attach path#LSTART-LEND`), not as
   prose. "Around line N" or a named scratch file in the body is a smell: the

@@ -331,6 +331,11 @@ The active model is re-detected on every check (from the hook input on Codex,
 from the transcript's latest entry on Claude Code), so mid-session model
 switches re-resolve the threshold automatically.
 
+Pressure notices show the context window and whether it is host-reported or
+assumed, the startup input baseline and room below the threshold. A Claude
+window labeled `assumed` is not a verified model specification. Keep per-model
+quality thresholds deliberate; percent-of-window triggering remains opt-in.
+
 Other variables:
 
 | Variable | Default | Meaning |
@@ -353,6 +358,16 @@ Other variables:
 
 ## How automated does it get
 
+Automatic handoffs pause when pressure returns within ten minutes of resume,
+when a topic produces a third pressure checkpoint within 30 minutes, or when
+AgentsRoom restart intents approach its two-minute / six-per-hour host limits.
+The kit allows five saved restart intents per hour per terminal; it cannot
+observe host restarts made outside the kit. A `paused` save still publishes the
+full checkpoint and keeps it open. Automatic startup and tmux/runner clearing
+respect the pause. Reduce re-entry reads or wait for the budget, then start a
+fresh session and explicitly ask to `continue the handoff`. If AgentsRoom refuses
+a restart, report that refusal and use the same manual recovery.
+
 The ledger returns explicit lookup outcomes: no work, available work, stale work,
 claimed work, or a read error. An empty retrieval ends with a clear message.
 Retrieval is read-only; explicit continuation prepares, verifies, and acknowledges
@@ -366,6 +381,8 @@ The preferred workflow is:
 python3 skills/session-handoff/hooks/handoff_ledger.py lookup
 # One-shot authorized continuation (select, prepare, verify, acknowledge):
 python3 skills/session-handoff/hooks/handoff_ledger.py resume --session SESSION [TOPIC]
+# Reuse a previous retrieval only while its content remains in this context:
+python3 skills/session-handoff/hooks/handoff_ledger.py resume TOPIC --session SESSION --reuse-receipt RECEIPT --catalog installed-skills.json
 # Or step by step:
 python3 skills/session-handoff/hooks/handoff_ledger.py prepare TOPIC --session SESSION
 # After continuation is authorized, reuse content still in this context:

@@ -1,6 +1,6 @@
 {
   "name": "session-handoff",
-  "version": "0.17.3",
+  "version": "0.18.0",
   "description": "Watches the session's own token usage and triggers the session-handoff skill at a configurable threshold. At session start, announces open (untransferred) handoffs, offers a choice when several exist, and tracks resumed state in a ledger.",
   "author": {
     "name": "Ben (Clear Method)"

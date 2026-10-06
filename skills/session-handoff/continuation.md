@@ -8,6 +8,12 @@ The one-shot `resume --session <id> [topic-or-path]` runs steps 1-4 with an
 auto-discovered skill catalog (`$HANDOFF_SKILL_ROOTS`, `~/.agents/skills`,
 `~/.claude/skills`, Codex skills). Use the steps below as the fallback when it
 reports a failed `stage`. `resume <path>` with no flags is the legacy transfer.
+The one-shot command also accepts `--catalog` and `--reuse-receipt` below.
+Its `next_step_section` points to `## Next steps` in the delivered body rather
+than repeating that text. `--legacy-next-step` opts into the older text field.
+`metrics.delivery_bytes` measures serialized output; token and working-room
+figures are estimates. Loaded workflow, reused body/references and declared
+loaded skills count toward context size without being emitted again.
 
 1. If the body and references from a prior retrieval remain in this session context,
    pass its `--reuse-receipt <delivery_receipt>`; omit after compaction or context loss.

@@ -46,6 +46,9 @@ def run_hook(event, env_extra, script=PLUGIN):
     env.pop("HANDOFF_AUTO", None)
     env.pop("HANDOFF_AUTO_RUNNER", None)
     env.pop("AGENTSROOM_AGENT_ID", None)
+    env.pop("HANDOFF_TERMINAL_ID", None)
+    env.pop("HANDOFF_SESSION_ID", None)
+    env.pop("HANDOFF_RUN_ID", None)
     env.pop("TMUX_PANE", None)
     env.pop("CONTEXT_WATCH_AUTORESUME", None)
     env.pop("CONTEXT_WATCH_TOKENS", None)
@@ -70,7 +73,11 @@ def checkpoint(project, sid, environment, resumed=False):
     doc = {'topic':'published-' + sid.lower(), 'description':'fixture',
            'body':'## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nTest.\n'}
     ledger = os.path.join(os.path.dirname(PLUGIN), 'handoff_ledger.py')
-    env = dict(os.environ, HOME=ISOLATED_HOME, USERPROFILE=ISOLATED_HOME, **environment)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(('HANDOFF_', 'AGENTSROOM_', 'CONTEXT_WATCH_', 'AUTORESUME'))}
+    env.update(HOME=ISOLATED_HOME, USERPROFILE=ISOLATED_HOME, CONTEXT_WATCH_ORIGIN='test',
+               CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0')
+    env.update(environment)
     p = subprocess.run([PY,ledger,'save',project,'--session',sid,'--request-id','fixture'],
                        input=json.dumps(doc), env=env, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
@@ -602,7 +609,7 @@ def main():
           "stdout=%r" % p_auto.stdout[:500])
     p_auto_t = run_hook(dict(evt_ar, session_id="verify-" + uuid.uuid4().hex[:8]),
                         dict(env_ar, HANDOFF_AUTO="1"))
-    check("auto-trigger-ends-turn", "end your turn" in p_auto_t.stdout
+    check("auto-trigger-ends-turn", "transition.action" in p_auto_t.stdout and "then stop" in p_auto_t.stdout
           and "type /clear" not in p_auto_t.stdout, "stdout=%r" % p_auto_t.stdout[:500])
 
     # 13b. Stop nudge (warn mode): the trigger fired, the turn ends, no handoff

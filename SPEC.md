@@ -1,7 +1,7 @@
 # Session Handoff Suite — Technical Specification
 
 Spec version 1.0 — 2026-08-11
-Component versions: `session-handoff` skill/plugin 0.17.3 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
+Component versions: `session-handoff` skill/plugin 0.18.0 · `session-handoff-chat` skill 0.6.0 · browser extension 0.2.0
 
 ---
 
@@ -396,7 +396,34 @@ predecessor (an explicit root that disagrees is a `conflict` naming both),
 treats this session's or terminal's own authoritative checkpoint as the default
 predecessor, defaults `verify` to the user-level config `"verify"` then the trusted predecessor's,
 accepts `--topic/--description/--body/--attach`, and returns `transition`
-(`new-session`, `clear`, `tmux`, `runner`, `agents_restart`) with its action.
+(`new-session`, `clear`, `tmux`, `runner`, `agents_restart`, `paused`) with its action.
+Retrying an already transferred/closed save returns transition `none` and never
+requests a restart; retrying a paused publication preserves its pause.
+
+Default resume JSON delivers the full body once and identifies its next-action
+section with `next_step_section`. `--legacy-next-step` or `--fields next_step`
+opts into the older duplicated text field. One-shot resume also accepts the
+installed `--catalog` and same-context `--reuse-receipt` options. Existing
+dependency, expiry, trust and verification checks govern reuse.
+
+Automatic transition guards operate on trusted terminal-scoped records:
+context pressure within 600 seconds of resume, a third pressure save of one
+topic within 1800 seconds, five prior AgentsRoom restart intents within 3600
+seconds, or a different session's intent within 120 seconds returns `paused`.
+Intent counts cannot observe restarts outside the kit; the host remains the
+authority for its limits. Durable resume timestamps back up ephemeral notes.
+A paused checkpoint is fully published and remains open. SessionStart, tmux
+Stop and the headless runner honor its pause; explicit continuation can resume
+it. The runner exits 75. Host refusal preserves the open checkpoint for the
+same manual recovery instead of repeated restart attempts.
+
+Resume measures exact serialized `delivery_bytes` separately from complete
+context `package_bytes` (which also accounts for workflow and reused content).
+Estimated tokens use UTF-8 bytes/4. With an available hook occupancy sample,
+post-resume occupancy adds only newly delivered tokens; remaining working room
+is the handoff threshold minus that estimate, with a warning below 60000 tokens.
+Window/source and threshold/source are reported; unmeasured future schemas and
+reads are excluded. Size, broad-reread and >80-line excerpt warnings stay advisory.
 
 Trust. A checkpoint is trusted only when this machine's own `save` published it:
 the `.published` receipt carries an HMAC-SHA256 of the checkpoint id and content

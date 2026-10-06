@@ -207,7 +207,7 @@ def open_private(path, temp=False):
     return os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8")
 
 
-def write_session_note(cwd, evt, fired):
+def write_session_note(cwd, evt, fired, context=None):
     """Leave this session's facts where handoff_ledger.py new-path (run from
     the agent's shell, no hook stdin) can read them: reason and skills."""
     try:
@@ -218,6 +218,10 @@ def write_session_note(cwd, evt, fired):
                 "transcript_path": evt.get("transcript_path") or "", "ts": time.time()}
         path = _ledger().session_note_path(cwd, sid)
         previous = _ledger().read_session_note(cwd, session=sid)
+        note.update({k: v for k, v in previous.items() if k.startswith('resume')})
+        note.update({k: previous[k] for k in ('observed_occupancy_tokens', 'threshold', 'threshold_source',
+                                            'window', 'window_source', 'model') if k in previous})
+        note.update(context or {})
         entries = load_transcript_tail(evt.get('transcript_path') or '') if evt.get('transcript_path') else []
         agent = detect_agent(evt, entries)
         usage = claude_usage(entries)[0] if agent == 'claude' else codex_usage(entries)[0]
@@ -968,6 +972,16 @@ def handle_stop(evt):
     # An AgentsRoom tab restarts itself; a TMUX_PANE it inherited (the app was
     # launched from inside tmux) belongs to another terminal, so never type there.
     pane = "" if env("AGENTSROOM_AGENT_ID") else env("TMUX_PANE")
+    cwd = evt.get('cwd') or os.getcwd()
+    key = session_key(evt)
+    if auto_mode_on():
+        paused = [r for r in _ledger()._records(cwd) if r['fm'].get('session_id') == key
+                  and r['fm'].get('status') == 'open' and r['fm'].get('automatic_paused')
+                  and _ledger().trusted(r['path'], r['text'], r['fm'])]
+        if paused:
+            if claim_once(evt, '.automatic-paused'):
+                print(json.dumps({'systemMessage': '[context-watch] Automatic handoff paused. Checkpoint remains open at %s. Report the diagnostics; a fresh session can explicitly continue the handoff after addressing re-entry overhead or the restart budget.' % paused[-1]['path']}))
+            sys.exit(0)
     if not auto_mode_on():
         nudge_unwritten_handoff(evt)
     if not pane and not env("HANDOFF_AUTO_RUNNER") and (auto_mode_on() or env("AGENTSROOM_AGENT_ID")):
@@ -1054,6 +1068,9 @@ def auto_cli(argv):
             print("[auto] run %d left no new open handoff; done (exit %d)" % (run, rc),
                   file=sys.stderr)
             return rc
+        if _ledger()._read_fm(fresh[0]['path']).get('automatic_paused'):
+            print('[auto] automatic handoff paused; checkpoint remains open at %s. Start a fresh session and explicitly continue the handoff after addressing re-entry overhead.' % fresh[0]['path'], file=sys.stderr)
+            return 75
         print("[auto] handoff %s written; clearing and resuming" % fresh[0]["path"],
               file=sys.stderr)
         prompt = "resume"
@@ -1085,9 +1102,9 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill,
            source, detail, skill, LEDGER)
     )
     if auto_mode_on():
-        message += (" Fully automatic mode is active: after the handoff is written and "
-                    "verified, end your turn at once without asking the user anything — "
-                    "the session is cleared and the newest handoff resumed automatically.")
+        message += (" Fully automatic mode is active: after publication succeeds, follow "
+                    "the save result's transition.action, then stop. A paused transition "
+                    "preserves the checkpoint for explicit continuation.")
     elif autoresume_on():
         message += (" Autoresume is active: after the handoff is written, tell the user "
                     "to type /clear — the cleared session will announce the open handoff "
@@ -1205,7 +1222,6 @@ def main():
     occupancy = breakdown["occupancy"] + pending
 
     cwd = evt.get("cwd") or os.getcwd()
-    write_session_note(cwd, evt, os.path.exists(first))
     limit, source = resolve_threshold(model, window, cwd)
     if window_source == "reported":
         # Only a host-reported window is trusted for this cap: an assumed 200k
@@ -1219,6 +1235,9 @@ def main():
             source = "%s, capped from %s to window %s - reserve %s" % (
                 source, format(limit, ","), format(window, ","), format(reserve, ","))
             limit = cap
+    write_session_note(cwd, evt, os.path.exists(first), dict(observed_occupancy_tokens=occupancy,
+                       threshold=limit, threshold_source=source, window=window,
+                       window_source=window_source, model=model))
     fired = os.path.exists(first)
     floor_latch = first + ".floor"
     floored = os.path.exists(floor_latch)
@@ -1276,6 +1295,7 @@ def main():
             except OSError:
                 pass
         limit = floor_limit
+        write_session_note(cwd, evt, os.path.exists(first), dict(threshold=limit, threshold_source=source))
     if os.path.exists(second):
         sys.exit(0)  # both notices given; only a compaction re-arms
     need = limit
@@ -1333,16 +1353,35 @@ def main():
     if note_only:
         emit(agent, event_name, build_floor_message(floor, configured_limit, floor_limit, model, agent), "warn")
     import shlex
+    from handoff_protocol import restart_guard
+    guard = restart_guard(cwd, session_id) if auto_mode_on() else None
     message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
                             agent, second=fired, usage_age=usage_age)
     message += " Session identity: %s. Publish with python3 %s save --session %s --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
-    if auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
+    note = _ledger().read_session_note(cwd, session=session_id)
+    startup = note.get('startup_input_tokens')
+    message += (" Context window ~%s [%s]; startup ~%s; working room at startup ~%s tokens. "
+                "Configure HANDOFF_AT or per-model ~/.context-watch/thresholds.json."
+                % (format(window, ','), window_source, format(startup, ',') if type(startup) is int else 'unknown',
+                   format(limit - startup, ',') if type(startup) is int else 'unknown'))
+    if guard and guard['reasons']:
+        message = ("[context-watch] Context pressure; automatic handoff paused (%s). Finish the atomic action, "
+                   "publish the checkpoint with python3 %s save --session %s --input <draft.json>, "
+                   "then follow transition.action and stop. The checkpoint stays open for explicit continuation. "
+                   "Growth diagnostics: %s." % (', '.join(guard['reasons']), shlex.quote(LEDGER),
+                                              shlex.quote(session_id), json.dumps(guard)))
+    elif auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
         # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
         from handoff_protocol import AGENTSROOM_RESTART_PROMPT
-        message += (" Fully automatic mode in AgentsRoom: after save returns outcome saved,"
-                    " make your last action a call to the AgentsRoom agents_restart tool"
-                    " for this agent with prompt \"%s\", so the fresh session picks"
-                    " up this terminal's handoff." % AGENTSROOM_RESTART_PROMPT)
+        message += (" Fully automatic mode in AgentsRoom: follow transition.action after outcome saved; "
+                    "only kind agents_restart calls the AgentsRoom agents_restart tool with prompt \"%s\". "
+                    "If restart is refused, stop and report it; the checkpoint remains open. "
+                    "A fresh session can explicitly continue the handoff." % AGENTSROOM_RESTART_PROMPT)
+    message += (" Minimal save contract: JSON topic, description, body with ## Objective, ## Current state, "
+                "## Next steps; preserve authorization, unresolved decisions and effects already performed. "
+                "Include decisions and code anchors for planned edits. Require only excerpts needed for the "
+                "immediate action; defer other docs/skills until needed. Save supplies metadata and lineage. "
+                "This contract suffices under pressure; load the template only for extra drafting guidance.")
     emit(agent, event_name, message, mode)
 
 

@@ -2,7 +2,7 @@
 name: session-handoff
 description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work on an explicit request or active autoresume. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
 metadata:
-  version: "0.17.3"
+  version: "0.18.0"
 ---
 
 # Session Handoff
@@ -14,7 +14,8 @@ For installation/customization only, read `reference.md`.
 
 ## §1 Wind-down protocol
 
-1. Finish the atomic action in flight, then read `handoff-template.md`.
+1. Finish the atomic action in flight. When a pressure notice supplies the minimal
+   save contract, draft from it; otherwise read `handoff-template.md`.
    `python3 <ledger> save --template` prints a valid JSON draft. Replace its
    facts with the authorized objective, constraints, evidence and exact next step.
    Build a minimal continuation core, not a session report. Require only excerpts
@@ -37,6 +38,9 @@ For installation/customization only, read `reference.md`.
    (Agent-tool subagents) are still running, the save stands, but wait for their
    reports, or confirm their results are durable in commits or the AgentsRoom mailbox,
    before that transition: clearing ends the session that receives their reports.
+   A `paused` transition keeps the checkpoint open: report its diagnostics and
+   stop. If restart is refused, preserve the checkpoint and report the refusal;
+   a fresh session can explicitly `continue the handoff` after the cause is addressed.
 5. Stop. Remaining authorized work belongs to the receiving session.
 
 ## §2 Retrieval
@@ -61,7 +65,11 @@ For unrelated work, mention pending work in one sentence, then continue the user
 
 Only explicit resume/continue or active autoresume authorizes execution.
 Run `python3 <ledger> resume --session <id> [topic-or-path]`: one call selects,
-prepares, verifies if recorded and acknowledges, then returns `next_step`.
+prepares, verifies if recorded and acknowledges. Continue with `## Next steps`
+in its body (`next_step_section` names the section). `--legacy-next-step` also
+returns the text for older consumers. Use `--reuse-receipt` only for body/references
+still in this context, and `--catalog` to declare installed skills already loaded.
 On `choose`, ask which; on `needs-confirmation`, show the user the `verify` command and
-rerun with `--confirm-verify` only if they approve; on a failed `stage`, follow its action. Read [continuation.md](continuation.md) for catalog, preparation, verification
-and acknowledgment. Semantic routing alone selects context, not authorization.
+rerun with `--confirm-verify` only if they approve; on a failed `stage`, follow its action.
+For custom catalogs or staged recovery, read [continuation.md](continuation.md).
+Semantic routing alone selects context, not authorization.

@@ -160,12 +160,12 @@ class ResumeCliTests(unittest.TestCase):
         path = self.save(skills=['tdd'], references=['notes.txt'], verify='true')
         code, out = self.run_cli('resume', '--session', 'new')
         self.assertEqual((code, out['outcome'], out['path']), (0, 'resumed', path), out)
-        self.assertEqual(out['next_step'], 'Run the parser checks.')
+        self.assertEqual(out['next_step_section'], 'Next steps')
         self.assertEqual(out['skills'], [dict(name='tdd', text='red then green')])
         self.assertEqual(out['references'][0]['text'], 'keep the API stable\n')
         self.assertEqual(out['verification']['outcome'], 'verified')
         self.assertIn('## Objective', out['body'])
-        self.assertEqual(out['action'], 'Continue with next_step.')
+        self.assertEqual(out['action'], 'Continue with ## Next steps in the delivered body.')
         self.assertIn('status: resumed', Path(path).read_text())
 
     def test_oversized_resume_output_is_delivered_and_acknowledged(self):
@@ -177,7 +177,7 @@ class ResumeCliTests(unittest.TestCase):
         code, out = self.run_cli('resume', '--session', 'new')
         self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
         self.assertEqual(out['body'], big)
-        self.assertEqual(out['next_step'], 'x' * 19000)
+        self.assertNotIn('next_step', out)
         self.assertIn('status: resumed', Path(path).read_text())
 
     def test_large_dependencies_and_small_budget_are_advisory(self):
