@@ -796,6 +796,22 @@ def stats_cli():
 ANNOUNCE_CAP = 5  # handoffs listed by name; the rest are counted
 
 
+def reserve_handoff_status(evt):
+    """Share one neutral opening notice across hook events in this session."""
+    sid = session_key(evt)
+    if not sid:
+        return True  # No reliable identity: avoid silencing another session.
+    cwd = evt.get('cwd') or os.getcwd()
+    path = _ledger().session_note_path(cwd, sid) + '.status'
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return False
+    except OSError:
+        return True  # Storage failure must not hide useful guidance.
+    return True
+
+
 def handle_session_start(evt, agent):
     """Announce open (untransferred) handoffs; enumerate and offer a choice when several exist."""
     source = evt.get("source") or ""
@@ -823,6 +839,8 @@ def handle_session_start(evt, agent):
     result = lookup(cwd, terminal=terminal_id() if auto_mode_on() else None)
     policy = opening_action('', result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
     label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' and autoresume_on() else 'handoff-status:'
+    if label == 'handoff-status:' and not reserve_handoff_status(evt):
+        sys.exit(0)
     note = label + ' ' + policy + (' This status requires no skill loading.' if label == 'handoff-status:'
                                    else ' An untrusted checkpoint with a verify command asks the user first.')
     print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
@@ -940,6 +958,8 @@ def route_opening_prompt(evt, agent):
             selected = dict(result, items=[h for h in result['items'] if h['topic'] == choice], total=1)
             policy = opening_action('retrieve', selected, session_key(evt))
     label = LABEL.get(agent, LABEL['claude']) if actionable else 'handoff-status:'
+    if label == 'handoff-status:' and not reserve_handoff_status(evt):
+        return
     emit(agent, 'UserPromptSubmit', label + ' ' + policy, 'warn')
 
 

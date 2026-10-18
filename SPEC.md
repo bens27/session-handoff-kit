@@ -503,8 +503,11 @@ Events identify version/origin; tests disable production sinks. `report` exclude
 known tests, separates legacy unknown-origin records, and bounds its read window.
 
 Without autoresume, startup gives a neutral availability hint; only an explicit
-retrieval/resume request gets detailed selection and commands. Informational
-compaction, floor, unrelated-work and error notices do not activate the skill.
+retrieval/resume request gets detailed selection and commands. Neutral opening
+status is emitted once per project/session across SessionStart and UserPromptSubmit;
+explicit handoff commands, compaction guidance and pressure warnings remain available.
+Informational compaction, floor, unrelated-work and error notices do not activate
+the skill.
 Save help and `save --template` expose the draft contract directly.
 
 A preparation response includes an opaque delivery receipt. `--reuse-receipt`

@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Check or sync the local AgentsRoom etiquette split without loading it into context."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+
+TOOLS = {
+    "developer-inboxes": ("Developer inboxes", "Developer inboxes"),
+    "capabilities": ("Capabilities", "Knowing what this install can do"),
+    "backlog": ("Backlog", "Backlog:"),
+    "personal-todos": ("Personal Todo list", "Personal Todo list"),
+    "report-issue": ("Report an AgentsRoom issue", "Reporting a bug in AGENTSROOM ITSELF"),
+    "prompt-library": ("Prompt library", "Prompt Library:"),
+    "marketplace": ("Public catalogs", "Public catalogs"),
+    "skills-library": ("Skills library", "Skills Library:"),
+    "teams-and-saved-agents": ("Teams and saved agents", "Teams & saved agents:"),
+    "agent-mailbox": ("Agent mailbox", "Talking to a teammate"),
+    "workspace-create": ("Create a workspace", "Opening a workspace"),
+    "agent-spawn": ("Spawn an agent", "Spawning a colleague"),
+    "agent-close": ("Close an agent", "Closing a colleague"),
+    "agent-resume": ("Resume an agent", "Reviving a dead conversation"),
+    "agent-restart": ("Restart your own agent", "Starting your own console over"),
+    "agent-catalog": ("Agent catalog", "The agent catalog"),
+    "project-memory": ("Project memory", "Project Memory"),
+    "dev-commands": ("Dev Commands", "Dev Commands:"),
+    "remote-machines": ("Remote machines", "Remote machines"),
+    "databases": ("Databases", "Databases"),
+    "kubernetes": ("Kubernetes clusters", "Kubernetes clusters"),
+    "keep-awake": ("Keep awake", "Keeping this computer awake"),
+    "secrets": ("Secrets", "Secrets"),
+    "connection-management": ("Connection management", "Creating a connection"),
+    "sibling-projects": ("Sibling projects", "Sibling projects"),
+    "app-settings": ("App settings", "App settings"),
+    "product-help": ("Product help", "Product knowledge"),
+    "commit-message": ("Commit message", "Your commit message"),
+    "phone-notifications": ("Phone notifications", "Reaching the user on their phone"),
+    "browser": ("Browser", "Browser:"),
+    "test-runner": ("Test Runner", "Test Runner"),
+}
+BLOCKS = {
+    "qa-authorization": ("QA authorization", "[TOP PRIORITY DIRECTIVE:", "AgentsRoom integration"),
+    "shared-git-workspace": ("Shared Git workspace", "Shared git workspace safety:", "AgentsRoom-owned files"),
+    "agentsroom-owned-files": ("AgentsRoom-owned files and tool failures", "AgentsRoom-owned files", "GOLDEN RULE:"),
+    "authorization": ("Authorization and consent", "GOLDEN RULE:", "Per-tool specifics"),
+    "visible-answers": ("Visible answers", "VISIBLE ANSWER RULE", None),
+}
+
+
+def normalized(text):
+    return " ".join(text.split())
+
+
+def digest(text):
+    return hashlib.sha256(normalized(text).encode()).hexdigest()
+
+
+def body(text):
+    return re.sub(r"\A# [^\n]+\n", "", text).strip()
+
+
+def split_source(text):
+    """Account for every source line; new/renamed rules fail before any writes."""
+    lines = text.splitlines()
+    covered = set()
+    sections = {}
+
+    def locate(prefix):
+        hits = [i for i, line in enumerate(lines) if line.startswith(prefix)]
+        if len(hits) != 1:
+            raise ValueError(f"Expected one source anchor {prefix!r}; found {len(hits)}")
+        return hits[0]
+
+    for name, (title, start, end) in BLOCKS.items():
+        first = locate(start)
+        last = locate(end) if end else len(lines)
+        if last <= first:
+            raise ValueError(f"Invalid source block: {name}")
+        covered.update(range(first, last))
+        sections[name + ".md"] = (title, "\n".join(lines[first:last]).strip())
+    for name, (title, prefix) in TOOLS.items():
+        first = locate("- " + prefix)
+        # Include wrapped lines up to the next top-level rule/blank line.
+        last = first + 1
+        while last < len(lines) and lines[last].strip() and not lines[last].startswith("- "):
+            last += 1
+        covered.update(range(first, last))
+        sections[name + ".md"] = (title, "\n".join(lines[first:last]).strip())
+    index_parts = []
+    for prefix in ("AgentsRoom integration", "These tools wire", "Guiding principle:"):
+        i = locate(prefix)
+        covered.add(i)
+        index_parts.append(lines[i])
+    covered.add(locate("Per-tool specifics (the GOLDEN RULE above governs all of them):"))
+    unknown = [f"line {i + 1}: {line[:100]}" for i, line in enumerate(lines)
+               if line.strip() and i not in covered]
+    if unknown:
+        raise ValueError("Unmapped source content: " + "; ".join(unknown))
+    return sections, index_parts
+
+
+def run(source, directory, deviations, sync=False):
+    sections, index_parts = split_source(source.read_text())
+    index_path = directory / "INDEX.md"
+    index = index_path.read_text()
+    # Validate everything before synchronizing. INDEX is deliberately hand-maintained.
+    for part in index_parts:
+        if normalized(part) not in normalized(index):
+            raise ValueError("INDEX introduction/guiding principle differs from source; review manually")
+    unknown_deviations = set(deviations) - set(sections)
+    if unknown_deviations:
+        raise ValueError(f"Unknown deviation sections: {sorted(unknown_deviations)}")
+    for filename, entry in deviations.items():
+        if (entry.get("status") not in {"pending_review", "approved"}
+                or not entry.get("reason")
+                or not all(re.fullmatch(r"[0-9a-f]{64}", entry.get(k, ""))
+                           for k in ("source_sha256", "split_sha256"))):
+            raise ValueError(f"Invalid deviation record: {filename}")
+    problems = []
+    changed = []
+    matched = 0
+    for filename, (title, expected) in sections.items():
+        path = directory / filename
+        current = path.read_text() if path.exists() else None
+        same = current is not None and normalized(body(current)) == normalized(expected)
+        exception = deviations.get(filename)
+        if exception:
+            pinned = (current is not None and digest(expected) == exception["source_sha256"]
+                      and digest(body(current)) == exception["split_sha256"])
+            if not pinned:
+                problems.append(f"DRIFT {filename}: deviation fingerprints changed; manual review required")
+            elif exception["status"] == "pending_review":
+                problems.append(f"REVIEW {filename}: {exception['reason']}")
+            else:
+                print(f"APPROVED {filename}: {exception['reason']}")
+        elif same:
+            matched += 1
+        elif sync:
+            heading = current.splitlines()[0] if current and current.startswith("# ") else "# " + title
+            path.write_text(heading + "\n\n" + expected + "\n")
+            changed.append(filename)
+        else:
+            problems.append(f"DRIFT {filename}: {'missing' if current is None else 'text differs'}")
+        if not re.search(r"\]\(" + re.escape(filename) + r"\)", index):
+            problems.append(f"INDEX {filename}: missing trigger row; add it manually")
+    for path in sorted(directory.glob("*.md")):
+        if path.name != "INDEX.md" and path.name not in sections:
+            problems.append(f"UNMAPPED {path.name}: not represented in current source")
+    for filename in changed:
+        print(f"SYNCED {filename}")
+    for problem in problems:
+        print(problem)
+    print(f"{len(sections)} sections; {matched} matching; {len(changed)} synced; {len(problems)} findings")
+    return 1 if problems else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=Path.home() / ".agentsroom/roles/_etiquette.md")
+    parser.add_argument("--directory", type=Path, default=Path.home() / ".agentsroom/roles/etiquette")
+    parser.add_argument("--deviations", type=Path,
+                        default=Path(__file__).resolve().parents[1] / "docs/etiquette-deviations.json")
+    parser.add_argument("--sync", action="store_true", help="rewrite mapped sections except recorded deviations; preserve INDEX")
+    args = parser.parse_args()
+    try:
+        deviations = json.loads(args.deviations.read_text())
+        if not isinstance(deviations, dict):
+            raise ValueError("Deviation manifest must be an object")
+        return run(args.source, args.directory, deviations, args.sync)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

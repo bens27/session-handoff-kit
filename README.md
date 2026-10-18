@@ -420,6 +420,8 @@ withhold references outside the project root, and `workspace` flags their
 front matter differs from the submitted draft (`conflict`).
 Release versions are set with `scripts/bump-version X.Y.Z` (`--check` compares).
 
+For the local AgentsRoom etiquette split, see [drift checking and synchronization](docs/etiquette-sync.md).
+
 Run verify only when preparation says
 it is required. Omit `--reuse-receipt` unless the preceding retrieval content
 is still in this session context; compaction invalidates it. Supply an installed skill catalog when the checkpoint names

@@ -422,7 +422,8 @@ def main():
         model = json.loads(open(log2).read().splitlines()[-1]).get("model") or ""
     check("codex-model-from-turn-context", model == "gpt-right", "logged model=%r" % model)
 
-    # 8. Announcer: skips continuation sources (resume, compact, fork); announces on startup/clear
+    # 8. Independent lifecycle sources: startup/clear announce in their new sessions;
+    # resume/fork stay quiet and compact emits its separate recovery guidance.
     proj = os.path.join(tmp, "proj")
     os.makedirs(os.path.join(proj, ".handoffs"))
     with open(os.path.join(proj, ".handoffs", "demo-topic.md"), "w") as f:
@@ -430,7 +431,7 @@ def main():
     for src, expect_announce in (("startup", True), ("clear", True), ("resume", False),
                                  ("compact", False), ("fork", False)):
         ev = {"hook_event_name": "SessionStart", "source": src, "cwd": proj,
-              "session_id": "verify-ss"}
+              "session_id": "verify-ss-" + src}
         p5 = run_hook(ev, {"TMPDIR": latchdir})
         announced = "open handoff(s) available" in p5.stdout
         check("announcer-source-%s" % src, p5.returncode == 0 and announced == expect_announce,

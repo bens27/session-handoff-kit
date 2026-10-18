@@ -103,6 +103,23 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('other session', note)
         self.assertNotIn(' resume ', note)
 
+    def test_neutral_handoff_status_is_once_per_session_across_hook_events(self):
+        startup = self.hook('SessionStart', source='startup')
+        self.assertIn('handoff-status:', json.dumps(startup))
+        self.assertEqual(self.hook('UserPromptSubmit', prompt='resume'), {})
+        self.assertEqual(self.hook('SessionStart', source='startup'), {})
+        fresh = self.hook('SessionStart', session='two', source='startup')
+        self.assertIn('handoff-status:', json.dumps(fresh))
+
+    def test_neutral_status_dedup_preserves_explicit_commands_and_compaction(self):
+        self.assertIn('handoff-status:', json.dumps(self.hook('UserPromptSubmit', prompt='resume')))
+        self.assertEqual(self.hook('SessionStart', source='startup'), {})
+        self.put()
+        for prompt, command in [('retrieve', 'prepare'), ('resume', 'resume')]:
+            out = self.hook('UserPromptSubmit', prompt=prompt)
+            self.assertIn('handoff_ledger.py ' + command + ' ', json.dumps(out))
+        self.assertIn('just compacted', json.dumps(self.hook('SessionStart', source='compact')))
+
     def test_informational_hooks_do_not_activate_handoff_skill(self):
         self.put()
         compact = json.dumps(self.hook('SessionStart', source='compact'))
