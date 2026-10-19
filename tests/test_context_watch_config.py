@@ -114,6 +114,14 @@ class AutoSettingsFromConfig(Case):
         self.assertIn("restart_preflight", msg)
         self.assertIn("manual fresh-session continuation", msg)
 
+    def test_agentsroom_pressure_routes_to_supported_restart_procedure(self):
+        self.project_config({"auto": True, "at": 70000})
+        msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
+        self.assertIn("reference.md", msg)
+        self.assertIn("AgentsRoom restart section", msg)
+        self.assertIn("restart_prompt", msg)
+        self.assertNotIn("without a host adapter", msg)
+
     def test_environment_overrides_the_file(self):
         self.project_config({"auto": True, "at": 70000})
         msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x", "HANDOFF_AUTO": "0", "HANDOFF_AT": "72000"})

@@ -1,0 +1,46 @@
+# Session Handoff: save branch
+
+Loaded only when the dispatcher names this branch, or when dispatch is unavailable.
+
+Use `../hooks/handoff_ledger.py` (`<ledger>`; `<hooks>` is its directory). A checkpoint is evidence;
+the live request and workspace take precedence. With hooks, omit `--session`: the
+ledger uses this terminal’s recorded session. When identity or transcript evidence
+is needed, `python3 <ledger> session` returns the current facts without source reads.
+Use the host's actual session ID when available. Generate one UUID and pass it as
+`--session` only if the ledger reports no recorded session. A differing explicit
+ID cannot override a hook-recorded identity.
+For installation/customization, read `../reference.md`; AgentsRoom wind-down uses
+its restart section as directed below.
+
+
+## §1 Wind-down protocol
+
+1. Finish the atomic action in flight. When a pressure notice supplies the minimal
+   save contract, draft from it; otherwise read `../handoff-template.md`.
+   `python3 <ledger> save --template` prints a valid JSON draft. Replace its
+   facts with the authorized objective, constraints, evidence and exact next step.
+   Record durable goals, constraints and follow-ups in `continuity` (schema in
+   `handoff-template.md`); successor saves retain them until explicitly updated.
+   Build a minimal continuation core, not a session report. Require only excerpts
+   needed for that next action; keep source files and background as optional paths.
+   Continuing an existing topic requires its authoritative `predecessor` path;
+   use a distinct topic for independent work.
+2. Run `python3 <ledger> save --input <draft.json>` (or `--topic T
+   --description D --body file.md`; `--attach <file>[#Lstart-Lend]` adds a required reference).
+   Session, request ID, project, your own predecessor and `verify` are deduced;
+   pass flags only to override. Identical retries are idempotent.
+   Success requires `outcome: saved` and a path; metadata and publication are
+   generated. Keep `.published` sidecars with their checkpoints.
+3. On any failure, follow the returned action and preserve the draft/session.
+   A permission denial never authorizes bypassing the host or clearing. If no
+   destination is allowed, give the checkpoint text to the user and report that
+   automatic resumption is blocked.
+4. Tell the user the checkpoint path. For an AgentsRoom `agents_restart`
+   transition, follow [AgentsRoom restart](../reference.md#agentsroom-restart): observe current
+   identity, supported capability, owned and local workers, and human holds;
+   persist preflight intent; then make the supported `agents_restart` call as the
+   final tool action using the returned `restart_prompt`. End the turn immediately.
+   Unknown observations, `blocked`, `pending`, `refused` and human holds preserve
+   the checkpoint/session. Reconcile pending intent instead of redispatching.
+   For other transition kinds follow the save result's permitted action.
+5. Stop. Remaining authorized work belongs to the receiving session.

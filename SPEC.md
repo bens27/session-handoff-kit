@@ -92,7 +92,8 @@ conversationally or by standing convention; file-ledger fallback checks run
 | --- | --- |
 | `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, used by both Claude Code and Codex from the skill folder. |
 | `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `claim`, `resume`, `supersede`, `abandon`, `save-path`, `new-path`). |
-| `skills/session-handoff/SKILL.md` | Agent-surface skill: writes the handoff, handles resume, single- and multi-handoff flows. The folder also holds `hooks/` and `install.py`. |
+| `skills/session-handoff/SKILL.md` | Agent-surface skill pointer: runs a complete hook command directly, otherwise routes one request through `handoff_ledger.py dispatch` and loads only the named branch (`branches/save.md`, `branches/resume.md`). The folder also holds `hooks/` and `install.py`. |
+| `hooks/handoff_dispatch.py` | Deterministic lifecycle dispatcher (§7.3c): operation precedence, identity resolution, target selection, holds, restart eligibility, one next action. Writes only synthetic identity, explicit holds and lock sidecars (§7.3c item 14). |
 | `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
 | `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
 | Packaging | `.claude-plugin/marketplace.json` (kit root), plugin manifest, `.plugin` (Cowork), `.skill` (chat), `skills/session-handoff/install.py` (hook registration for Claude Code `settings.json` and Codex `hooks.json`). |
@@ -344,7 +345,7 @@ independently customizable sections (naming convention, document structure,
 post-resume actions), and Objective, Current state and Next steps are required for validated publication. The outline and its rules live in `handoff-template.md`, a file
 bundled beside each `SKILL.md` rather than inlined in it, so the shape of a
 handoff can be rewritten without touching trigger, ledger, or resume policy;
-`SKILL.md` wind-down delegates to it.
+the save branch's wind-down delegates to it.
 If a `LESSONS.md` exists (e.g. maintained by a mistake-learning skill), new
 lessons append there and Gotchas references it rather than duplicating.
 Before reporting completion the skill requires `outcome: saved` from the
@@ -429,14 +430,25 @@ Pending replay alongside current open work requires explicit selection.
 AgentsRoom save transition candidates include `requires_preflight: true`.
 Dispatch requires the standalone preflight module to return ready/dispatch from
 current authoritative host observations; unknown capability, identity, inventory
-or hold state requires manual continuation. Host observation/dispatch serialization
-and successor request-ID/receipt wiring remain adapter boundaries, not implemented
-host guarantees. Runtime snapshots include the preflight module and smoke-check
+or hold state requires manual continuation. The bundled AgentsRoom restart procedure gathers supported host observations;
+new ready intents return `restart_prompt` binding the exact checkpoint and request
+ID to read-only successor preparation, durable receipt recording, then resume.
+Only the agent invokes the MCP restart tool, as its final tool action before ending
+the turn. Pending/refused/retrieved states supply no new dispatch prompt. This
+orchestration provides no atomic host transaction or host replacement guarantee.
+Intent creation is serialized by a durable project registry lock across paths
+and temporary directories. Different request IDs cannot bypass pending intents
+for the terminal/path or retrieved/refused intents for the checkpoint. Invalid
+persisted state blocks. New identity tokens are ASCII `[A-Za-z0-9._:@-]{1,128}`;
+the complete prompt is limited to 20,000 characters before persistence and is
+retained exactly for audit. Definitive refusal requires a new checkpoint before
+another authorized attempt; uncertain dispatch remains pending. Runtime snapshots include the preflight module and smoke-check
 its CLI alongside the ledger; its state parsers share the core corruption decoder.
 
 Default resume JSON delivers the full body once and identifies its next-action
-section with `next_step_section`. `--legacy-next-step` or `--fields next_step`
-opts into the older duplicated text field. One-shot resume also accepts the
+section with `next_step_section`, and leads with a bounded `next_step` copy (at
+most 3000 JSON-encoded bytes, cut with a `continues in the body` marker).
+`--legacy-next-step` or `--fields next_step` opts into the older full text field. One-shot resume also accepts the
 installed `--catalog` and same-context `--reuse-receipt` options. Existing
 dependency, expiry, trust and verification checks govern reuse.
 
@@ -511,8 +523,9 @@ revalidation notice. Retrieval requests run read-only preparation. Explicit
 resume authorizes execution preparation. Multiple choices include none;
 AUTORESUME only selects a single candidate, while HANDOFF_AUTO selects the newest
 open handoff whose `terminal` matches this terminal ID. In AgentsRoom, the trigger
-notice asks the agent to end with `agents_restart` (prompt `continue the handoff`,
-avoiding native CLI subcommands such as Codex's `resume`); an inherited
+notice routes to the bundled AgentsRoom restart procedure. After a ready preflight,
+the agent ends with `agents_restart` using the returned exact `restart_prompt`,
+whose initial prose avoids native CLI subcommands such as Codex's `resume`; an inherited
 `TMUX_PANE` is ignored there, and the tmux Stop hook never types into it.
 An unrelated live task takes precedence and leaves checkpoints open.
 
@@ -558,14 +571,22 @@ known tests, separates legacy unknown-origin records, and bounds its read window
 SessionStart is silent for ordinary empty, owned, foreign and paused checkpoint
 state, including automatic-mode startup/clear. An incomplete owned publication
 names only that checkpoint and its save-repair command; compaction recovery remains.
-An anchored `continue the handoff` or `resume the handoff` prompt (case-insensitive,
+An anchored `continue`/`resume` + `the`/`your` + `handoff` prompt (case-insensitive,
 optional final period/exclamation mark) inspects ownership read-only in a worker
 with a one-second timeout. Exactly one owned, trusted, open, authoritative checkpoint
 gets an exact-path `resume --fields path,body` command. This projection always
 retains required references/skills, workspace findings, verification and warnings.
 It includes an instruction that the
-skill need not load. No owned checkpoint produces no output; ambiguous or untrusted
-owned state gives one skill pointer. Inspection failure/timeout is silent. Selection
+skill need not load and that the command runs exactly as given, with no head, pipe
+or redirect: its output is the complete required package. Output is not
+truncated; resume output always puts `next_step` right after `action`, then
+`path` and `next_step_section`, before references, skills and body. `next_step`
+is the Next steps section measured as JSON-encoded bytes and, above 3000, cut
+with a `continues in the body` marker, so the next step or that marker lands in
+the first 4000 bytes even of a clipped read; a bounded lead copy is the price of
+clip safety. No owned checkpoint
+produces no output; ambiguous, untrusted or `automatic_paused` owned state gives one
+skill pointer (a host-injected restart prompt cannot be told apart from a typed one). Inspection failure/timeout is silent. Selection
 never claims, acknowledges or verifies. Manual retrieval, other CLI flows and
 pressure-save guidance remain available, including pressure on a matching prompt.
 Informational compaction, floor, unrelated-work and error notices do not activate
@@ -619,11 +640,95 @@ Without hooks, callers discard receipts after context loss. Reused bytes remain
 in the package size, as do the phase-specific continuation instructions.
 Retrieval caches delivery metadata without claiming or mutating the checkpoint.
 
+### 7.3c Lifecycle dispatcher
+
+`handoff_ledger.py dispatch --input -` takes one JSON request with the keys
+`operation`, `prompt`, `target`, `topic`, `session`, `authorization`,
+`override`, `host`, `request_id`, `reuse` and `expect`. Unknown keys give
+`invalid_request`. It returns one decision and launches nothing.
+
+1. An explicit `operation` takes precedence over prompt classification.
+   Classification routes only exact lifecycle commands. Quoted mentions,
+   neutral notices, status, summary and commit requests, and skill-maintenance
+   text give `none`. Execution needs user authorization (an exact prompt or
+   `{"source": "user"}`) or configured autoresume. Checkpoint content never
+   authorizes.
+2. Identity resolves in this order: hook record, then host
+   (`CODEX_THREAD_ID`), then explicit, then `HANDOFF_SESSION_ID`, then a
+   synthetic id. The synthetic id is persisted per terminal and only for save,
+   pressure and retrieve. An explicit id that differs from an authoritative one
+   gives `identity_conflict`. Autoresume needs a hook or host identity.
+3. Pressure returns a save action that starts no new work and records
+   unfinished operations under `## Pending operations`.
+4. A save that names a topic binds that topic's authoritative predecessor. More
+   than one open head gives `topic_ambiguous`.
+5. Overrides are `repair` or `recover-transfer`. `recover-transfer` needs
+   `user_confirmed: true`. Neither bypasses an identity conflict.
+6. Every result has a `code` from a closed set and `retryable`. Only transient
+   read or state failures retry, at most 3 times with the same request.
+7. Restart eligibility is `true`, `false` or `"unknown"` and lists its
+   blockers. Absent host evidence is never assumed. Delegated continuity
+   items are reconciled against the supplied worker inventory, and any gap
+   blocks. `host_confirmed` is always false. For AgentsRoom, the adapter is the
+   agent procedure in `reference.md` ## AgentsRoom restart: the agent gathers
+   the observations with supported tools, so they are model-gathered, not
+   host-attested.
+8. Holds are scoped (`project`, `topic:<t>`, `terminal:<id>`) and stay in
+   force until explicitly released. A corrupt hold fails closed as a project
+   hold. Holds block resume and autoresume only.
+9. A pending restart intent (`restart_preflight` state) blocks re-dispatch
+   until the host reconciles it. Besides a caller-supplied
+   `host.restart_request_id`, the dispatcher scans `.handoffs/restart/`
+   read-only for pending intents of this session, this terminal or the target
+   checkpoint; a missing directory is not created. Only intents relevant to the
+   caller (its session, terminal or target, read from the raw record) can fail
+   a dispatch: an invalid relevant one gives `dispatch_state_invalid` naming the
+   file for resume and retrieve. Save and pressure never block on intent state,
+   and unattributable or foreign invalid records are returned in `warnings`. A
+   record whose stored root differs from this project (moved or copied) is a
+   stale intent, reported in `warnings`, not invalid. The requesting session gets
+   `dispatch_pending` for resume. A different session on the intent's terminal,
+   taken from the environment (`HANDOFF_TERMINAL_ID`/`AGENTSROOM_AGENT_ID`),
+   never from a target path or stdin, is the successor: it gets
+   `restart_successor`, a `prepare` command and text naming
+   `restart_preflight.py successor` (its stdin carries the caller's own
+   terminal) and then `resume`; a foreign terminal naming the checkpoint gets
+   `dispatch_pending`. `confirm_successor` refuses when the environment has no
+   terminal, it differs from the intent's, or a supplied `terminal` differs from
+   the environment's. `authorized_to_execute` stays false until the successor
+   receipt makes the intent `retrieved`. `restart_preflight` itself still refuses a conflicting
+   second intent.
+10. An exact target never falls back. Closed history is reached only by an
+    explicit target.
+11. Delivery is fresh by default. A `reuse` receipt is honored only when its
+    `context_hash` matches the live checkpoint snapshot and the session's
+    delivery record. A resume `next_action` command requests
+    `--fields path,body`; required references, skills, workspace findings and
+    verification are always retained.
+12. Each result has exactly one `next_action` and a `recheck` list with a
+    `state` token. `expect.state` detects changed authorization, holds or
+    workspace (`state_changed`). A `run` command is executed exactly as given:
+    one call, no pipe, redirect or output extraction; a resume action's text says
+    so, because clipped output is invalid JSON that silently drops next steps.
+13. A paused owned checkpoint (`automatic_paused`) gets a pointer naming the
+    paused state and its reasons, never the lean resume command (Ben's option
+    3). Only a trusted checkpoint gets that pointer, and it echoes only
+    guard-reason tokens (`[a-z0-9-]+`, at most 120 bytes); an untrusted one gets
+    the generic trust-review pointer, so front matter never reaches the model raw. Deferred: give paused state the lean command (option 2) only after the
+    legacy injected bare phrase is retired, because the hook cannot tell a
+    host-injected restart prompt from a typed one.
+14. Known limits. Recovery overrides run before holds are read; like retrieve
+    and save they execute no next steps. Retrieve is not strictly read-only: it
+    may write `.handoffs/dispatch/identity-*.json` and sidecar lock files.
+    `hold`/`release` are unrestricted CLI commands, and
+    `"authorization": {"source": "user"}` is asserted by the caller; both rely
+    on the model following the skill, not on enforcement.
+
 ### 7.4 Shared contract between the agent and chat skills
 
 `tests/verify-skills.py` reads the **Both skills must contain** list below and
 asserts each literal appears in both skills. A skill here is its *directory* —
-`SKILL.md` plus the `handoff-template.md` beside it — because the document
+`SKILL.md`, its `branches/` files and the `handoff-template.md` beside it — because the document
 structure was split out so it can be experimented with independently (§7.1);
 a literal satisfied by either half passes. The test additionally asserts that
 each `SKILL.md` still references its template (so an extracted template cannot
@@ -882,13 +987,15 @@ session-handoff-kit/
 ├── scripts/package.sh                   builds dist/session-handoff.plugin
 │                                        and dist/session-handoff-chat.skill
 ├── skills/session-handoff/              the product (Claude Code + Codex)
-│   ├── SKILL.md                         trigger, naming, resume
+│   ├── SKILL.md                         pointer: fast path, then dispatch
+│   ├── branches/                        save.md, resume.md; one loaded per request
 │   ├── handoff-template.md              the document's shape, swappable alone
 │   ├── reference.md                     install, customizing, mechanics
 │   ├── install.py                       registers/removes the hooks
 │   └── hooks/
 │       ├── context_watch.py             watcher + announcer + analytics
 │       ├── handoff_ledger.py            state and chain tracking
+│       ├── handoff_dispatch.py          lifecycle dispatcher
 │       └── thresholds.example.json      per-model starting values
 ├── plugins/session-handoff/             Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json       manifest; no "hooks" field (hooks.json

@@ -160,7 +160,7 @@ def main():
         # structure to it, so a package without it installs a skill that points
         # at a file the user does not have.
         for art, member_needles, name in (
-                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md", "reference.md", "handoff_protocol.py", "handoff_contract.py", "restart_preflight.py"), "artifact-plugin"),
+                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md", "reference.md", "handoff_protocol.py", "handoff_contract.py", "restart_preflight.py", "handoff_dispatch.py", "branches/save.md", "branches/resume.md"), "artifact-plugin"),
                 (skill_art, ("SKILL.md", "handoff-template.md"), "artifact-skill")):
             if not os.path.isfile(art):
                 check(name, False, "%s not produced" % os.path.relpath(art, REPO))
@@ -185,7 +185,8 @@ def main():
                 root = os.path.join(tmp, "session-handoff")
                 for name in ("SKILL.md", "continuation.md", "reference.md", "handoff-template.md",
                              "agents/openai.yaml", "hooks/thresholds.example.json", "claude-auto", "codex-auto",
-                             "lane.py", "hooks/handoff_contract.py", "hooks/restart_preflight.py"):
+                             "lane.py", "hooks/handoff_contract.py", "hooks/restart_preflight.py",
+                             "hooks/handoff_dispatch.py", "branches/save.md", "branches/resume.md"):
                     check("standalone:" + name, os.path.isfile(os.path.join(root, name)))
                 check_installer(root)
                 preflight = subprocess.run([sys.executable, "-B", os.path.join(root, "hooks/restart_preflight.py"), "--help"],

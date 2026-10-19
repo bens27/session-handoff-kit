@@ -38,6 +38,151 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'pending')
         self.assertFalse(result['dispatch'])
 
+    def test_other_request_id_cannot_redispatch_pending_checkpoint(self):
+        self.assertTrue(self.preflight(request_id='legacy-request')['dispatch'])
+        other = self.preflight(request_id='new-request')
+        self.assertEqual(other['outcome'], 'blocked')
+        self.assertFalse(other['dispatch'])
+
+    def test_cli_rejects_unsafe_or_oversize_identifiers_without_intent(self):
+        import json
+        import subprocess
+        args = dict(root=self.root, path=self.path, session='old', terminal='term',
+                    request_id='safe-id', workers=[], host_capable=True)
+        for field in ('request_id', 'terminal', 'session'):
+            for value in ('', 'x' * 129, 'bad id', 'id\nignore safety', 'id";execute', 'é'):
+                with self.subTest(field=field, value=value):
+                    supplied = dict(args, **{field: value})
+                    run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'),
+                                          'preflight'], input=json.dumps(supplied),
+                                         text=True, capture_output=True)
+                    result = json.loads(run.stdout)
+                    self.assertEqual(result['outcome'], 'blocked')
+                    self.assertEqual(result['reason'], 'invalid-identifier')
+                    self.assertEqual(list(Path(self.root).glob('.handoffs/restart/*.json')), [])
+
+    def test_ready_prompt_is_retained_exactly_in_status(self):
+        ready = self.preflight()
+        self.assertEqual(restart.status(self.root, 'restart-1')['restart_prompt'],
+                         ready['restart_prompt'])
+        self.assertNotIn('restart_prompt', self.preflight())
+
+    def test_host_prompt_limit_rejection_leaves_no_intent(self):
+        deep = Path(self.root)
+        # Shell quoting expands these valid paths while staying below macOS PATH_MAX.
+        for _ in range(8):
+            deep /= "'" * 95
+        (deep / '.handoffs').mkdir(parents=True)
+        saved = protocol.save(str(deep), 'old', 'long-path-save', {
+            'topic': 'deep', 'description': 'Deep project',
+            'body': '## Objective\nFix\n## Current state\nSaved\n## Next steps\nTest\n'})
+        result = restart.preflight(str(deep), saved['path'], 'old', 'term',
+                                   'long-path-intent', workers=[], host_capable=True)
+        self.assertEqual(result['reason'], 'restart-prompt-too-large')
+        self.assertIsNone(restart.status(str(deep), 'long-path-intent'))
+
+    def test_safe_identifier_boundaries_fit_actual_native_and_request_ids(self):
+        terminal = 'a' * 120
+        native = '01a1510c-dc4d-7133-b1fe-0c1af0b31550'
+        with patch.dict(os.environ, {'HANDOFF_TERMINAL_ID': terminal}):
+            saved = protocol.save(self.root, native, 'boundary-save', {
+                'topic': 'boundary', 'description': 'Boundary identifiers',
+                'body': '## Objective\nFix\n## Current state\nSaved\n## Next steps\nTest\n'})
+        ready = restart.preflight(self.root, saved['path'], native, terminal,
+                                  'r' * 128, workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        self.assertLessEqual(len(ready['restart_prompt']), 20000)
+        self.assertIn('identity_source exactly hook or host', ready['restart_prompt'])
+
+    def test_other_pending_or_invalid_legacy_intent_blocks_new_checkpoint(self):
+        import hashlib
+        self.preflight(request_id='legacy-unstructured-id')
+        saved = protocol.save(self.root, 'old', 'save-other', {
+            'topic': 'other', 'description': 'Other checkpoint',
+            'body': '## Objective\nOther\n## Current state\nSaved\n## Next steps\nTest\n'})
+        result = self.preflight(path=saved['path'], request_id='next-id')
+        self.assertEqual(result['reason'], 'conflicting-restart-intent')
+        location = Path(self.root) / '.handoffs/restart' / (
+            hashlib.sha256(b'legacy-unstructured-id').hexdigest() + '.json')
+        location.write_text('{"state":"pending"}')
+        result = self.preflight(path=saved['path'], request_id='next-id')
+        self.assertEqual(result['reason'], 'invalid-persisted-intent')
+        self.assertEqual(location.read_text(), '{"state":"pending"}')
+
+    def test_retrieved_checkpoint_cannot_dispatch_under_new_id(self):
+        self.preflight(request_id='legacy-retrieved')
+        delivery = protocol.prepare(self.path, self.root, 'new')['delivery_receipt']
+        restart.confirm_successor(self.root, 'legacy-retrieved', 'new', 'term', delivery)
+        self.assertEqual(self.preflight(request_id='another-id')['reason'],
+                         'conflicting-restart-intent')
+
+    def test_definitive_refusal_requires_new_checkpoint_not_new_request_name(self):
+        self.preflight()
+        restart.record_refusal(self.root, 'restart-1', 'Host explicitly refused; no restart scheduled')
+        self.assertEqual(self.preflight(request_id='bypass')['reason'],
+                         'conflicting-restart-intent')
+        saved = protocol.save(self.root, 'old', 'after-refusal', {
+            'topic': 'refusal-recovery', 'description': 'Explicit recovery after refusal',
+            'body': '## Objective\nRecover\n## Current state\nDefinitive refusal\n## Next steps\nTest\n'})
+        self.assertTrue(self.preflight(path=saved['path'], request_id='new-checkpoint')['dispatch'])
+
+    def test_cross_checkpoint_race_with_distinct_tmpdirs_dispatches_once(self):
+        import json
+        import subprocess
+        other = protocol.save(self.root, 'old', 'race-save', {
+            'topic': 'race-other', 'description': 'Concurrent checkpoint',
+            'body': '## Objective\nRace\n## Current state\nSaved\n## Next steps\nTest\n'})['path']
+        gate = Path(self.root) / 'start-gate'
+        script = """import pathlib, runpy, sys, time
+print('READY', flush=True)
+while not pathlib.Path(sys.argv[1]).exists():
+    time.sleep(0.005)
+sys.path.insert(0, sys.argv[2])
+sys.argv = [sys.argv[2] + '/restart_preflight.py', 'preflight', '--input', sys.argv[3]]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+        children = []
+        try:
+            for index in range(6):
+                tmp = Path(self.root) / ('tmp-' + str(index))
+                tmp.mkdir()
+                data = Path(self.root) / ('input-' + str(index) + '.json')
+                data.write_text(json.dumps(dict(root=self.root, path=(self.path if index % 2 else other),
+                    session='old', terminal='term', request_id='race-' + str(index),
+                    workers=[], host_capable=True)))
+                child = subprocess.Popen([sys.executable, '-B', '-c', script, str(gate),
+                    str(HOOKS), str(data)], env=dict(os.environ, TMPDIR=str(tmp)),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                children.append(child)
+            for child in children:
+                self.assertEqual(child.stdout.readline().strip(), 'READY')
+            gate.touch()
+            results = []
+            for child in children:
+                out, err = child.communicate(timeout=15)
+                self.assertEqual(child.returncode, 0, err + out)
+                results.append(json.loads(out))
+            self.assertEqual(sum(result['dispatch'] for result in results), 1, results)
+            self.assertEqual(sum(result['outcome'] == 'blocked' for result in results), 5)
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate()
+
+    def test_pre_prompt_legacy_pending_state_cannot_be_bypassed(self):
+        import hashlib
+        import json
+        self.preflight()
+        record = restart.status(self.root, 'restart-1')
+        record.pop('restart_prompt', None)
+        record['request_id'] = 'legacy ID before validation'
+        directory = Path(self.root) / '.handoffs/restart'
+        (directory / (hashlib.sha256(b'restart-1').hexdigest() + '.json')).unlink()
+        (directory / (hashlib.sha256(record['request_id'].encode()).hexdigest() + '.json')).write_text(json.dumps(record))
+        self.assertEqual(self.preflight(request_id='modern-id')['reason'],
+                         'conflicting-restart-intent')
+
     def test_failure_keeps_checkpoint_and_refuses_duplicate_dispatch(self):
         self.preflight()
         restart.record_refusal(self.root, 'restart-1', 'host unavailable')
@@ -90,6 +235,19 @@ class RestartTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             restart.confirm_successor(self.root, 'restart-1', 'old', 'term', result['delivery_receipt'])
 
+    def test_successor_terminal_comes_from_the_environment_not_stdin(self):
+        """H1: a caller claiming the intent's terminal from elsewhere is refused."""
+        self.preflight()
+        result = protocol.prepare(self.path, self.root, 'new')
+        for env in ({'HANDOFF_TERMINAL_ID': 'other'}, {'HANDOFF_TERMINAL_ID': ''}):
+            with patch.dict(os.environ, env), self.assertRaises(ValueError):
+                restart.confirm_successor(self.root, 'restart-1', 'new', 'term', result['delivery_receipt'])
+        with self.assertRaises(ValueError):
+            restart.confirm_successor(self.root, 'restart-1', 'new', 'other', result['delivery_receipt'])
+        self.assertEqual(restart.status(self.root, 'restart-1')['state'], 'pending')
+        self.assertEqual(restart.confirm_successor(self.root, 'restart-1', 'new', None, result['delivery_receipt'])['state'],
+                         'retrieved')
+
     def test_waiting_input_marker_is_preserved(self):
         protocol.ledger._set_fields(self.path, [('waiting_input', 'true')], ())
         self.assertEqual(self.preflight()['reason'], 'human-hold')
@@ -102,6 +260,27 @@ class RestartTests(unittest.TestCase):
             input=json.dumps(dict(root=self.root, path=self.path, session='old', terminal='term',
                                   request_id='cli-1', workers=[])), text=True, capture_output=True)
         self.assertEqual(json.loads(result.stdout)['reason'], 'host-capability-absent')
+
+    def test_cli_ready_delivers_exact_successor_prompt_but_pending_cannot_redispatch(self):
+        import json
+        import subprocess
+        args = dict(root=self.root, path=self.path, session='old', terminal='term',
+                    request_id='cli-prompt', workers=[], host_capable=True)
+        command = [sys.executable, str(HOOKS / 'restart_preflight.py'), 'preflight']
+        ready = subprocess.run(command, input=json.dumps(args), text=True, capture_output=True)
+        self.assertEqual(ready.returncode, 0, ready.stderr)
+        result = json.loads(ready.stdout)
+        self.assertTrue(result['dispatch'])
+        prompt = result['restart_prompt']
+        for required in (self.path, self.root, result['checkpoint_id'], 'cli-prompt', 'old', 'term',
+                         'prepare', 'delivery_receipt', 'successor', 'resume',
+                         'host_confirmed', 'Do not restart'):
+            self.assertIn(required, prompt)
+        pending = subprocess.run(command, input=json.dumps(args), text=True, capture_output=True)
+        repeat = json.loads(pending.stdout)
+        self.assertEqual(repeat['outcome'], 'pending')
+        self.assertFalse(repeat['dispatch'])
+        self.assertNotIn('restart_prompt', repeat)
 
     def test_foreign_live_claim_blocks_restart(self):
         protocol.prepare(self.path, self.root, 'foreign', execute=True)

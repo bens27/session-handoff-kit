@@ -234,14 +234,16 @@ opts out); elsewhere it is opt-in. The default requests a gated transition,
 not permission or proof that a host restart can occur.
 
 In AgentsRoom, save returns an `agents_restart` candidate with
-`requires_preflight: true`. This kit supplies no authoritative host adapter for
-current capability, identity, complete worker inventory and hold state. Without
-those observations, publish the checkpoint, stop, and start a fresh session
-manually with `continue the handoff`. Do not invent observations to pass
-preflight. When a host adapter supplies them, only `outcome: ready` and
-`dispatch: true` permit its `agents_restart` call with prompt
-`continue the handoff`; the prompt avoids Codex's native `resume` picker.
-Host process replacement and successor wiring remain separate acceptance checks.
+`requires_preflight: true`. Follow the bundled
+[restart procedure](skills/session-handoff/reference.md#agentsroom-restart) to observe
+current capability, identity, complete worker inventory and hold state with
+supported host tools. Unknown observations preserve the checkpoint for manual
+fresh-session continuation; inventing observations cannot satisfy preflight.
+Only `outcome: ready` and `dispatch: true` permit a final `agents_restart` call
+using the exact returned `restart_prompt`, then immediate turn completion.
+That prompt passes checkpoint/request identity to successor preparation and
+receipt recording before resume. Host acceptance, native session replacement
+and successor delivery remain separate evidence and acceptance checks.
 AgentsRoom takes precedence over inherited `TMUX_PANE`, so its fallback never
 types into another terminal.
 
@@ -559,7 +561,7 @@ and `confirm_successor` respectively.
 host_capable=False, hold=False)` validates authoritative open publication and
 checkpoint identity and live claim ownership under the publisher and checkpoint
 locks, then durably writes an intent before returning
-`outcome: ready, dispatch: true`. The host adapter supplies current identity,
+`outcome: ready, dispatch: true`. The caller supplies observed current identity,
 capability, complete worker inventory and intentional hold state, including
 `waiting_input`. Unknown or malformed inventory or absent host capability blocks. Inventory is
 a list of objects with unique nonempty `id` strings. Each worker
@@ -568,8 +570,16 @@ adapter first retrieves and materializes the report. A worker's assertion that
 it finished is insufficient. Local report hashes prove bytes, not correctness
 or that a running worker cannot produce further results.
 
-The adapter calls the host only for `dispatch: true`, using prompt
-`continue the handoff`. Repeated requests never dispatch again. A crash between
+The agent calls the supported host tool only for `dispatch: true`, using the
+returned `restart_prompt`. This self-contained prompt binds the exact root,
+checkpoint, predecessor identity, terminal and request ID; it orders successor
+preparation, delivery receipt recording and resume. Pending/refused/retrieved
+responses carry no new restart prompt. The exact prompt is persisted for audit;
+new identifiers are bounded ASCII tokens and the final prompt is checked against
+the host limit before intent persistence. A durable registry lock also prevents
+renaming requests from bypassing pending same-terminal/path or retrieved/refused
+same-checkpoint intents, including across different checkpoint paths. Invalid
+persisted records fail closed. Repeated requests never dispatch again. A crash between
 intent and host response leaves `pending`; reconcile it with the host before
 creating a new request. `record_refusal(root, request_id, reason)` persists a
 returned failure without closing the checkpoint. `status(root, request_id)`
@@ -579,20 +589,27 @@ preserved for inspection; only a missing record permits a new intent.
 
 After read-only `prepare`, the successor calls
 `confirm_successor(root, request_id, session, terminal, delivery_receipt)` with
-its new session ID and the returned opaque delivery token. The module validates
+its new session ID and the returned opaque delivery token. The terminal that
+counts is the environment's: the call is refused when it is unset or differs
+from the intent's, and a supplied `terminal` must equal it. The module validates
 the local delivery receipt, checkpoint and required dependency fingerprints.
 The receipt must have been created strictly after the durable intent and be no
 more than two hours old; an already confirmed retry remains idempotent. It
-and durably records `retrieved`. Retrieval authorizes no execution and clears
+durably records `retrieved`. Retrieval authorizes no execution and clears
 no human hold. Every result retains `host_confirmed: false`: caller-provided
 JSON cannot prove host replacement, inventory completeness or agent reading.
-A host adapter must supply those observations separately. Save transitions now
+The agent must gather those observations separately; JSON fields are assertions,
+not an authority source. In AgentsRoom the adapter is the agent procedure in
+`reference.md` ## AgentsRoom restart: observations are model-gathered with
+supported tools, not host-attested. Save transitions now
 mark `requires_preflight: true`, and pressure guidance requires ready/dispatch
-before a host call. Transition kind alone is not dispatch permission. No host
-adapter is supplied here: capability/identity/inventory observation, host-call
-serialization and successor request-ID propagation/receipt recording still need
-explicit host integration. Without those observations, use manual fresh-session
-continuation; this module never restarts a host.
+before a host call. Transition kind alone is not dispatch permission. For AgentsRoom, follow the bundled [restart procedure](skills/session-handoff/reference.md#agentsroom-restart).
+It maps supported host tools to these inputs and makes the final self-restart
+call with the exact returned prompt. It is agent orchestration, not a Python MCP
+client or atomic host transaction. Unknown observations require manual continuation;
+the module never restarts a host. Advertised support, installed version, observed
+dispatch and native successor proof remain separate evidence. The controlled
+proof procedure in that document is required before claiming automatic recovery.
 
 ### Lane ownership and side branches
 
@@ -651,7 +668,9 @@ matches `base`.
 session-handoff-kit/
 ├── .claude-plugin/marketplace.json      # makes this repo a Claude Code marketplace
 ├── skills/session-handoff/              # the product: one folder for Claude Code + Codex
-│   ├── SKILL.md                         # trigger, naming, resume
+│   ├── SKILL.md                         # small pointer: fast path, then one dispatch
+│   ├── branches/save.md                 # wind-down protocol, loaded only for save/pressure
+│   ├── branches/resume.md               # retrieval + authorized continuation, loaded only for those
 │   ├── continuation.md                  # authorized continuation: prepare, verify, acknowledge
 │   ├── handoff-template.md              # the handoff's shape — edit this to experiment
 │   ├── reference.md                     # installing, customizing, mechanics; read on demand
@@ -664,6 +683,7 @@ session-handoff-kit/
 │       ├── context_watch.py             # the unified watcher
 │       ├── handoff_ledger.py            # tracks handoff state and chains
 │       ├── handoff_protocol.py          # deterministic save/prepare/verify/acknowledge protocol
+│       ├── handoff_dispatch.py          # one validated lifecycle decision per request (dispatch/hold/release)
 │       └── thresholds.example.json      # sample per-model threshold config
 ├── plugins/session-handoff/             # Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json
@@ -677,11 +697,66 @@ session-handoff-kit/
 └── chrome-extension/                    # Chrome/Edge: pre-populate the new-chat init prompt
 ```
 
+## Lifecycle dispatcher
+
+`SKILL.md` is a small pointer. A complete hook-supplied resume or prepare
+command still runs directly. Anything else goes through one call:
+
+    echo '{"prompt": "continue the handoff"}' | python3 hooks/handoff_ledger.py dispatch --input -
+
+The result carries `outcome` (`proceed`, `ask`, `none`, `blocked`), a typed
+`code` with `retryable`, the resolved `operation` and `identity` (with its
+provenance), `authorized_to_execute`, the selected `target`, active `holds`,
+`restart` eligibility, one `next_action`, and a `state` token. The agent loads
+only the `branch` file the result names.
+
+- **Authorization.** Only the user's exact lifecycle command, an explicit
+  `{"source": "user"}` authorization, or configured autoresume authorizes
+  execution. Checkpoint text never does.
+- **Targets.** An exact target never falls back to other work. Zero, one or
+  many owned checkpoints give `none`, `proceed` or `ask` with a stable list.
+- **Holds.** `handoff_ledger.py hold --scope project|topic:<t>|terminal:<id>
+  --reason R` blocks resume and autoresume until `release --scope ...`. Saves
+  and retrievals still proceed.
+- **Restart eligibility** is `true`, `false` or `"unknown"`, computed only from
+  `host` observations the caller supplies (`restart_capable`, `workers`,
+  `hold`, `restart_request_id`). Delegated continuity items whose owner is
+  missing from the worker inventory block it, as do workers with no
+  delegation. `host_confirmed` is always `false`: the kit cannot observe the
+  host.
+- **Recheck.** Pass `"expect": {"state": <token>}` before you act on an older
+  decision. Changed authorization, holds or workspace give `state_changed`.
+- **Delivery.** A resume `next_action` is one command with `--fields
+  path,body`, run exactly as given (no pipe or output extraction). The prompt
+  hook recognizes `continue`/`resume` + `the`/`your` + `handoff`, so both
+  common phrasings take the hook fast path without loading the skill. Both
+  the hook and the dispatcher say the output is the complete required package
+  and must not be clipped. Resume output still leads with a bounded
+  `next_step` (at most 3000 encoded bytes, marked when cut) right after
+  `action`. A trusted checkpoint paused by the restart guard gets a
+  pointer that names the paused state and its reason tokens, never the fast path;
+  a lean command for paused state waits until the legacy injected phrase is
+  retired.
+- **Pending restarts** are found through a supplied `restart_request_id` or a
+  read-only scan of `.handoffs/restart/` for this session, terminal or target.
+  The requesting session is blocked (`dispatch_pending`); its successor on the
+  intent's terminal, as the environment reports it, gets `restart_successor`:
+  prepare, record the successor receipt, then resume. Another terminal naming
+  the checkpoint gets `dispatch_pending`. Only relevant invalid intents block,
+  and only resume and retrieve; save and pressure never block, and foreign,
+  unattributable or stale (moved-project) records come back as `warnings`.
+- **Known limits.** Recovery overrides ignore holds (they execute no next
+  steps); retrieve may write identity and lock sidecars; `hold`/`release` and
+  `{"source": "user"}` rely on model compliance, not enforcement.
+
+Trigger fixtures in `tests/triggers/` are static evidence: `tests/test_dispatch.py`
+classifies the should-not corpus locally, with no model call.
+
 ## Changing the shape of a handoff
 
 The handoff document's structure is deliberately not inside `SKILL.md`. Each
 skill ships a `handoff-template.md` next to it holding the front matter, the
-body outline, and the length rules; `SKILL.md` §1 just points at it. To try a
+body outline, and the length rules; the save branch (`branches/save.md` §1) just points at it. To try a
 different handoff shape — extra sections, fewer sections, a different order —
 edit `handoff-template.md` alone. Trigger thresholds, file naming, the ledger,
 and the resume flow are untouched by that edit.

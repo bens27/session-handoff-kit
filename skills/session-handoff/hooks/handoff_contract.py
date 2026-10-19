@@ -7,8 +7,11 @@ DELIVERY_FIELDS = frozenset({
     'path', 'body', 'references', 'skills', 'next_step_section', 'verification',
     'verify_required', 'trusted', 'workspace', 'optional_references',
     'withheld_references', 'delivery_receipt', 'reused_from', 'predecessor',
-    'continuity',
+    'continuity', 'next_step',
 })
+# Small orientation keys first; large content last so a clipped read keeps the next step
+LEADING = ('outcome', 'action', 'next_step', 'stage', 'path', 'next_step_section')
+TRAILING = ('references', 'skills', 'body')
 DIAGNOSTIC_FIELDS = frozenset({
     'outcome', 'action', 'stage', 'warnings', 'errors', 'problems',
     'withheld_references', 'exit_code', 'log', 'excerpt', 'verify',
@@ -18,12 +21,14 @@ DIAGNOSTIC_FIELDS = frozenset({
 
 def project_output(result, fields=None):
     """Select optional output without discarding a successful transfer's context."""
-    if not fields:
-        return result
-    keep = DIAGNOSTIC_FIELDS | {field.strip() for field in fields.split(',')}
-    if result.get('outcome') in ('prepared', 'retrieved', 'resumed'):
-        keep |= DELIVERY_FIELDS
-    return {key: value for key, value in result.items() if key in keep}
+    if fields:
+        keep = DIAGNOSTIC_FIELDS | {field.strip() for field in fields.split(',')}
+        if result.get('outcome') in ('prepared', 'retrieved', 'resumed'):
+            keep |= DELIVERY_FIELDS
+        result = {key: value for key, value in result.items() if key in keep}
+    order = {key: i for i, key in enumerate(LEADING)}
+    order.update((key, len(LEADING) + 1 + i) for i, key in enumerate(TRAILING))
+    return dict(sorted(result.items(), key=lambda item: order.get(item[0], len(LEADING))))
 
 
 def continuity_items(value):

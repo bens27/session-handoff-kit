@@ -12,3 +12,5 @@ What did we decide about the ledger fallback path?
 Draft release notes for the new packaging behavior.
 Make a short progress summary for the standup.
 Turn these notes into an implementation checklist.
+Edit the session-handoff skill pointer description to mention resume.
+What does "continue the handoff" do in this kit?

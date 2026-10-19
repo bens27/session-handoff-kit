@@ -12,6 +12,10 @@ CHAT = os.path.join(REPO, "chat/session-handoff-chat/SKILL.md")
 # so it can be rewritten on its own. A "skill" is therefore its directory, not
 # one file: shared-contract literals are asserted against SKILL.md + template.
 AGENT_TEMPLATE = os.path.join(REPO, "skills/session-handoff/handoff-template.md")
+# SKILL.md is a small pointer; the dispatcher names the one branch to load.
+AGENT_SAVE = os.path.join(REPO, "skills/session-handoff/branches/save.md")
+AGENT_RESUME = os.path.join(REPO, "skills/session-handoff/branches/resume.md")
+POINTER_MAX_BYTES = 2500
 CHAT_TEMPLATE = os.path.join(REPO, "chat/session-handoff-chat/handoff-template.md")
 PLUGIN_JSON = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
 SPEC = os.path.join(REPO, "SPEC.md")
@@ -58,6 +62,36 @@ def main():
         return 1
 
     a_tpl = open(AGENT_TEMPLATE).read()
+    for path in (AGENT_SAVE, AGENT_RESUME):
+        check("agent-branch-present:%s" % os.path.basename(path), os.path.exists(path))
+    a_save = open(AGENT_SAVE).read() if os.path.exists(AGENT_SAVE) else ""
+    a_resume = open(AGENT_RESUME).read() if os.path.exists(AGENT_RESUME) else ""
+    size = len(a.encode("utf-8"))
+    check("agent-pointer-small", size <= POINTER_MAX_BYTES,
+          "SKILL.md is %d bytes; keep the pointer at or under %d" % (size, POINTER_MAX_BYTES))
+    # A pointer is still a real skill: hosts discover and route it by its
+    # frontmatter, so every characteristic stays present and current.
+    fm = re.match(r"\A---\n(.*?)\n---\n", a, re.DOTALL)
+    front = fm.group(1) if fm else ""
+    after = a[fm.end():] if fm else a
+    check("agent-frontmatter-present", fm is not None, "SKILL.md must open with a --- frontmatter block")
+    check("agent-frontmatter-name", re.search(r"(?m)^name:\s*session-handoff\s*$", front) is not None,
+          "frontmatter must declare name: session-handoff")
+    desc = re.search(r'(?m)^description:\s*"?(.+?)"?\s*$', front)
+    check("agent-frontmatter-description",
+          desc is not None and desc.group(1).strip() and "Do not use" in desc.group(1),
+          "frontmatter description must be nonempty and keep its 'Do not use' sentence")
+    triggers = re.search(r"(?m)^triggers:\s*\n((?:[ \t]+-[ \t]+\S.*\n?)+)", front + "\n")
+    check("agent-frontmatter-triggers", triggers is not None,
+          "frontmatter must carry a nonempty triggers list")
+    for phrase in ("continue the handoff", "continue your handoff"):
+        check("agent-frontmatter-trigger:%s" % phrase,
+              triggers is not None and re.search(r"(?m)^[ \t]+-[ \t]+%s\s*$" % re.escape(phrase), triggers.group(1)) is not None,
+              "triggers must include %r" % phrase)
+    check("agent-h1-title", re.search(r"(?m)^# Session Handoff\s*$", after) is not None,
+          "SKILL.md must keep the H1 '# Session Handoff' after the frontmatter")
+    for needle in ("dispatch --input -", "branches/save.md", "branches/resume.md", "complete resume or prepare command"):
+        check("agent-pointer-routes:%s" % needle, needle in a, "SKILL.md pointer must mention %r" % needle)
     chat_tpl = open(CHAT_TEMPLATE).read()
 
     # Content the next step needs travels as a line-range excerpt, not as a
@@ -68,7 +102,7 @@ def main():
           "handoff-template.md must steer needed files into path#L references and flag 'around line N' prose")
 
     # Contract literals may live in either half of a skill directory.
-    agent_skill = a + "\n" + a_tpl
+    agent_skill = "\n".join((a, a_tpl, a_save, a_resume))
     chat_skill = chat + "\n" + chat_tpl
 
     for text, tpl_name, name in ((a, "handoff-template.md", "agent"),
@@ -99,7 +133,7 @@ def main():
     # Wind-down invariant, independent of wording: §1 invokes `<ledger> save`,
     # requires `outcome: saved`, then reports to the user, then stops. A
     # handoff announced before the ledger confirms it may not be discoverable.
-    wind = re.search(r"^## §1 .*?(?=^## §2)", a, re.DOTALL | re.MULTILINE)
+    wind = re.search(r"^## §1 .*", a_save, re.DOTALL | re.MULTILINE)
     check("agent-wind-down-section-present", wind is not None)
     if wind:
         sect = wind.group(0)

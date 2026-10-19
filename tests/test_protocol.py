@@ -598,13 +598,36 @@ with patch('time.time', return_value=float(sys.argv[2])):
                 out = json.dumps(self.hook('UserPromptSubmit', prompt=prompt))
                 self.assertIn(Path(saved['path']).name, out)
                 self.assertIn('--fields path,body', out)
+
+    def test_lean_prompt_matches_transcript_phrasings(self):
+        # Real request lines: session 02791d12 line 7 and session 13f3ad3e line 7.
+        saved = json.loads(self.save().stdout)
+        for prompt in ('Continue your handoff', 'Continue the handoff', 'resume your handoff.'):
+            with self.subTest(prompt=prompt):
+                text = self.hook('UserPromptSubmit', prompt=prompt)['hookSpecificOutput']['additionalContext']
+                self.assertIn(Path(saved['path']).name, text)
+                self.assertIn('--fields path,body', text)
+                self.assertIn('skill does not need to load', text)
+                self.assertNotIn('head -c', text)
+                self.assertIn('exactly as given', text)
         self.assertEqual(self.hook('UserPromptSubmit', session='foreign', prompt='continue the handoff'), {})
+
+    def test_lean_prompt_counts_a_topic_chain_once(self):
+        # Session aa95d3ec ruled this out: a predecessor left status: open on disk is
+        # superseded at read time, so a chain never makes the hook ask for selection.
+        first = json.loads(self.save().stdout)
+        latest = json.loads(self.save('continue', predecessor=first['path']).stdout)
+        text = self.hook('UserPromptSubmit', prompt='Continue the handoff')['hookSpecificOutput']['additionalContext']
+        self.assertIn(Path(latest['path']).name, text)
+        self.assertNotIn(Path(first['path']).name, text)
+        self.assertIn('--fields path,body', text)
 
     def test_lean_prompt_ignores_nonmatching_requests(self):
         self.env['AGENTSROOM_AGENT_ID'] = 'agent-a'
         self.save()
         for prompt in ['discuss the handoff', 'continue the handoff and delete files',
-                       'do not resume the handoff', 'please continue the handoff']:
+                       'do not resume the handoff', 'please continue the handoff',
+                       'continue your handoff work later', 'continue their handoff']:
             with self.subTest(prompt=prompt):
                 self.assertEqual(self.hook('UserPromptSubmit', prompt=prompt), {})
 

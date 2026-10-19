@@ -136,7 +136,10 @@ class SaveCliTests(unittest.TestCase):
         code, out = self.save(env={'AGENTSROOM_AGENT_ID': 'a1'})
         self.assertEqual(code, 0, out)
         self.assertEqual(out['transition']['kind'], 'agents_restart')
-        self.assertIn('with prompt "continue the handoff"', out['transition']['action'])
+        self.assertIn('reference.md', out['transition']['action'])
+        self.assertIn('AgentsRoom restart section', out['transition']['action'])
+        self.assertIn('restart_prompt', out['transition']['action'])
+        self.assertNotIn('with prompt "continue the handoff"', out['transition']['action'])
         self.assertNotIn('with prompt "resume"', out['transition']['action'])
 
     def test_large_checkpoint_is_saved_without_truncation(self):

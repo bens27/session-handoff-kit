@@ -804,7 +804,7 @@ ANNOUNCE_CAP = 5  # handoffs listed by name; the rest are counted
 
 
 def lean_resume_prompt(prompt):
-    return bool(re.fullmatch(r'\s*(?:continue|resume) the handoff[.!]?\s*',
+    return bool(re.fullmatch(r'\s*(?:continue|resume) (?:the|your) handoff[.!]?\s*',
                              str(prompt or ''), re.I))
 
 
@@ -1419,13 +1419,14 @@ def main():
                                               shlex.quote(session_id), json.dumps(guard)))
     elif auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
         # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
-        from handoff_protocol import AGENTSROOM_RESTART_PROMPT
-        message += (" Fully automatic mode in AgentsRoom: follow transition.action after outcome saved; "
-                    "only kind agents_restart calls the AgentsRoom agents_restart tool with prompt \"%s\". "
-                    "First require restart_preflight outcome ready and dispatch true from authoritative host observations; "
-                    "without a host adapter, stop for manual fresh-session continuation. "
-                    "If restart is refused, stop and report it; the checkpoint remains open. "
-                    "A fresh session can explicitly continue the handoff." % AGENTSROOM_RESTART_PROMPT)
+        procedure = shlex.quote(os.path.join(os.path.dirname(LEDGER), '..', 'reference.md'))
+        message += (" Fully automatic mode in AgentsRoom: after outcome saved and kind agents_restart, "
+                    "read the AgentsRoom restart section of %s for supported host observation and dispatch. "
+                    "Require restart_preflight outcome ready and dispatch true; call agents_restart only "
+                    "as the final tool action with its returned restart_prompt, then end the turn. "
+                    "Unknown identity/inventory/hold state requires manual fresh-session continuation. "
+                    "A pending intent needs reconciliation, not redispatch. Preserve a refused checkpoint "
+                    "and report the refusal." % procedure)
     message += (" Minimal save contract: JSON topic, description, body with ## Objective, ## Current state, "
                 "## Next steps; preserve authorization, unresolved decisions and effects already performed. "
                 "Include decisions and code anchors for planned edits. Require only excerpts needed for the "

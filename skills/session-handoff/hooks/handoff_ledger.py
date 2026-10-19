@@ -723,6 +723,9 @@ def _cli(argv):
     if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history", "report", "resume", "wait", "session", "repair", "recover-transfer") and not legacy_resume:
         from handoff_protocol import cli
         return cli(argv)
+    if cmd in ("dispatch", "hold") or (cmd == "release" and args[:1] == ["--scope"]):
+        from handoff_dispatch import cli as dispatch_cli
+        return dispatch_cli(argv)
     if cmd == "list":
         as_json = "--json" in args
         args = [a for a in args if a != "--json"]

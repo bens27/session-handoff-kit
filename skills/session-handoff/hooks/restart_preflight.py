@@ -8,6 +8,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 import sys
 import time
@@ -64,6 +66,9 @@ def status(root, request_id):
                     for w in workers)
         if valid:
             valid = len({w['id'] for w in workers}) == len(workers)
+    if valid and 'restart_prompt' in record:
+        valid = (isinstance(record['restart_prompt'], str)
+                 and 0 < len(record['restart_prompt']) <= 20000)
     if valid and record['state'] == 'refused':
         valid = isinstance(record.get('refusal'), str)
     if valid and record['state'] == 'retrieved':
@@ -86,15 +91,22 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     must materialize retrieved reports locally before calling. A duplicate intent
     is uncertain after a crash: reconcile with the host, never blindly dispatch.
     """
+    def blocked(reason):
+        return dict(outcome='blocked', dispatch=False, reason=reason,
+                    host_confirmed=False)
+    # Native UUIDs, AgentsRoom terminal IDs and deterministic request IDs fit
+    # this ASCII token format; arbitrary prose is not a first-message identifier.
+    if any(not isinstance(value, str) or re.fullmatch(r'[A-Za-z0-9._:@-]{1,128}', value) is None
+           for value in (session, terminal, request_id)):
+        return blocked('invalid-identifier')
     root, path = os.path.realpath(root), os.path.realpath(path)
     location = _location(root, request_id)
     binding = dict(root=root, path=path, session=session, terminal=terminal,
                    request_id=request_id)
-    def blocked(reason):
-        return dict(outcome='blocked', dispatch=False, reason=reason,
-                    host_confirmed=False)
-    # Match save's publisher -> checkpoint order; prepare takes checkpoint only.
-    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(path), ledger.locked(location):
+    # The durable registry lock also covers different checkpoints and callers
+    # with different TMPDIRs; the publisher lock alone is temp-directory scoped.
+    registry = str(Path(location).parent / 'registry')
+    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(registry), ledger.locked(path), ledger.locked(location):
         try:
             previous = status(root, request_id)
         except ValueError:
@@ -102,7 +114,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         if previous is not None:
             if any(previous.get(k) != v for k, v in binding.items()):
                 return blocked('request-identity-conflict')
-            return dict(previous, outcome=previous['state'], dispatch=False)
+            return dict({k: v for k, v in previous.items() if k != 'restart_prompt'},
+                        outcome=previous['state'], dispatch=False)
         if not session or not terminal:
             return blocked('missing-identity')
         try:
@@ -120,6 +133,22 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             return blocked('publication-not-ready')
         if ledger.resolve(path, root).get('authoritative') != path:
             return blocked('stale-checkpoint')
+        # Validate every persisted intent, including legacy request IDs. A
+        # different request name must not turn uncertain dispatch into permission.
+        try:
+            for entry in Path(location).parent.glob('*.json'):
+                raw = protocol.load_state_json(entry)
+                other = status(root, raw.get('request_id'))
+                if other is None or os.path.realpath(entry) != _location(root, other['request_id']):
+                    raise ValueError('Noncanonical restart intent.')
+                same_checkpoint = (other['path'] == path or
+                                   other['checkpoint_id'] == fm.get('checkpoint_id'))
+                if ((other['state'] == 'pending' and
+                     (other['terminal'] == terminal or other['path'] == path))
+                        or (other['state'] in ('retrieved', 'refused') and same_checkpoint)):
+                    return blocked('conflicting-restart-intent')
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return blocked('invalid-persisted-intent')
         if workers is None:
             return blocked('worker-inventory-unknown')
         if not isinstance(workers, list):
@@ -147,6 +176,32 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         record = dict(binding, checkpoint_id=fm.get('checkpoint_id'),
                       fingerprint=ledger.content_fingerprint(text), state='pending',
                       host_confirmed=False, workers=workers, intent_at=time.time())
+        # Deliver the exact binding to the next conversation, not a bare lookup
+        # phrase that can select other work or acknowledge before recording receipt.
+        identity = json.dumps(dict(binding, checkpoint_id=record['checkpoint_id']), sort_keys=True)
+        ledger_cli = shlex.quote(os.path.realpath(ledger.__file__))
+        restart_cli = shlex.quote(os.path.realpath(__file__))
+        prompt = (
+            'Continue the handoff using this exact restart recovery binding: ' + identity + '. '
+            'Do not restart or dispatch another intent. Read current identity with python3 '
+            + ledger_cli + ' session --root ' + shlex.quote(root) + '. '
+            'Require identity_source exactly hook or host, an actual session different from predecessor session, the same terminal, '
+            'and no conflicting host_session_id; never generate or substitute an identity. '
+            'Before any generic resume shortcut, run python3 ' + ledger_cli + ' prepare '
+            + shlex.quote(path) + ' --root ' + shlex.quote(root) + '. '
+            'Require outcome retrieved and this exact path, then read the full body and required references. '
+            'Keep its delivery_receipt in this context. Run python3 ' + restart_cli + ' successor '
+            'with stdin JSON containing root and request_id from the binding, the actual successor session, '
+            'the same terminal and that delivery_receipt. Require state retrieved; host_confirmed remains false. '
+            'Only then run python3 ' + ledger_cli + ' resume ' + shlex.quote(path)
+            + ' --root ' + shlex.quote(root) + ' and follow its authorization, holds and returned action. '
+            'If identity, preparation, receipt or resume fails, preserve state and report; do not acknowledge '
+            'blindly, choose another checkpoint or restart. Report observed predecessor/successor identity '
+            'separately from host request acceptance.'
+        )
+        if len(prompt) > 20000:
+            return blocked('restart-prompt-too-large')
+        record['restart_prompt'] = prompt
         protocol.write_json(location, record)
         return dict(record, outcome='ready', dispatch=True)
 
@@ -165,7 +220,7 @@ def record_refusal(root, request_id, reason):
         return record
 
 
-def confirm_successor(root, request_id, session, terminal, delivery_receipt):
+def confirm_successor(root, request_id, session, terminal=None, delivery_receipt=None):
     """Validate a real local preparation receipt, not an agent's claim to read.
 
     This proves kit retrieval only. Host process replacement and agent semantic
@@ -177,7 +232,10 @@ def confirm_successor(root, request_id, session, terminal, delivery_receipt):
         record = status(root, request_id)
         if not record or record['state'] == 'refused':
             raise ValueError('No pending restart intent.')
-        if session == record['session'] or not session or terminal != record['terminal']:
+        # The terminal is the environment's, never a caller claim: a forged stdin cannot adopt a foreign intent
+        local = protocol.terminal_id()
+        if (session == record['session'] or not session or not local
+                or local != record['terminal'] or (terminal is not None and terminal != local)):
             raise ValueError('Successor identity does not match restart intent.')
         if record['state'] == 'retrieved':
             if record['successor_session'] != session:

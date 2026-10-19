@@ -195,8 +195,41 @@ class ResumeCliTests(unittest.TestCase):
         code, out = self.run_cli('resume', '--session', 'new')
         self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
         self.assertEqual(out['body'], big)
-        self.assertNotIn('next_step', out)
+        # H3: a bounded lead copy (<= 3000 encoded bytes) is the price of clip safety
+        self.assertLessEqual(len(json.dumps(out['next_step'], ensure_ascii=False).encode()), 3000)
+        self.assertTrue(out['next_step'].startswith('xxx'), out['next_step'][:40])
+        self.assertIn('continues in the body', out['next_step'])
         self.assertIn('status: resumed', Path(path).read_text())
+
+    def test_next_step_lead_survives_a_4000_byte_clip(self):
+        """H3: next_step follows action and its marker lands in the first 4000 encoded
+        bytes whether the bulk is a reference, the steps, or escape-heavy text."""
+        (self.root / 'ref.md').write_text('reference ' * 1500)
+        cases = dict(
+            big_ref=('## Objective\nX\n## Current state\nS\n## Next steps\nMARK-NEXT\n', ['ref.md']),
+            big_steps=('## Objective\nX\n## Current state\n' + 'y ' * 3000 + '\n## Next steps\nMARK-NEXT '
+                       + 'z ' * 2100 + '\n', None),
+            escaped=('## Objective\nX\n## Current state\n' + '\u00e9\n' * 2500 + '\n## Next steps\nMARK-NEXT\n'
+                     + 'say "\u00fc"\n' * 300, None))
+        for name, (body, refs) in cases.items():
+            draft = dict(topic=name.replace('_', '-'), description=name, body=body)
+            if refs:
+                draft['references'] = refs
+            code, saved = self.run_cli('save', '--session', 'old-' + name, '--request-id', 'r-' + name,
+                                       input=json.dumps(draft))
+            self.assertEqual(code, 0, saved)
+            p = subprocess.run([sys.executable, str(LEDGER), 'resume', saved['path'], '--session', 'new-' + name,
+                                '--fields', 'path,body'], cwd=self.root, env=self.env, capture_output=True,
+                               text=True, timeout=30)
+            out = json.loads(p.stdout)
+            self.assertEqual(out['outcome'], 'resumed', (name, out))
+            keys = list(out)
+            self.assertEqual(keys.index('next_step'), keys.index('action') + 1, (name, keys))
+            lead = p.stdout.encode()[:4000].decode('utf-8', 'ignore')
+            self.assertIn('MARK-NEXT', lead, name)
+            if name != 'big_ref':  # cut by encoded size, so escaping cannot push the marker past 4000
+                self.assertIn('continues in the body', lead)
+            self.assertEqual(out['body'], body, name)
 
     def test_large_dependencies_and_small_budget_are_advisory(self):
         content = 'required material ' * 20000
@@ -280,6 +313,28 @@ class ResumeCliTests(unittest.TestCase):
         self.save('other', skills=['absent'])
         code, out = self.run_cli('resume', 'other', '--session', 'new2')
         self.assertEqual((code, out['outcome'], out['stage']), (1, 'needs-context', 'prepare'), out)
+
+    def test_next_steps_lead_a_large_resume_so_a_bounded_read_still_has_them(self):
+        """M2, fixture aa95d3ec line 47: a 6000-byte clip of a large resume lost Next
+        steps at the end of the body. They now precede the body in key order."""
+        steps = '1. Run the parser checks.\n2. Reply on the ticket.'
+        big = ('## Objective\nFix it.\n## Current state\n' + 'evidence line\n' * 5000
+               + '## Next steps\n' + steps + '\n## Gotchas\n- None.\n')
+        self.assertGreater(len(big), 65000)
+        for fields in ((), ('--fields', 'path,body')):
+            topic = 'big%d' % len(fields)
+            code, out = self.run_cli('save', '--session', 'old', '--request-id', 'r-' + topic,
+                                     input=json.dumps(dict(topic=topic, description='Big', body=big)))
+            self.assertEqual(code, 0, out)
+            p = subprocess.run([sys.executable, str(LEDGER), 'resume', out['path'], '--session', 'new-' + topic, *fields],
+                               cwd=self.root, env=self.env, capture_output=True, text=True, timeout=30)
+            out = json.loads(p.stdout)
+            self.assertEqual(out['outcome'], 'resumed', out)
+            self.assertEqual(out['body'], big)
+            keys = list(out)
+            self.assertLess(keys.index('next_step_section'), keys.index('body'))
+            self.assertLess(keys.index('next_step'), keys.index('body'))
+            self.assertIn(json.dumps(steps)[1:-1], p.stdout[:4000])
 
     def test_fields_trims_optional_output_but_preserves_context_and_diagnostics(self):
         path = self.save()

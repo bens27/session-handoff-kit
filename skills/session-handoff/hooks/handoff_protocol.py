@@ -86,6 +86,13 @@ def session_info(root):
 NO_SESSION = dict(outcome='blocked', action='No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.')
 
 
+def paused_reasons(value, limit=120):
+    """Guard-reason tokens only: front matter is file content and never reaches the model raw."""
+    tokens = [t for t in ledger._split_csv(str(value)) if re.fullmatch(r'[a-z0-9-]+', t)]
+    text = ', '.join(tokens)
+    return text if len(text) <= limit else text[:limit].rsplit(',', 1)[0]
+
+
 def hook_opening_note(event):
     """Read-only selection for the bounded hook worker; never adopt foreign work."""
     root = ledger.project_root(event.get('cwd') or os.getcwd())
@@ -130,6 +137,10 @@ def hook_opening_note(event):
     # resolve() follows a topic's newest successor, even when a path was supplied.
     # Only advertise the shortcut when that authoritative record is also owned.
     authoritative = ledger.resolve(path, root)['authoritative']
+    if fm.get('automatic_paused') and not record['problems'] and ledger.trusted(path, record['text'], fm):
+        # A host-injected restart prompt reads like a typed one, so paused state never gets the lean command
+        return ('handoff-status: Owned handoff %s is paused (%s); load the session-handoff skill and ask the user '
+                'before continuing it.' % (json.dumps(path), paused_reasons(fm['automatic_paused']) or 'guard'))
     if (record['problems'] or fm.get('automatic_paused')
             or ledger._claimed_recently(fm, datetime.now())
             or authoritative != path or not ledger.trusted(path, record['text'], fm)):
@@ -140,7 +151,8 @@ def hook_opening_note(event):
     if not session:
         return pointer
     return ('The session-handoff skill does not need to load. Run %s; follow its outcome/action, '
-            'then continue with ## Next steps in the returned body.' % command)
+            'then continue with ## Next steps in the returned body. Run it exactly as given, with no head, '
+            'pipe or redirect: its output is the complete required package.' % command)
 
 
 def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None):
@@ -279,12 +291,14 @@ def transition(root, guard=None):
             % ', '.join(guard['reasons'])))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
         return dict(kind='agents_restart', requires_preflight=True, action=(
-            'Before host dispatch, run python3 %s preflight using authoritative current host identity, '
-            'capability, complete worker inventory and hold state. Only outcome: ready and dispatch: true '
-            'permit calling AgentsRoom agents_restart for agent %s with prompt "%s". '
-            'Without those host observations, stop and use manual fresh-session continuation; '
-            'do not invent capability or an empty worker inventory.')
-            % (shlex.quote(os.path.join(os.path.dirname(__file__), 'restart_preflight.py')),
+            'Follow the AgentsRoom restart section of %s to gather current identity, host capability, complete worker inventory and hold state. '
+            'Run python3 %s preflight with those observations. Only outcome: ready and dispatch: true '
+            'permit calling AgentsRoom agents_restart for agent %s as the final tool action, using the '
+            'returned restart_prompt instead of bare "%s"; then end the turn. '
+            'Unknown observations require manual fresh-session continuation; pending intent requires '
+            'reconciliation, never redispatch. Preserve human holds and worker results.')
+            % (shlex.quote(os.path.join(os.path.dirname(__file__), '..', 'reference.md')),
+               shlex.quote(os.path.join(os.path.dirname(__file__), 'restart_preflight.py')),
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
@@ -1068,6 +1082,24 @@ def section(body, title):
 
 
 REPLAY_TTL = 7200
+NEXT_STEP_BYTES = 3000
+NEXT_STEP_MARKER = ' [... continues in the body under ## Next steps]'
+
+
+def next_step_lead(steps, limit=NEXT_STEP_BYTES):
+    """Next steps, cut so the JSON-encoded copy fits limit bytes, marked when cut."""
+    def size(text):
+        return len(json.dumps(text, ensure_ascii=False).encode())
+    if size(steps) <= limit:
+        return steps
+    low, high = 0, len(steps)
+    while low < high:  # longest prefix whose encoded form, plus the marker, fits
+        middle = (low + high + 1) // 2
+        if size(steps[:middle] + NEXT_STEP_MARKER) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return steps[:low] + NEXT_STEP_MARKER
 
 
 def replay_fresh(receipt):
@@ -1237,8 +1269,10 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
     else:
         result['reused_from'] = prepared['reused_from']
         result['action'] = 'Continue with ## Next steps in the body still in this session context.'
-    if legacy_next_step:
-        result['next_step'] = section(body or read_text(path).split('\n---\n', 1)[-1], 'Next steps')
+    full = body or read_text(path).split('\n---\n', 1)[-1]
+    steps = section(full, 'Next steps')
+    # Always lead with a bounded copy right after action, so a clipped read keeps the next step
+    result['next_step'] = steps if legacy_next_step else next_step_lead(steps)
     if 'withheld_references' in prepared:
         result['withheld_references'] = prepared['withheld_references']
     if 'warnings' in prepared:
@@ -1285,7 +1319,8 @@ def wait(root, target, status, timeout=600, interval=2):
 
 
 RETRIEVE_COMMANDS = frozenset(('retrieve', 'retrieve your handoff', 'retrieve handoff', 'show handoff', 'show the handoff'))
-RESUME_COMMANDS = frozenset(('resume', 'resume handoff', 'resume the handoff', 'continue the handoff'))
+RESUME_COMMANDS = frozenset(('resume', 'resume handoff', 'resume the handoff', 'resume your handoff',
+                             'continue the handoff', 'continue your handoff'))
 
 
 def generic_intent(prompt):
@@ -1582,7 +1617,8 @@ def cli(argv):
     if a.command == 'save':
         if a.template:
             print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
-                body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action; put files it edits or depends on in references as path#Lstart-Lend.\n',
+                body='## Objective\nState the authorized goal.\n## Constraints\nList the limits the next session must keep.\n## Current state\nRecord verified evidence.\n## Decisions\nRecord choices already made and why.\n## Pending operations\nName any operation started but not confirmed, or None.\n## Next steps\nName the exact next action; put files it edits or depends on in references as path#Lstart-Lend.\n',
+                references=[], skills=[],
                 continuity=[dict(id='goal', text='Replace with the original authorized goal and durable constraints.', status='open')])))
             return 0
     if a.command == 'save':
