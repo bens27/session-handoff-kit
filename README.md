@@ -5,15 +5,15 @@ When an AI Agent reaches a certain amount of cumulative context usage in a sessi
 This kit is my attempt to simplify this. Here are its components:
 1. A context monitor - watches your session's context usage, and allows you to set a limit
 2. Context-limit hooks - when you get to your limit, automatically create a handoff document for a new session to retrieve. With `AUTORESUME=1`, also nudge you to clear your current session context usage (Anthropic - if you're reading this - please allow for programmatic context clearing). With `HANDOFF_AUTO=1`, clear and resume for you (inside tmux, or through a headless runner)
-3. Session-start actions - when you start or clear a session, automatically check for open handoff documents in the current repo and list them for a user to select (if desired)
+3. Resume actions - startup stays quiet; an explicit “continue the handoff” prompt gets a direct command for one trusted checkpoint owned by this terminal, or a selection pointer when needed
 4. Handoff customizations - specify skills to be loaded when a handoff is retrieved 
 5. Basic state management on handoff documents - open/resumed/superseded/abandoned, plus a short claim so two sessions don't resume the same handoff
 
 One handoff system, packaged for every surface it can run on. A deterministic
 hook watches the session's own token usage and — at a configurable threshold —
 injects a one-time instruction to invoke the `session-handoff` skill, which
-writes a structured `HANDOFF.md` and stops. A `SessionStart` hook announces an
-existing `HANDOFF.md` to the next session, closing the loop.
+writes a structured checkpoint and stops. In the next session, “continue the
+handoff” gets a lean resume command; manual retrieval handles portable handoffs.
 
 Where hooks don't exist (chat), a behavioral variant of the skill does the same
 job on request; file-ledger fallback conventions use
@@ -74,6 +74,58 @@ The installer writes absolute paths into `~/.claude/settings.json` and
 `~/.codex/hooks.json`, backs each up once, leaves other hooks alone, and is
 safe to re-run (re-run it after moving the folder). Use either this or the
 plugin below, not both: both would run the watcher twice.
+
+### Validated runtime snapshots
+
+For development checkouts, create a separate runtime instead of registering
+hooks against the working tree. This is opt-in; none of these operations run
+automatically during packaging or a legacy install.
+
+```sh
+python3 skills/session-handoff/install.py runtime --root ~/.local/share/session-handoff/runtime create v1
+# Copy the complete "release" ID from the JSON result, including its digest:
+python3 skills/session-handoff/install.py runtime --root ~/.local/share/session-handoff/runtime validate RELEASE
+python3 skills/session-handoff/install.py runtime --root ~/.local/share/session-handoff/runtime activate RELEASE codex
+# Or activate the same release for Claude Code, separately:
+python3 skills/session-handoff/install.py runtime --root ~/.local/share/session-handoff/runtime activate RELEASE claude
+python3 skills/session-handoff/install.py runtime --root ~/.local/share/session-handoff/runtime rollback codex
+```
+
+Creation copies the declared product files into a private, read-only, content-addressed release,
+checks required files, Python syntax and the packaged ledger/preflight CLIs, and writes a
+versioned integrity manifest. The payload includes the restart preflight module, lane helper and threshold
+example; undeclared files such as `.env`, local threshold copies and editor
+files cause creation to fail before publication. Keep those outside the product
+folder. Runtime root and release storage use mode `0700`; payload files use
+`0400` or `0500`. It leaves host configuration unchanged. Run the
+repository's regression checks before creating a release: snapshot validation
+checks payload integrity and CLI loading, not every behavioral regression.
+Activation revalidates the release and atomically replaces one host's hook
+configuration, preserving foreign hooks. Commands pin the exact release path;
+there is no changing runtime symlink. Codex feature flags and native hook trust
+still apply; approve the new command through Codex's hook review.
+
+Also point your host's discovered `session-handoff` skill folder at the returned
+`snapshot` path (a symlink to that immutable directory is suitable), preserving
+the old skill folder first. Activation only registers hooks: it does not move
+skill folders, change plugin marketplace sources, or rewrite existing sessions.
+For Claude directory plugins, explicitly migrate to this standalone installation
+and remove the duplicate plugin registration before using snapshot hooks.
+
+Rollback restores the exact prior hook configuration from a private durable
+receipt. It refuses if configuration has changed since activation or if the
+previous snapshot fails validation. An interrupted activation leaves a complete
+old or new config; retry activation or roll back the matching completed switch.
+The first rollback may restore a legacy working-tree hook path; inspect the
+returned release (`null` for legacy) and restore skill discovery separately.
+If creation is interrupted after publication but before its final directory
+seal, repeat the same `create VERSION`: a fully verified payload is re-sealed.
+A corrupt existing release is left intact with an explicit removal instruction.
+Rollback validates receipt format and skips malformed entries, reporting their
+count in `skipped_receipts`.
+Retain releases and receipts needed by running sessions or rollback. They use
+local disk per release; there is no automatic garbage collection. Read-only
+modes prevent accidental edits, not deliberate modification by the file owner.
 
 ### Claude Code plugin
 
@@ -174,16 +226,25 @@ Hook trust is not bypassed or verified by this wrapper: an untrusted hook can be
 skipped by Codex, so complete native review before unattended use. Model and
 other settings come from that profile. No global auto-mode setting is changed.
 
-**Fully automatic.** `HANDOFF_AUTO=1` removes the keystroke too. Each save
-records the terminal it came from (`HANDOFF_TERMINAL_ID`, else
-`AGENTSROOM_AGENT_ID`), and the cleared session resumes the newest open handoff
-of its own terminal, not the project's newest. AgentsRoom turns this on by
-default (`HANDOFF_AUTO=0` or `"auto": false` opts out); elsewhere it is opt-in.
-When it is off, the save result says how to turn it on. In AgentsRoom (the default path),
-the context notice tells the agent to finish by calling `agents_restart` with
-prompt `continue the handoff`, which reopens its tab on that handoff and avoids
-Codex interpreting `resume` as its native session-picker command. AgentsRoom takes precedence
-over any `TMUX_PANE` the app inherited, so nothing is typed into another terminal.
+**Automatic transition settings.** `HANDOFF_AUTO=1` requests an automatic
+transition after saving. Each save records its terminal (`HANDOFF_TERMINAL_ID`,
+else `AGENTSROOM_AGENT_ID`), so continuation stays scoped to that terminal.
+AgentsRoom defaults this setting to on (`HANDOFF_AUTO=0` or `"auto": false`
+opts out); elsewhere it is opt-in. The default requests a gated transition,
+not permission or proof that a host restart can occur.
+
+In AgentsRoom, save returns an `agents_restart` candidate with
+`requires_preflight: true`. This kit supplies no authoritative host adapter for
+current capability, identity, complete worker inventory and hold state. Without
+those observations, publish the checkpoint, stop, and start a fresh session
+manually with `continue the handoff`. Do not invent observations to pass
+preflight. When a host adapter supplies them, only `outcome: ready` and
+`dispatch: true` permit its `agents_restart` call with prompt
+`continue the handoff`; the prompt avoids Codex's native `resume` picker.
+Host process replacement and successor wiring remain separate acceptance checks.
+AgentsRoom takes precedence over inherited `TMUX_PANE`, so its fallback never
+types into another terminal.
+
 As an optional fallback inside tmux outside AgentsRoom, a `Stop` hook types `/clear` and then `resume` into the pane once the handoff
 is written (Claude Code hooks cannot clear a session themselves). Outside
 tmux, or for Codex, use the headless runner, which re-launches the agent with
@@ -287,8 +348,8 @@ prints a `SESSION HANDOFF — <project>` block into the conversation so
 past-chat search can find it. In the next chat, "resume the <project> handoff"
 resolves it from attachment → memory → past-chat search, in that order. The
 downloadable `HANDOFF.md` remains the portable copy for crossing surfaces:
-drop it in a project folder and the plugin's `SessionStart` hook announces it
-in Claude Code or Cowork. (Past-chat retrieval requires the "Search and
+drop it in a project folder and ask to retrieve the handoff in Claude Code or
+Cowork. (Past-chat retrieval requires the "Search and
 reference past chats" setting, and Project chats only search within the same
 Project.) When several chat handoffs are open, the skill lists topic, stored
 date, and description rather than asking the model to invent an age. The
@@ -352,7 +413,7 @@ Other variables:
 | `CONTEXT_WATCH_DISABLE` | — | Set `1` to disable without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
-| `HANDOFF_AUTO` | on in AgentsRoom, else off | `1` = fully automatic (`0` turns the AgentsRoom default off): implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
+| `HANDOFF_AUTO` | on in AgentsRoom, else off | Requests automatic transition (`0` opts out). AgentsRoom requires authoritative preflight and falls back to manual continuation when unavailable; outside AgentsRoom, tmux Stop or the headless runner performs the configured transition. |
 | `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only) | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
@@ -379,6 +440,8 @@ The preferred workflow is:
 
 ```sh
 python3 skills/session-handoff/hooks/handoff_ledger.py lookup
+# Inspect this terminal's identity, transcript path and pressure state (read-only):
+python3 skills/session-handoff/hooks/handoff_ledger.py session
 # One-shot authorized continuation (select, prepare, verify, acknowledge):
 python3 skills/session-handoff/hooks/handoff_ledger.py resume --session SESSION [TOPIC]
 # Reuse a previous retrieval only while its content remains in this context:
@@ -394,8 +457,9 @@ python3 skills/session-handoff/hooks/handoff_ledger.py save --template
 python3 skills/session-handoff/hooks/handoff_ledger.py save --input draft.json
 ```
 
-`--session` defaults to `$HANDOFF_SESSION_ID`, then the hook's per-terminal
-pointer; `save --request-id` defaults to a hash of the draft. `lookup` marks
+The hook's per-terminal pointer takes precedence over explicit `--session` and
+`$HANDOFF_SESSION_ID`; without it, explicit `--session` takes precedence over the
+environment. `save --request-id` defaults to a hash of the draft. `lookup` marks
 this terminal's handoffs `mine` and names a `selected` path when unambiguous.
 `--fields a,b` trims any command's JSON output; `wait TOPIC --status
 saved|resumed` polls the ledger. A draft's optional `verify_baseline` lists
@@ -482,6 +546,53 @@ only works on user-feedback backlog items; the coordinator records each report
 on the backlog item with a `descriptionAppend` update. The context watcher stays silent inside subagents (it
 detects them by the `agent_id` field Claude Code adds to their hook events), so
 a subagent never receives the parent's handoff notice.
+
+### Deterministic restart preflight
+
+`skills/session-handoff/hooks/restart_preflight.py` is a stdlib callable module
+and JSON CLI. It never invokes restart. Pass an argument object on stdin or
+with `--input file.json`; operations are `preflight`, `status`, `refusal`,
+and `successor`. Callable names are `preflight`, `status`, `record_refusal`,
+and `confirm_successor` respectively.
+
+`preflight(root, path, session, terminal, request_id, workers=None,
+host_capable=False, hold=False)` validates authoritative open publication and
+checkpoint identity and live claim ownership under the publisher and checkpoint
+locks, then durably writes an intent before returning
+`outcome: ready, dispatch: true`. The host adapter supplies current identity,
+capability, complete worker inventory and intentional hold state, including
+`waiting_input`. Unknown or malformed inventory or absent host capability blocks. Inventory is
+a list of objects with unique nonempty `id` strings. Each worker
+entry requires `report: {path, sha256}` for a durable local result; a mailbox
+adapter first retrieves and materializes the report. A worker's assertion that
+it finished is insufficient. Local report hashes prove bytes, not correctness
+or that a running worker cannot produce further results.
+
+The adapter calls the host only for `dispatch: true`, using prompt
+`continue the handoff`. Repeated requests never dispatch again. A crash between
+intent and host response leaves `pending`; reconcile it with the host before
+creating a new request. `record_refusal(root, request_id, reason)` persists a
+returned failure without closing the checkpoint. `status(root, request_id)`
+reads `.handoffs/restart/<sha256-request-id>.json`. Reusing an ID with another
+identity or checkpoint blocks. An existing malformed intent also blocks and is
+preserved for inspection; only a missing record permits a new intent.
+
+After read-only `prepare`, the successor calls
+`confirm_successor(root, request_id, session, terminal, delivery_receipt)` with
+its new session ID and the returned opaque delivery token. The module validates
+the local delivery receipt, checkpoint and required dependency fingerprints.
+The receipt must have been created strictly after the durable intent and be no
+more than two hours old; an already confirmed retry remains idempotent. It
+and durably records `retrieved`. Retrieval authorizes no execution and clears
+no human hold. Every result retains `host_confirmed: false`: caller-provided
+JSON cannot prove host replacement, inventory completeness or agent reading.
+A host adapter must supply those observations separately. Save transitions now
+mark `requires_preflight: true`, and pressure guidance requires ready/dispatch
+before a host call. Transition kind alone is not dispatch permission. No host
+adapter is supplied here: capability/identity/inventory observation, host-call
+serialization and successor request-ID propagation/receipt recording still need
+explicit host integration. Without those observations, use manual fresh-session
+continuation; this module never restarts a host.
 
 ### Lane ownership and side branches
 

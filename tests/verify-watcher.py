@@ -25,7 +25,10 @@ os.environ['CONTEXT_WATCH_ORIGIN'] = 'test'
 
 # Empty HOME for helper subprocesses: a developer's ~/.context-watch/thresholds.json
 # (auto, at, auto_max) must not leak into fixtures.
-ISOLATED_HOME = tempfile.mkdtemp(prefix="cw-home-")
+ISOLATED_HOME_OWNER = tempfile.TemporaryDirectory(prefix="cw-home-")
+ISOLATED_HOME = ISOLATED_HOME_OWNER.name
+# Cover direct runner subprocesses and in-process helpers as well as run_hook.
+os.environ["HOME"] = os.environ["USERPROFILE"] = ISOLATED_HOME
 
 failures = []
 
@@ -48,6 +51,7 @@ def run_hook(event, env_extra, script=PLUGIN):
     env.pop("AGENTSROOM_AGENT_ID", None)
     env.pop("HANDOFF_TERMINAL_ID", None)
     env.pop("HANDOFF_SESSION_ID", None)
+    env.pop("CODEX_THREAD_ID", None)
     env.pop("HANDOFF_RUN_ID", None)
     env.pop("TMUX_PANE", None)
     env.pop("CONTEXT_WATCH_AUTORESUME", None)
@@ -74,7 +78,7 @@ def checkpoint(project, sid, environment, resumed=False):
            'body':'## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nTest.\n'}
     ledger = os.path.join(os.path.dirname(PLUGIN), 'handoff_ledger.py')
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(('HANDOFF_', 'AGENTSROOM_', 'CONTEXT_WATCH_', 'AUTORESUME'))}
+           if not k.startswith(('CODEX_THREAD_ID', 'HANDOFF_', 'AGENTSROOM_', 'CONTEXT_WATCH_', 'AUTORESUME'))}
     env.update(HOME=ISOLATED_HOME, USERPROFILE=ISOLATED_HOME, CONTEXT_WATCH_ORIGIN='test',
                CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0')
     env.update(environment)
@@ -428,7 +432,7 @@ def main():
     os.makedirs(os.path.join(proj, ".handoffs"))
     with open(os.path.join(proj, ".handoffs", "demo-topic.md"), "w") as f:
         f.write("---\ntopic: demo-topic\ncreated: 2026-08-11T09:00\nstatus: open\n---\n# Session Handoff — demo-topic\n")
-    for src, expect_announce in (("startup", True), ("clear", True), ("resume", False),
+    for src, expect_announce in (("startup", False), ("clear", False), ("resume", False),
                                  ("compact", False), ("fork", False)):
         ev = {"hook_event_name": "SessionStart", "source": src, "cwd": proj,
               "session_id": "verify-ss-" + src}
@@ -477,7 +481,7 @@ def main():
                            "cwd": fallback_proj, "session_id": "verify-fallback"},
                           {"TMPDIR": latchdir}, script=fallback_hook)
     check("announcer-missing-installation-reports-unavailable",
-          p_fallback.returncode == 0 and "service unavailable" in p_fallback.stdout,
+          p_fallback.returncode == 0 and not p_fallback.stdout.strip(),
           "rc=%d expected_ended=%s stdout=%r" % (p_fallback.returncode, expected_ended,
                                                 p_fallback.stdout[:700]))
 
@@ -490,12 +494,11 @@ def main():
                "session_id": "verify-desc"}
     p_desc_ar = run_hook(ev_desc, {"AUTORESUME": "true", "TMPDIR": latchdir})
     check("announcer-description-autoresume",
-          p_desc_ar.returncode == 0 and "unmistakable demo description" in p_desc_ar.stdout
-          and "without asking" in p_desc_ar.stdout,
+          p_desc_ar.returncode == 0 and not p_desc_ar.stdout.strip(),
           "rc=%d stdout=%r" % (p_desc_ar.returncode, p_desc_ar.stdout[:500]))
     p_desc = run_hook(ev_desc, {"TMPDIR": latchdir})
     check("announcer-description-no-autoresume",
-          p_desc.returncode == 0 and "1 open handoff(s) available" in p_desc.stdout
+          p_desc.returncode == 0 and not p_desc.stdout.strip()
           and "unmistakable demo description" not in p_desc.stdout
           and "without asking" not in p_desc.stdout
           and "First load exactly these skills" not in p_desc.stdout,
@@ -579,7 +582,7 @@ def main():
         cx_note = json.loads(p_cx_ss.stdout)["hookSpecificOutput"]["additionalContext"]
     except Exception:
         cx_note = ""
-    check("codex-sessionstart-json-label", cx_note.startswith("handoff-status:"),
+    check("codex-sessionstart-quiet", not p_cx_ss.stdout.strip(),
           "stdout=%r" % p_cx_ss.stdout[:300])
 
     # 12. Announcer: cap at 5 listed, count the rest, mention hidden stale ones.
@@ -604,9 +607,8 @@ def main():
     #     tells the agent to end its turn instead of asking the user to /clear.
     p_auto = run_hook({"hook_event_name": "SessionStart", "source": "clear", "cwd": proj_multi,
                        "session_id": "verify-auto"}, {"TMPDIR": latchdir, "HANDOFF_AUTO": "1"})
-    check("auto-announcer-picks-newest",
-          "'second'" in p_auto.stdout and "without asking" in p_auto.stdout
-          and "newest of 2" in p_auto.stdout and "ask the user which" not in p_auto.stdout,
+    check("auto-startup-quiet",
+          p_auto.returncode == 0 and not p_auto.stdout.strip(),
           "stdout=%r" % p_auto.stdout[:500])
     p_auto_t = run_hook(dict(evt_ar, session_id="verify-" + uuid.uuid4().hex[:8]),
                         dict(env_ar, HANDOFF_AUTO="1"))
@@ -807,6 +809,7 @@ def main():
                 'import os,json,subprocess\n' +
                 'with open("calls.txt","a") as log: log.write(os.environ["HANDOFF_AUTO"]+" "+__import__("sys").argv[1]+"\\n")\n' +
                 'n=len(open("calls.txt").readlines())\n' +
+                'with open("homes.txt","a") as log: log.write(os.path.expanduser("~")+"\\n")\n' +
                 'if n < 3:\n' +
                 ' doc={"topic":"run"+str(n),"body":"## Objective\\nContinue\\n## Current state\\nReady\\n## Next steps\\nTest\\n"}\n' +
                 ' subprocess.run(' + repr([PY, ledger, 'save', '--session', 'runner', '--request-id']) +
@@ -818,6 +821,9 @@ def main():
     check("auto-runner-loops-until-no-handoff",
           calls == ["1 build it", "1 resume", "1 resume"] and p_run.returncode == 0,
           "calls=%r stderr=%r" % (calls, p_run.stderr[-300:]))
+    homes = open(os.path.join(proj_run, "homes.txt")).read().splitlines()
+    check("auto-runner-isolates-home", homes and all(home == ISOLATED_HOME for home in homes),
+          "runner inherited an outer HOME")
     p_run_max = subprocess.run([PY, PLUGIN, "auto", "--max", "1", "--", "true"],
                                cwd=proj_run, capture_output=True, text=True, timeout=60)
     check("auto-runner-usage", subprocess.run([PY, PLUGIN, "auto"], capture_output=True,

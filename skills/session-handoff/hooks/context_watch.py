@@ -270,7 +270,7 @@ def write_terminal_pointer(cwd, sid):
         path = terminal_pointer_path(cwd, terminal)
         tmp = "%s.%d" % (path, os.getpid())
         with open_private(tmp, temp=True) as f:
-            json.dump({"session_id": sid, "ts": time.time()}, f)
+            json.dump({"session_id": sid, "host_session_id": os.environ.get("CODEX_THREAD_ID", ""), "ts": time.time()}, f)
         os.replace(tmp, path)
     except Exception:
         pass
@@ -354,6 +354,7 @@ def load_transcript_tail(path):
 
 
 _DIAG = None  # one-time telemetry diagnostic, delivered by emit() or at exit
+_OPENING_NOTE = ''  # explicit resume guidance, delivered alongside pressure if needed
 
 
 def claim_once(evt, suffix):
@@ -379,7 +380,13 @@ def diag_envelope(agent, event_name, message):
 
 def flush_diag(agent):
     """Print a still-undelivered diagnostic (the hook had nothing else to say)."""
-    global _DIAG
+    global _DIAG, _OPENING_NOTE
+    if _OPENING_NOTE:
+        note, _OPENING_NOTE = _OPENING_NOTE, ''
+        if _DIAG:
+            _DIAG = (_DIAG[0], note + ' ' + _DIAG[1])
+        else:
+            _DIAG = ('UserPromptSubmit', note)
     if _DIAG:
         event_name, message = _DIAG
         _DIAG = None
@@ -796,6 +803,21 @@ def stats_cli():
 ANNOUNCE_CAP = 5  # handoffs listed by name; the rest are counted
 
 
+def lean_resume_prompt(prompt):
+    return bool(re.fullmatch(r'\s*(?:continue|resume) the handoff[.!]?\s*',
+                             str(prompt or ''), re.I))
+
+
+def bounded_opening_note(evt):
+    """Isolate filesystem inspection so a broken/slow store cannot block a prompt."""
+    try:
+        result = subprocess.run([sys.executable, os.path.abspath(__file__), 'opening-note'],
+                                input=json.dumps(evt), capture_output=True, text=True, timeout=1)
+        return result.stdout.strip() if result.returncode == 0 else ''
+    except Exception:
+        return ''
+
+
 def reserve_handoff_status(evt):
     """Share one neutral opening notice across hook events in this session."""
     sid = session_key(evt)
@@ -813,7 +835,7 @@ def reserve_handoff_status(evt):
 
 
 def handle_session_start(evt, agent):
-    """Announce open (untransferred) handoffs; enumerate and offer a choice when several exist."""
+    """Keep startup quiet except for owned publication repair or compaction recovery."""
     source = evt.get("source") or ""
     if source == "compact":
         from handoff_protocol import receipt_path
@@ -835,15 +857,9 @@ def handle_session_start(evt, agent):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
     write_session_note(cwd, evt, False)
-    from handoff_protocol import lookup, opening_action, terminal_id
-    result = lookup(cwd, terminal=terminal_id() if auto_mode_on() else None)
-    policy = opening_action('', result, session_key(evt), auto=autoresume_on(), newest=auto_mode_on())
-    label = LABEL.get(agent, LABEL['claude']) if result['outcome'] == 'available' and autoresume_on() else 'handoff-status:'
-    if label == 'handoff-status:' and not reserve_handoff_status(evt):
-        sys.exit(0)
-    note = label + ' ' + policy + (' This status requires no skill loading.' if label == 'handoff-status:'
-                                   else ' An untrusted checkpoint with a verify command asks the user first.')
-    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
+    note = bounded_opening_note(evt)
+    if note:
+        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
     sys.exit(0)
 
 
@@ -1071,6 +1087,9 @@ def auto_cli(argv):
         print("[auto] --max must be a positive run limit", file=sys.stderr)
         return 2
     child_env = dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1")
+    # Each child starts a new host session; it must not inherit the caller's id.
+    child_env.pop("CODEX_THREAD_ID", None)
+    child_env.pop("HANDOFF_SESSION_ID", None)
     rc = 0
     for run in range(1, max_runs + 1):
         import uuid
@@ -1148,7 +1167,9 @@ def build_floor_message(floor, threshold, floor_limit, model, agent):
 
 
 def emit(agent, event_name, message, mode):
-    global _DIAG
+    global _DIAG, _OPENING_NOTE
+    if _OPENING_NOTE:
+        message, _OPENING_NOTE = _OPENING_NOTE + ' ' + message, ''
     if _DIAG and _DIAG[0] == event_name:
         message, _DIAG = _DIAG[1] + " " + message, None
     if agent == "claude" or event_name == "PostToolUse":
@@ -1177,7 +1198,7 @@ def main():
     if env("CONTEXT_WATCH_DISABLE") == "1":
         sys.exit(0)
 
-    global _DIAG, _AGENT, _EVT
+    global _DIAG, _AGENT, _EVT, _OPENING_NOTE
     evt = _EVT = read_event()
     if in_subagent(evt):
         sys.exit(0)
@@ -1187,6 +1208,12 @@ def main():
     transcript_path = evt.get("transcript_path") or ""
     entries = load_transcript_tail(transcript_path) if transcript_path else []
     agent = _AGENT = detect_agent(evt, entries)
+    lean = event_name == 'UserPromptSubmit' and lean_resume_prompt(evt.get('prompt'))
+    if lean:
+        # This prompt is a host identity observation even before its transcript
+        # exists. Keep the command's session and the terminal pointer aligned.
+        write_terminal_pointer(evt.get('cwd') or os.getcwd(), session_key(evt))
+        _OPENING_NOTE = bounded_opening_note(evt)
     # A first prompt may precede the transcript file; PostToolUse never does.
     if (TAIL_STATUS and event_name in ("PostToolUse", "UserPromptSubmit")
             and not (TAIL_STATUS == "missing" and event_name == "UserPromptSubmit")
@@ -1221,7 +1248,7 @@ def main():
     model = model or tmodel
 
     if not breakdown or breakdown.get("occupancy", 0) <= 0:
-        if event_name == "UserPromptSubmit":
+        if event_name == "UserPromptSubmit" and not lean:
             route_opening_prompt(evt, agent)  # no API call yet: the opening prompt
         sys.exit(0)
 
@@ -1395,6 +1422,8 @@ def main():
         from handoff_protocol import AGENTSROOM_RESTART_PROMPT
         message += (" Fully automatic mode in AgentsRoom: follow transition.action after outcome saved; "
                     "only kind agents_restart calls the AgentsRoom agents_restart tool with prompt \"%s\". "
+                    "First require restart_preflight outcome ready and dispatch true from authoritative host observations; "
+                    "without a host adapter, stop for manual fresh-session continuation. "
                     "If restart is refused, stop and report it; the checkpoint remains open. "
                     "A fresh session can explicitly continue the handoff." % AGENTSROOM_RESTART_PROMPT)
     message += (" Minimal save contract: JSON topic, description, body with ## Objective, ## Current state, "
@@ -1406,6 +1435,15 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == 'opening-note':
+        try:
+            from handoff_protocol import hook_opening_note
+            note = hook_opening_note(json.load(sys.stdin))
+            if note:
+                print(note)
+        except Exception:
+            pass
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "auto":
         sys.exit(auto_cli(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "stats":

@@ -120,7 +120,7 @@ class StopNudge(HookCase):
 
 
 class StartupAutoresumeNote(unittest.TestCase):
-    def test_note_says_untrusted_verify_asks_first(self):
+    def test_startup_is_quiet_even_with_autoresume_and_untrusted_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = os.path.join(tmp, "project")
             os.makedirs(os.path.join(root, ".handoffs"))
@@ -134,9 +134,8 @@ class StartupAutoresumeNote(unittest.TestCase):
             evt = {"hook_event_name": "SessionStart", "source": "startup", "session_id": "s1", "cwd": root}
             p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), cwd=root, env=env,
                                capture_output=True, text=True, timeout=15)
-            note = json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"]
-            self.assertIn("Proceed without asking", note)
-            self.assertIn("An untrusted checkpoint with a verify command asks the user first.", note)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(p.stdout, "")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
 """Public handoff workflow with advisory size targets. Stdlib only; legacy ledger is the file adapter."""
+from handoff_contract import project_output, continuity_items, continuation_document
+
 import argparse
 import json
 import os
@@ -7,12 +9,29 @@ import shlex
 import sys
 import hashlib
 import tempfile
+import time
 from datetime import datetime
 
 import handoff_ledger as ledger
 
 # A native CLI can parse a bare "resume" positional as its own subcommand.
 AGENTSROOM_RESTART_PROMPT = 'continue the handoff'
+
+
+def decode_state_json(raw):
+    """Shared state is an object; malformed/deep JSON is recoverable corruption."""
+    try:
+        value = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ValueError('Malformed or excessively nested handoff state JSON.') from None
+    if not isinstance(value, dict):
+        raise ValueError('Handoff state must be a JSON object.')
+    return value
+
+
+def load_state_json(path, limit=None):
+    with open(path, encoding='utf-8') as stream:
+        return decode_state_json(stream.read() if limit is None else stream.read(limit))
 
 
 def terminal_id():
@@ -31,9 +50,12 @@ def terminal_session(root):
     path = os.path.join(tempfile.gettempdir(), 'context-watch-terminal-%s.json'
                         % hashlib.sha1(key.encode('utf-8', 'replace')).hexdigest()[:20])
     try:
-        with open(path, encoding='utf-8') as f:
-            data = json.loads(f.read(4096))
+        data = load_state_json(path, 4096)
         if 0 <= time.time() - float(data['ts']) <= 86400 and isinstance(data['session_id'], str):
+            host = (os.environ.get('CODEX_THREAD_ID') or '').strip()
+            # A terminal survives restarts; its cached hook session may not.
+            if host and host != (data.get('host_session_id') or data['session_id']):
+                return ''
             return data['session_id'].strip()[:200]
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -41,13 +63,87 @@ def terminal_session(root):
 
 
 def default_session(root):
-    return (os.environ.get('HANDOFF_SESSION_ID') or '').strip() or terminal_session(root)
+    return terminal_session(root) or (os.environ.get('CODEX_THREAD_ID') or os.environ.get('HANDOFF_SESSION_ID') or '').strip()
+
+
+def session_info(root):
+    """Read live hook facts without scanning transcripts or changing identity."""
+    recorded = terminal_session(root)
+    session = default_session(root)
+    note = ledger.read_session_note(root, session=session)
+    return dict(outcome='recorded' if recorded else 'unrecorded',
+                project=ledger.project_root(root), terminal=terminal_id(),
+                session_id=session, identity_source='hook' if recorded else ('host' if os.environ.get('CODEX_THREAD_ID') else ('environment' if session else 'none')),
+                host_session_id=(os.environ.get('CODEX_THREAD_ID') or '').strip(),
+                transcript_path=note.get('transcript_path') or '',
+                pressure_fired=bool(note.get('fired')),
+                action=('Use the recorded session; omit --session for save/resume.' if recorded else
+                        'Use the current host session; omit --session for save/resume.' if os.environ.get('CODEX_THREAD_ID') else
+                        'No hook-recorded identity. Use --session with this session\'s actual id; '
+                        'generate one UUID only if the host supplies none. Transcript location is unavailable unless recorded by a hook.'))
 
 
 NO_SESSION = dict(outcome='blocked', action='No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.')
 
 
-def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
+def hook_opening_note(event):
+    """Read-only selection for the bounded hook worker; never adopt foreign work."""
+    root = ledger.project_root(event.get('cwd') or os.getcwd())
+    session = str(event.get('session_id') or '')
+    terminal = terminal_id()
+    errors = []
+    records = ledger._records(root, errors)
+    if errors:
+        return ''
+    def owned(record):
+        fm = record['fm']
+        if fm.get('terminal'):
+            return bool(terminal) and fm['terminal'] == terminal
+        return bool(session) and fm.get('session_id') == session
+    own = [r for r in records if owned(r) and
+           (ledger._is_open(r['fm']) or r['fm'].get('status') == 'unpublished'
+            or pending_delivery(root, r['path'], r['fm'], session))]
+    if event.get('hook_event_name') == 'SessionStart':
+        # Ordinary open topics must not hide publication repair for this terminal.
+        own = [r for r in own if r['fm'].get('status') == 'unpublished']
+        own.sort(key=lambda r: r['mtime'], reverse=True)
+        own = own[:1]
+    if not own:
+        return ''
+    pointer = 'handoff-status: Owned handoff state needs selection or trust review; load the session-handoff skill and ask before executing untrusted verification.'
+    if len(own) != 1:
+        return '' if event.get('hook_event_name') == 'SessionStart' else pointer
+    record = own[0]
+    fm, path = record['fm'], record['path']
+    if fm.get('status') == 'unpublished':
+        if not os.path.isfile(recovery_path(root, path)):
+            return ('handoff-status: Incomplete checkpoint %s has no durable publication intent; retry the original save request: '
+                    'python3 %s save --session %s --request-id <original-request-id> --input <original-draft.json>. '
+                    'Keep the session; do not clear.'
+                    % (json.dumps(path), shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+                       shlex.quote(fm.get('session_id') or session)))
+        return ('handoff-status: Incomplete checkpoint %s; run python3 %s repair %s. Do not clear.'
+                % (json.dumps(path), shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+                   shlex.quote(path)))
+    if event.get('hook_event_name') == 'SessionStart':
+        return ''
+    # resolve() follows a topic's newest successor, even when a path was supplied.
+    # Only advertise the shortcut when that authoritative record is also owned.
+    authoritative = ledger.resolve(path, root)['authoritative']
+    if (record['problems'] or fm.get('automatic_paused')
+            or ledger._claimed_recently(fm, datetime.now())
+            or authoritative != path or not ledger.trusted(path, record['text'], fm)):
+        return pointer
+    command = 'python3 %s resume %s --session %s --fields path,body' % (
+        shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+        shlex.quote(path), shlex.quote(session))
+    if not session:
+        return pointer
+    return ('The session-handoff skill does not need to load. Run %s; follow its outcome/action, '
+            'then continue with ## Next steps in the returned body.' % command)
+
+
+def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None):
     stats = {}
     items = ledger.scan(root, max_age, stats)
     hidden = 0
@@ -57,11 +153,19 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None):
     if topic is not None:
         items = [h for h in items if h['topic'] == topic or os.path.realpath(h['path']) == os.path.realpath(topic)]
     current = terminal_id()
+    session = session or default_session(root)
     for h in items:
-        h['mine'] = bool(current) and h.get('terminal') == current
+        # A recorded terminal takes precedence; legacy untagged ownership can
+        # be established only by the actual current session, never by absence.
+        h['mine'] = (bool(current) and h['terminal'] == current if h.get('terminal')
+                     else bool(session) and h.get('session_id') == session)
     items.sort(key=lambda h: not h['mine'])  # stable: newest-first within each group
     mine = [h for h in items if h['mine']]
-    selected = mine[0]['path'] if len(mine) == 1 else items[0]['path'] if len(items) == 1 else None
+    # A missing own checkpoint must not make foreign or unowned work
+    # become the implicit recovery target. Explicit path selection still works.
+    sole = items[0] if len(items) == 1 else None
+    selected = (mine[0]['path'] if len(mine) == 1 else sole['path']
+                if sole and not current else None)
     outcome = ('error' if stats['errors'] else 'incomplete' if stats['incomplete'] else 'available' if items else
                'claimed' if stats['claimed'] else 'stale' if stats['stale'] else 'none')
     actions = {
@@ -98,8 +202,7 @@ def project_setting(root, key, kind, user_only=False):
              os.path.join(root, '.context-watch.json'))
     for path in paths[:1] if user_only else paths:
         try:
-            with open(path, encoding='utf-8') as f:
-                data = json.load(f)
+            data = load_state_json(path)
             if isinstance(data, dict) and type(data.get(key)) is kind:
                 value = data[key]
         except (OSError, ValueError):
@@ -175,8 +278,14 @@ def transition(root, guard=None):
             'report the refusal and use the same manual continuation, without retrying the restart.'
             % ', '.join(guard['reasons'])))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
-        return dict(kind='agents_restart', action='End this turn by calling AgentsRoom agents_restart for agent %s with prompt "%s".'
-                    % (os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
+        return dict(kind='agents_restart', requires_preflight=True, action=(
+            'Before host dispatch, run python3 %s preflight using authoritative current host identity, '
+            'capability, complete worker inventory and hold state. Only outcome: ready and dispatch: true '
+            'permit calling AgentsRoom agents_restart for agent %s with prompt "%s". '
+            'Without those host observations, stop and use manual fresh-session continuation; '
+            'do not invent capability or an empty worker inventory.')
+            % (shlex.quote(os.path.join(os.path.dirname(__file__), 'restart_preflight.py')),
+               os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
     if auto and os.environ.get('TMUX_PANE'):
@@ -227,9 +336,15 @@ def _front_matter_matches(root, document, record):
     """True when the stored metadata is what save would write for this document.
     A verify the document omitted may only be the user-level default or the trusted predecessor's."""
     fm = record['fm']
+    prior = {}
+    if fm.get('predecessor') and ledger.trusted(fm['predecessor']):
+        prior = ledger._read_fm(fm['predecessor'])
+    effective = continuation_document(document, prior)
     for key in ('skills', 'references', 'optional_references', 'verify_baseline'):
-        if fm.get(key, '') != _listed(document.get(key, '')):
+        if fm.get(key, '') != _listed(effective.get(key, '')):
             return False
+    if json.loads(fm.get('continuity', '[]')) != effective['continuity']:
+        return False
     allowed = {_listed(document.get('verify', '')) or None}
     if not document.get('verify'):
         allowed = {'', project_setting(root, 'verify', str, user_only=True) or ''}
@@ -241,10 +356,62 @@ def _front_matter_matches(root, document, record):
     return fm.get('verify', '') in allowed
 
 
+def resumed_holder(root, path, fm):
+    """Local receipt proves who performed the latest transfer, not who saved it."""
+    try:
+        receipt = read_receipt(root, fm.get('resumed_by', ''), path)
+        if (valid_transfer_receipt(root, fm.get('resumed_by', ''), path, receipt)
+                and os.path.realpath(receipt['path']) == os.path.realpath(path)
+                and receipt['fingerprint'] == snapshot(path)
+                and receipt.get('acknowledged_at') == fm.get('resumed')
+                and receipt.get('verified')):
+            return receipt
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {}
+
+
+def owns_transfer(root, path, fm, session):
+    holder = resumed_holder(root, path, fm)
+    # A terminal is the stronger identity: a shared runner cannot override a
+    # different terminal's transfer.
+    if holder.get('terminal'):
+        return bool(terminal_id()) and holder['terminal'] == terminal_id()
+    runner = os.environ.get('HANDOFF_RUN_ID', '')
+    if holder.get('runner_id'):
+        return bool(runner) and holder['runner_id'] == runner
+    if not holder and fm.get('transfer_receipt'):
+        # This kit wrote a signed receipt at acknowledgement; without a usable
+        # one the holder is untraceable, never inferred from a session ID.
+        return False
+    return fm.get('resumed_by') == session  # true legacy transfer: no receipt was ever written
+
+
+def original_retry_session(root, session, request_id):
+    """True when SESSION/REQUEST_ID name an interrupted save published from this terminal.
+
+    The hook pointer normally wins over an explicit --session; only a retry of the exact
+    unpublished checkpoint the same terminal wrote may keep its original saving identity.
+    """
+    terminal = terminal_id()
+    if not session or not request_id or not terminal:
+        return False
+    try:
+        root = ledger.project_root(root)
+        identity = hashlib.sha256((os.path.realpath(root) + '\0' + session + '\0' + request_id).encode()).hexdigest()
+        return any(r['fm'].get('checkpoint_id') == identity and r['fm'].get('status') == 'unpublished'
+                   and r['fm'].get('session_id') == session and r['fm'].get('terminal') == terminal
+                   for r in ledger._records(root, []))
+    except (OSError, ValueError):
+        return False  # Unreadable state keeps hook identity; save itself reports the failure.
+
+
 def save(root, session, request_id, document):
     root = ledger.project_root(root)
+    prune_publication_intents(root)
     if not isinstance(document, dict):
         raise ValueError('Draft must be a JSON object.')
+    continuity_items(document.get('continuity', []))
     topic = document.get('topic', '')
     if not isinstance(topic, str) or len(topic) > 80 or not ledger.TOPIC_RE.fullmatch(topic):
         return dict(outcome='invalid', action='Supply a short kebab-case topic.')
@@ -285,11 +452,31 @@ def save(root, session, request_id, document):
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
                             transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
         predecessor = document.get('predecessor')
-        current = ledger.resolve(topic, root)['authoritative']
+        resolved = ledger.resolve(topic, root)
+        current = resolved['authoritative']
+        unfinished = current if resolved['chain'] and resolved['chain'][-1]['status'] == 'unpublished' else None
+        if not unfinished and predecessor:
+            chain = ledger.resolve(predecessor, root)['chain']
+            if chain and chain[-1]['status'] == 'unpublished':
+                unfinished = ledger.resolve(predecessor, root)['authoritative']
+        if unfinished:
+            # A successor of unpublished work would be untrusted lineage that drops its
+            # dependencies and register; the interrupted save must finish first.
+            saved = ledger._read_fm(unfinished).get('session_id') or session
+            ledger_cli = shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py'))
+            return dict(outcome='incomplete', path=unfinished,
+                        action='The newest checkpoint for this lineage was never fully published. Keep this draft and finish that save first: '
+                               'python3 %s repair %s when a durable intent exists, else python3 %s save --session %s --request-id <original-request-id> --input <original-draft.json>. '
+                               'If neither is possible, discard it explicitly with python3 %s abandon %s (nothing is inherited from it), '
+                               'or save independent work under a distinct topic. Do not publish a successor of unpublished work; do not clear.'
+                               % (ledger_cli, shlex.quote(unfinished), ledger_cli, shlex.quote(saved), ledger_cli, shlex.quote(unfinished)))
         if current and not predecessor:
             # Continuing your own lineage needs no lookup: same session or terminal.
             fm = next((r['fm'] for r in records if r['path'] == current), {})
-            if fm.get('session_id') == session or (terminal_id() and fm.get('terminal') == terminal_id()):
+            if (fm.get('session_id') == session or (terminal_id() and fm.get('terminal') == terminal_id())
+                    or (fm.get('status') == 'resumed' and (owns_transfer(root, current, fm, session)
+                                                           # an untraceable own transfer gets holder/recovery guidance below
+                                                           or fm.get('resumed_by') == session))):
                 predecessor = current
         if current and (not predecessor or os.path.realpath(os.path.expanduser(predecessor)) != os.path.realpath(current)):
             return dict(outcome='conflict', path=current, action='This topic already has a checkpoint. Supply its authoritative path as predecessor to continue that lineage, or use a distinct topic for independent work.')
@@ -302,11 +489,26 @@ def save(root, session, request_id, document):
             ledger._check_owner(predecessor, session)
             # Re-read under the lock: another session may have resumed it; only the resumer may continue it.
             held = ledger._read_fm(predecessor)
-            if held.get('status') == 'resumed' and held.get('resumed_by') != session:
-                return dict(outcome='conflict', path=predecessor, action='Another session already resumed this handoff; do not supersede it. Run lookup, or use a distinct topic for independent work.')
+            if held.get('status') == 'resumed' and not owns_transfer(root, predecessor, held, session):
+                holder = resumed_holder(root, predecessor, held)
+                return dict(outcome='conflict', path=predecessor,
+                            holder=dict(resumed_by=held.get('resumed_by'), terminal=holder.get('terminal'),
+                                        runner_id=holder.get('runner_id'), resumed=held.get('resumed')),
+                            recovery=(dict(command='python3 %s recover-transfer %s --previous-session %s --resumed-at %s --fingerprint %s' % (
+                                shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')), shlex.quote(predecessor),
+                                shlex.quote(held.get('resumed_by', '')), shlex.quote(held.get('resumed', '')), snapshot(predecessor)),
+                                requires='Explicit user confirmation that this terminal performed this exact transfer; then add --confirm-holder.')
+                                if not holder.get('terminal') and not holder.get('runner_id') else None),
+                            action='Handoff resumed by %s in terminal %s at %s; do not supersede a different or untraceable holder. Continue in the holding terminal with: python3 %s save --input <original-draft.json>.'
+                            % (held.get('resumed_by'), holder.get('terminal') or 'unknown', held.get('resumed'),
+                               shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py'))))
             # Only a command this machine saved is inherited; an untrusted predecessor's would be laundered into a trusted successor.
             if not document.get('verify') and ledger.trusted(record['path'], record['text'], record['fm']):
                 document = dict(document, verify=record['fm'].get('verify', ''))
+        prior = ledger._read_fm(predecessor) if predecessor and ledger.trusted(predecessor) else {}
+        lineage_warning = ([] if not predecessor or prior else
+                           ['Predecessor is untrusted (for example abandoned before publication); no skills, references, verify or continuity were inherited. Supply any still-required ones explicitly.'])
+        document = continuation_document(document, prior)
         if not document.get('verify'):
             # User-level config only: a repo's .context-watch.json must not choose a command this machine will trust.
             document = dict(document, verify=project_setting(root, 'verify', str, user_only=True) or '')
@@ -332,6 +534,8 @@ def save(root, session, request_id, document):
             if isinstance(value, list):
                 value = ', '.join(dict.fromkeys(value))
             fields[key] = value
+        if document['continuity']:
+            fields['continuity'] = json.dumps(document['continuity'], sort_keys=True)
         if predecessor:
             fields['predecessor'] = predecessor
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
@@ -343,11 +547,22 @@ def save(root, session, request_id, document):
         for directory in destinations:
             path = os.path.join(directory, filename)
             try:
+                # Durable intent precedes the document. Recovery does not depend
+                # on a remembered request id or a temporary author draft.
+                recovery_id = hashlib.sha256((os.path.realpath(root) + '\0' + os.path.realpath(path)).encode()).hexdigest()
+                intent_warning = []
+                digest = hashlib.sha256(text.encode()).hexdigest()
+                try:
+                    write_json(recovery_path(root, path), dict(path=os.path.realpath(path), root=root,
+                               created_at=time.time(), content_hash=digest,
+                               seal=ledger.seal(recovery_id, digest)))
+                except OSError:
+                    intent_warning.append('Publication recovery intent is unavailable; retain the original request ID and draft for legacy retry.')
                 publish(path, text)
                 write_json(path + '.published', ledger.seal(identity, ledger.content_fingerprint(text)))
                 # The successor's predecessor field is the committed lineage record.
                 # Old-file cleanup is optional and never makes a saved successor vanish.
-                warnings = []
+                warnings = intent_warning + lineage_warning
                 if len(body.split()) > ledger.RECOMMENDED_WORDS or len(text.encode()) > RECOMMENDED_DOCUMENT_BYTES:
                     warnings.append('Checkpoint exceeds the recommended 1500 words / 24000 bytes; keep essential context and consider optional background references.')
                 if re.search(r'\b(?:re[- ]?read|read\s+the\s+(?:whole|entire)|load\s+(?:the\s+)?skill)\b', body, re.I):
@@ -361,6 +576,10 @@ def save(root, session, request_id, document):
             except OSError as exc:
                 if os.path.exists(path):
                     return dict(outcome='blocked', path=path, action='Publication was interrupted after writing the document. Keep the draft and retry the same request ID to finish its receipt; do not clear.')
+                try:
+                    os.unlink(recovery_path(root, path))
+                except OSError:
+                    pass
                 failures.append(dict(path=directory, error=type(exc).__name__))
         return dict(outcome='blocked', errors=failures, action='Keep this session and the draft. Both supported locations failed; report access/storage failure. Do not clear or claim the handoff was saved.')
 
@@ -377,13 +596,130 @@ def snapshot(path):
     return ledger.content_fingerprint(read_text(path))
 
 
-def receipt_path(root, session):
-    return ledger.session_note_path(root, session) + '.prepared'
+def recover_transfer(path, root, session, previous_session, resumed_at, fingerprint, confirm=False):
+    root, path = ledger.project_root(root), os.path.realpath(path)
+    if not confirm:
+        return dict(outcome='needs-confirmation', path=path,
+                    action='Ask the user to confirm that this terminal actually performed the legacy transfer, using its transcript and exact holder/time. Only then rerun with --confirm-holder. The saver terminal is not evidence.')
+    if not terminal_id():
+        raise ValueError('Legacy recovery requires the current stable terminal identity.')
+    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(path):
+        fm = ledger._read_fm(path)
+        ledger._check_owner(path, session)
+        if (ledger.resolve(path, root)['authoritative'] != path or fm.get('status') != 'resumed'
+                or fm.get('resumed_by') != previous_session or fm.get('resumed') != resumed_at
+                or snapshot(path) != fingerprint):
+            raise ValueError('Legacy holder/time changed or checkpoint is no longer authoritative; inspect history.')
+        holder = resumed_holder(root, path, fm)
+        if (holder.get('provenance') == 'user-attested-legacy-holder'
+                and holder.get('terminal') == terminal_id()):
+            return dict(outcome='recovered', path=path, action='This exact legacy transfer was already recovered for this terminal. Retry the preserved continuation draft.')
+        if holder.get('terminal') or holder.get('runner_id'):
+            raise ValueError('This transfer already has holder provenance; continue in its holding terminal.')
+        receipt = dict(path=path, fingerprint=snapshot(path), acknowledged_at=resumed_at,
+                       verified=True, terminal=terminal_id(), runner_id='', dependencies={},
+                       provenance='user-attested-legacy-holder', recovered_by=session,
+                       recovered_at=datetime.now().isoformat(timespec='microseconds'))
+        write_receipt(root, previous_session, path, receipt)
+        return dict(outcome='recovered', path=path,
+                    action='Recorded the user-attested legacy holder without changing lineage. Retry the preserved continuation draft with save; do not execute historical next steps again.')
+
+
+INTENT_TTL = 30 * 86400
+
+
+def prune_publication_intents(root):
+    from pathlib import Path
+    with ledger.locked(ledger.session_note_path(root, 'publisher')):
+        directory = Path(os.path.expanduser('~/.local/state/session-handoff/publications'))
+        for item in directory.glob('*.json'):
+            try:
+                intent = load_state_json(str(item))
+                if (os.path.realpath(intent.get('root', '')) == os.path.realpath(root)
+                        and time.time() - float(intent.get('created_at', 0)) > INTENT_TTL):
+                    item.unlink()
+            except (OSError, ValueError, TypeError):
+                pass
+
+def recovery_path(root, path):
+    key = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + os.path.realpath(path)).encode()).hexdigest()
+    return os.path.expanduser('~/.local/state/session-handoff/publications/' + key + '.json')
+
+
+def repair(path, root, session):
+    root, path = ledger.project_root(root), os.path.realpath(path)
+    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(path):
+        try:
+            recovery = load_state_json(recovery_path(root, path))
+        except FileNotFoundError:
+            return dict(outcome='needs-original-draft', path=path,
+                        action='No durable publication intent exists for this legacy save. Retry the original save request ID and draft; preserve the checkpoint and current session. Do not clear.')
+        key = hashlib.sha256((os.path.realpath(root) + '\0' + path).encode()).hexdigest()
+        text = read_text(path)
+        if not ledger.valid_seal(recovery['seal'], key, hashlib.sha256(text.encode()).hexdigest()):
+            raise ValueError('Publication recovery intent is not authenticated; keep the checkpoint and original draft.')
+        fm = ledger.parse_front_matter(text)
+        if (recovery['path'] != path or os.path.realpath(recovery['root']) != os.path.realpath(root)
+                or fm.get('status') != 'open'):
+            raise ValueError('Checkpoint changed since publication intent; preserve it and reconcile before repair.')
+        if fm.get('terminal'):
+            owned = terminal_id() == fm['terminal']
+        else:
+            owned = session == fm.get('session_id')
+        if not owned:
+            raise ValueError('Repair belongs to another terminal/session; run it in the publishing terminal.')
+        ledger._check_owner(path, session)
+        if ledger.resolve(path, root)['authoritative'] != path:
+            raise ValueError('Checkpoint is no longer authoritative; inspect history before repair.')
+        write_json(path + '.published', ledger.seal(fm['checkpoint_id'], ledger.content_fingerprint(text)))
+        return dict(outcome='saved', path=path, checkpoint_id=fm['checkpoint_id'],
+                    action='Publication repaired. Run lookup and follow the current continuation policy; do not restart from stale instructions.')
+
+
+def receipt_path(root, session, path=None):
+    if path is None:
+        return ledger.session_note_path(root, session) + '.prepared'
+    key = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + session + '\0'
+                          + os.path.realpath(path)).encode()).hexdigest()
+    return os.path.expanduser('~/.local/state/session-handoff/transfers/' + key + '.json')
+
+
+def transfer_seal_fields(root, session, path, receipt):
+    identity = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + session
+                               + '\0' + os.path.realpath(path)).encode()).hexdigest()
+    payload = {k: v for k, v in receipt.items() if k != 'seal'}
+    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return identity, fingerprint
+
+
+def valid_transfer_receipt(root, session, path, receipt):
+    if not isinstance(receipt, dict):
+        return False
+    try:
+        identity, fingerprint = transfer_seal_fields(root, session, path, receipt)
+        return ledger.valid_seal(receipt.get('seal'), identity, fingerprint)
+    except (RecursionError, ValueError, TypeError):
+        return False
+
+
+def write_receipt(root, session, path, receipt):
+    receipt.update(session_id=session, project=os.path.realpath(ledger.project_root(root)))
+    identity, fingerprint = transfer_seal_fields(root, session, path, receipt)
+    receipt['seal'] = ledger.seal(identity, fingerprint)
+    write_json(receipt_path(root, session, path), receipt)
+
+
+def read_receipt(root, session, path):
+    try:
+        return load_state_json(receipt_path(root, session, path))
+    except FileNotFoundError:
+        # Existing same-session receipts remain usable; never invent provenance.
+        return load_state_json(receipt_path(root, session))
 
 
 def write_json(path, value):
     directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix='.state-', dir=directory)
     try:
         with os.fdopen(fd, 'w') as f:
@@ -456,10 +792,11 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
     ledger._records(root, errors)
     if errors:
         return dict(outcome='blocked', errors=errors[:5], action='Restore read access before preparing; authoritative state may be hidden.')
+    requested = path
     resolved = ledger.resolve(path, root)
     path = resolved['authoritative']
     if not path:
-        return lookup(root)
+        return dict(outcome='none', action='No saved handoff matches the requested target %r. Use lookup only to select different saved work explicitly; native conversation recovery is independent.' % str(requested)[:200])
     if resolved['chain'][-1]['status'] == 'unpublished':
         return dict(outcome='incomplete', path=path, action='The newest checkpoint for this topic was never fully published (interrupted save). Keep the draft/session; retry the original save request to finish it, or inspect history to repair it. Do not clear.')
     if resolved['chain'][-1]['status'] != 'open':
@@ -479,7 +816,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             raise ValueError('Repair the checkpoint before preparation: ' + '; '.join(problems))
         ledger._check_owner(path, session)
         body = text.split('\n---\n', 1)[-1]
-        refs, skills, seen, dependencies = [], [], set(), {}
+        refs, skills, all_skills, seen, dependencies = [], [], [], set(), {}
         required = ledger._split_csv(fm.get('references', ''))
         own = ledger.trusted(path, text, fm)
         real_root = os.path.realpath(root)
@@ -501,7 +838,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         reused_bytes = 0
         if reuse_receipt:
             try:
-                delivered = json.loads(read_text(delivery_file))
+                delivered = load_state_json(delivery_file)
                 if (delivered['token'] == reuse_receipt and delivered['path'] == path
                         and delivered['fingerprint'] == fingerprint
                         and delivered['references'] == reference_fingerprints
@@ -530,6 +867,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                 seen.add(canonical)
                 content = read_text(canonical)
                 dependencies[canonical] = hashlib.sha256(content.encode()).hexdigest()
+                all_skills.append(dict(name=name, text=content))
                 if canonical in loaded:
                     omitted_skills += 1
                     continue
@@ -542,6 +880,10 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                       trusted=own,
                       workspace=ledger.claim_report(path) if execute else [],
                       optional_references=ledger._split_csv(fm.get('optional_references', ''))[:8])
+        if fm.get('continuity'):
+            result['continuity'] = continuity_items(json.loads(fm['continuity']))
+        if fm.get('predecessor'):
+            result['predecessor'] = fm['predecessor']
         if withheld:
             result['withheld_references'] = withheld
             result['action'] += ' References outside the project root were not loaded (untrusted checkpoint): ' + ', '.join(withheld[:8])
@@ -570,8 +912,10 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                     raise ValueError('Checkpoint changed during preparation; retry prepare.')
                 ledger._set_fields(path, [('claimed', datetime.now().strftime(ledger.STAMP)), ('claim_owner', session)], ('claimed:', 'claim_owner:'))
                 try:
-                    write_json(receipt_path(root, session), dict(path=path, fingerprint=fingerprint, dependencies=dependencies,
-                               prepared_at=time.time(), verified=not bool(fm.get('verify')), metrics=result['metrics']))
+                    write_receipt(root, session, path, dict(path=path, fingerprint=fingerprint, dependencies=dependencies,
+                               prepared_at=time.time(), verified=not bool(fm.get('verify')), metrics=result['metrics'],
+                               terminal=terminal_id(), runner_id=os.environ.get('HANDOFF_RUN_ID', ''),
+                               package=dict(body=body, references=refs, skills=all_skills)))
                 except OSError:
                     ledger._set_fields(path, [], ('claimed:', 'claim_owner:'))
                     raise
@@ -589,8 +933,11 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
 
 def prepared_receipt(path, root, session):
     import time
-    with open(receipt_path(root, session)) as f:
-        receipt = json.load(f)
+    receipt = read_receipt(root, session, path)
+    if not valid_transfer_receipt(root, session, path, receipt):
+        raise ValueError('Preparation receipt is unsigned or invalid; run prepare --execute again.')
+    if receipt.get('seal') and receipt.get('terminal') and receipt['terminal'] != terminal_id():
+        raise ValueError('Preparation belongs to a different terminal; do not acknowledge it.')
     if os.path.realpath(receipt['path']) != os.path.realpath(path) or time.time() - receipt['prepared_at'] > 7200:
         raise ValueError('Preparation absent or expired; prepare again.')
     resolved = ledger.resolve(path, root)
@@ -613,13 +960,20 @@ def acknowledge(path, root, session):
     root = ledger.project_root(root)
     with ledger.locked(path):
         fm = ledger._read_fm(path)
+        ledger._check_owner(path, session)
         if fm.get('status') == 'resumed' and fm.get('resumed_by') == session:
+            if not owns_transfer(root, path, fm, session):
+                raise ValueError('Transfer belongs to a different terminal; do not acknowledge it.')
             return dict(outcome='resumed', path=path, action='This session already acknowledged the transfer.')
         receipt = prepared_receipt(path, root, session)
         if not receipt['verified']:
             return dict(outcome='blocked', action='Verification has not passed. Run verify; keep the claim recoverable until preparation succeeds.')
-        ledger._set_fields(path, [('status', 'resumed'), ('resumed', datetime.now().isoformat(timespec='microseconds')), ('resumed_by', session)],
-                           ('status:', 'resumed:', 'resumed_by:', 'claimed:', 'claim_owner:'))
+        resumed_at = datetime.now().isoformat(timespec='microseconds')
+        receipt.update(acknowledged_at=resumed_at, terminal=terminal_id(), runner_id=os.environ.get('HANDOFF_RUN_ID', ''))
+        write_receipt(root, session, path, receipt)
+        ledger._set_fields(path, [('status', 'resumed'), ('resumed', resumed_at), ('resumed_by', session),
+                                  ('transfer_receipt', 'signed')],
+                           ('status:', 'resumed:', 'resumed_by:', 'transfer_receipt:', 'claimed:', 'claim_owner:'))
         import time
         note = ledger.read_session_note(root, session=session)
         note.update(session_id=session, ts=time.time(), resumed_at=time.time(), resumed_topic=fm.get('topic'))
@@ -667,7 +1021,7 @@ def verify(path, root, session, timeout=60, confirm=False):
     # Recheck content and ownership after the command; never bless a changed checkpoint.
     receipt = prepared_receipt(path, root, session)
     receipt['verified'] = (code == 0 or known) and not timed_out
-    write_json(receipt_path(root, session), receipt)
+    write_receipt(root, session, path, receipt)
     excerpt = ''
     if code or timed_out:
         with open(log, 'rb') as f:
@@ -713,12 +1067,123 @@ def section(body, title):
     return match[1].strip() if match else ''
 
 
+REPLAY_TTL = 7200
+
+
+def replay_fresh(receipt):
+    import time
+    return 0 <= time.time() - float(receipt.get('prepared_at', 0)) <= REPLAY_TTL
+
+
+def prune_transfer_payloads(root):
+    from pathlib import Path
+    directory = Path(os.path.expanduser('~/.local/state/session-handoff/transfers'))
+    for item in directory.glob('*.json'):
+        try:
+            receipt = load_state_json(str(item))
+            if (receipt.get('project') != os.path.realpath(root) or replay_fresh(receipt)
+                    or not (receipt.get('delivery') or receipt.get('package'))):
+                continue
+            path, session = receipt['path'], receipt['session_id']
+            if not valid_transfer_receipt(root, session, path, receipt):
+                continue  # Untrusted metadata cannot choose a filesystem lock target.
+            with ledger.locked(path):
+                receipt = read_receipt(root, session, path)
+                if valid_transfer_receipt(root, session, path, receipt) and not replay_fresh(receipt):
+                    receipt.pop('delivery', None)
+                    receipt.pop('package', None)
+                    receipt['delivery_state'] = 'expired'
+                    write_receipt(root, session, path, receipt)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # Cache pruning never blocks current work.
+
+
+def pending_delivery(root, path, fm, session):
+    # Most records were flushed long ago: inspect small metadata before hashing
+    # checkpoint content or resolving its lineage in the bounded hook worker.
+    if fm.get('status') != 'resumed':
+        return False
+    try:
+        receipt = read_receipt(root, fm.get('resumed_by', ''), path)
+        if receipt.get('delivery_state') != 'pending' or not replay_fresh(receipt):
+            return False
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return (owns_transfer(root, path, fm, session)
+            and ledger.resolve(path, root)['authoritative'] == path)
+
+
+def delivered(root, path, session):
+    # A successful flush is transport evidence only, not proof the host consumed
+    # the response. Explicit holder replay remains available afterward.
+    with ledger.locked(path):
+        fm = ledger._read_fm(path)
+        if owns_transfer(root, path, fm, session):
+            receipt = resumed_holder(root, path, fm)
+            if receipt.get('delivery'):
+                receipt['delivery_state'] = 'flushed'
+                write_receipt(root, fm['resumed_by'], path, receipt)
+
+
+def replay_transfer(root, session, target):
+    resolved = ledger.resolve(target, root)
+    path = resolved.get('authoritative')
+    if not path:
+        return None
+    with ledger.locked(path):
+        if ledger.resolve(path, root)['authoritative'] != path:
+            return None  # A successor may have published while waiting for this lock.
+        fm = ledger._read_fm(path)
+        if fm.get('status') != 'resumed' or not owns_transfer(root, path, fm, session):
+            return None
+        ledger._check_owner(path, session)
+        receipt = resumed_holder(root, path, fm)
+        package = receipt.get('delivery')
+        if not package or not replay_fresh(receipt):
+            return None
+        for spec, expected in receipt['dependencies'].items():
+            try:
+                _, content = reference(root, spec)
+            except (OSError, ValueError) as exc:
+                return dict(outcome='needs-context', path=path,
+                            action='Replay dependency unavailable: ' + spec + ' (' + type(exc).__name__ + '); restore it or reconcile from history.')
+            if hashlib.sha256(content.encode()).hexdigest() != expected:
+                return dict(outcome='needs-context', path=path,
+                            action='A replay dependency changed: ' + spec + '; inspect history and reconcile before continuing.')
+        # Refresh workspace findings; replay never runs verification a second time.
+        package['workspace'] = ledger.claim_report(path)
+        return package
+
+
 def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
            catalog=None, reuse_receipt=None, legacy_next_step=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
     root = ledger.project_root(root)
+    prune_transfer_payloads(root)
+    prune_publication_intents(root)
+    errors = []
+    records = ledger._records(root, errors)
+    if errors:
+        return dict(outcome='blocked', errors=errors[:5],
+                    action='Restore read access before resume or replay; newer authoritative work may be hidden.')
     if target is None:
-        found = lookup(root)
+        pending = []
+        for record in records:
+            if pending_delivery(root, record['path'], record['fm'], session):
+                pending.append(record['path'])
+        current_open = [r['path'] for r in records if ledger._is_open(r['fm'])
+                        and ((terminal_id() and r['fm'].get('terminal') == terminal_id())
+                             or r['fm'].get('session_id') == session)]
+        if pending and current_open:
+            return dict(outcome='choose', candidates=[dict(path=p) for p in pending + current_open],
+                        action='Select pending delivery or current open work explicitly, or none.')
+        if len(pending) == 1:
+            target = pending[0]
+        elif pending:
+            return dict(outcome='choose', candidates=[dict(path=p) for p in pending],
+                        action='Select a pending delivery path to replay, or none.')
+    if target is None:
+        found = lookup(root, session=session)
         if found['outcome'] != 'available':
             return found
         target = found.get('selected')
@@ -727,7 +1192,10 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                         candidates=[dict(path=h['path'], topic=h['topic'], description=h['description'], mine=h['mine'])
                                     for h in found['items']])
     elif not ledger.resolve(target, root)['authoritative']:
-        return dict(outcome='none', action='No handoff matches %r. Run resume without an argument to list open handoffs.' % target[:200])
+        return dict(outcome='none', action='No handoff matches %r. Use lookup to inspect and explicitly select other saved work; native conversation recovery is independent.' % target[:200])
+    replay = replay_transfer(root, session, target)
+    if replay:
+        return replay
     if not confirm_verify:
         # Untrusted verify commands are refused before any claim, so nothing is left to release.
         try:
@@ -761,6 +1229,9 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                   next_step_section='Next steps', verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
                   metrics=prepared['metrics'], action='Continue with ## Next steps in the delivered body.')
+    for key in ('continuity', 'predecessor'):
+        if key in prepared:
+            result[key] = prepared[key]
     if 'body' in prepared:
         result['body'] = body
     else:
@@ -776,7 +1247,19 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
     if output_bytes > budget:
         result.setdefault('warnings', []).append(
             'Resume output exceeds the recommended %d bytes; all required content is included.' % budget)
-    # Acknowledge before any work so later edits by the resuming agent cannot block the transfer.
+    # Persist the full package before acknowledging: stdout can fail after the
+    # transfer. A retry by its holder replays without repeating verification.
+    with ledger.locked(path):
+        receipt = prepared_receipt(path, root, session)
+        receipt['delivery_state'] = 'pending'
+        if 'package' not in receipt:
+            return dict(outcome='needs-context', stage='prepare', path=path,
+                        action='Legacy preparation has no complete replay package; run prepare --execute again before acknowledgement.')
+        receipt['delivery'] = dict(result, **receipt['package'])
+        receipt['delivery'].pop('reused_from', None)
+        receipt['delivery']['action'] = 'Continue with ## Next steps in the delivered body.'
+        receipt.pop('package', None)  # Keep one full payload after preparation becomes delivery.
+        write_receipt(root, session, path, receipt)
     failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
     return failed or result
 
@@ -880,7 +1363,7 @@ def telemetry_report(path):
             f.readline()
         for line in f:
             try:
-                r = json.loads(line)
+                r = decode_state_json(line)
                 if not isinstance(r, dict):
                     raise ValueError('invalid record')
                 sid = str(r.get('session_id') or '')
@@ -937,8 +1420,7 @@ def delivery_metrics(result, root, session, fields=None):
     """
     metrics = result['metrics']
     def serialized_size():
-        keep = {'outcome', 'action'} | set(ledger._split_csv(fields)) if fields else None
-        delivered = {k: v for k, v in result.items() if k in keep} if keep else result
+        delivered = project_output(result, fields)
         return len(json.dumps(delivered, ensure_ascii=False).encode())
     note = ledger.read_session_note(root, session=session)
     observed, threshold = note.get('observed_occupancy_tokens'), note.get('threshold')
@@ -976,7 +1458,7 @@ def save_draft(a):
                 raw = f.read()
         else:
             raw = sys.stdin.read()
-        draft = json.loads(raw)
+        draft = decode_state_json(raw)
     else:
         draft = {}
     if not isinstance(draft, dict):
@@ -1008,6 +1490,8 @@ def save_draft(a):
 def cli(argv):
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
+    session_p = sub.add_parser('session', description='Read current identity, transcript path and pressure state without modifying hook state or scanning transcripts.')
+    session_p.add_argument('--root', default='.')
     report_p = sub.add_parser('report', description='Summarize live resume metrics, excluding tests and separating legacy origin.')
     report_p.add_argument('--log', default=os.path.expanduser('~/.context-watch/resumes.jsonl'))
     lookup_p = sub.add_parser('lookup')
@@ -1015,7 +1499,8 @@ def cli(argv):
     lookup_p.add_argument('--max-age-days', type=int, default=14)
     lookup_p.add_argument('--offset', type=int, default=0)
     lookup_p.add_argument('--topic')
-    save_p = sub.add_parser('save', description='Publish a JSON draft: topic (kebab-case), description, body (Markdown with Objective, Current state and Next steps headings). Optional: predecessor, skills, references, optional_references, verify, reason. Metadata is generated. Use --template for a valid draft; edit its facts before saving.')
+    lookup_p.add_argument('--session', help='Optional current session identity for read-only ownership hints')
+    save_p = sub.add_parser('save', description='Publish a JSON draft: topic (kebab-case), description, body (Markdown with Objective, Current state and Next steps headings). Optional: predecessor, skills, references, optional_references, verify, reason, continuity (items with id/text/status; delegated needs owner; resolved/retired needs evidence). Trusted predecessor dependencies inherit when omitted; [] replaces them. Continuity merges by id; omission or [] retains prior items. Metadata is generated. Use --template for a valid draft; edit its facts before saving.')
     save_p.add_argument('root', nargs='?', help="Default: the predecessor's project, else the current directory's")
     save_p.add_argument('--session')
     save_p.add_argument('--request-id')
@@ -1025,6 +1510,18 @@ def cli(argv):
     save_p.add_argument('--description', help='Draft description; overrides the JSON draft')
     save_p.add_argument('--body', help='Markdown file used as the draft body; overrides the JSON draft')
     save_p.add_argument('--attach', action='append', default=[], help='File the next session must read; repeatable')
+    recover_p = sub.add_parser('recover-transfer', description='Bind an untraceable legacy transfer only after explicit user confirmation of the actual resuming terminal.')
+    recover_p.add_argument('path')
+    recover_p.add_argument('--root', default='.')
+    recover_p.add_argument('--session')
+    recover_p.add_argument('--previous-session', required=True)
+    recover_p.add_argument('--resumed-at', required=True)
+    recover_p.add_argument('--fingerprint', required=True, help='Exact checkpoint fingerprint from resolve --json; binds the user confirmation to unchanged content')
+    recover_p.add_argument('--confirm-holder', action='store_true')
+    repair_p = sub.add_parser('repair', description='Complete publication from authenticated durable intent; no original draft required.')
+    repair_p.add_argument('path')
+    repair_p.add_argument('--root', default='.')
+    repair_p.add_argument('--session')
     prepare_p = sub.add_parser('prepare')
     prepare_p.add_argument('path')
     prepare_p.add_argument('--root', default='.')
@@ -1063,9 +1560,16 @@ def cli(argv):
     history_p.add_argument('--topic')
     history_p.add_argument('--offset', type=int, default=0)
     history_p.add_argument('--limit', type=int, default=10)
-    for parser in (lookup_p, save_p, prepare_p, ack_p, verify_p, resume_p):
-        parser.add_argument('--fields', help='Comma-separated top-level keys to print; outcome and action are always included')
+    for parser in (session_p, lookup_p, save_p, prepare_p, ack_p, verify_p, resume_p):
+        parser.add_argument('--fields', help='Comma-separated optional top-level keys; diagnostics and successful delivery context are always included')
     a = p.parse_args(argv)
+    if a.command == 'session':
+        result = session_info(a.root)
+        if a.fields:
+            keep = {'outcome', 'action'} | set(ledger._split_csv(a.fields))
+            result = {k: v for k, v in result.items() if k in keep}
+        print(json.dumps(result))
+        return 0
     if a.command == 'report':
         try:
             result = telemetry_report(a.log)
@@ -1079,7 +1583,7 @@ def cli(argv):
         if a.template:
             print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
                 body='## Objective\nState the authorized goal and constraints.\n## Current state\nRecord verified evidence, pending work and decisions.\n## Next steps\nName the exact next action; put files it edits or depends on in references as path#Lstart-Lend.\n',
-                references=[])))
+                continuity=[dict(id='goal', text='Replace with the original authorized goal and durable constraints.', status='open')])))
             return 0
     if a.command == 'save':
         try:
@@ -1090,44 +1594,70 @@ def cli(argv):
         if isinstance(draft, dict) and draft.get('outcome'):
             print(json.dumps(draft))
             return 1
-    if hasattr(a, 'session') and not a.session:
-        a.session = default_session(getattr(a, 'root', '.'))
-        if not a.session:
+    if hasattr(a, 'session'):
+        recorded = terminal_session(getattr(a, 'root', '.'))
+        host = (os.environ.get('CODEX_THREAD_ID') or '').strip()
+        chosen = recorded or host or a.session or default_session(getattr(a, 'root', '.'))
+        retry = False
+        if a.command == 'save' and a.session and chosen != a.session:
+            request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
+            retry = original_retry_session(a.root, a.session, request)
+        if retry:
+            print('Finishing the interrupted save of session %s from this terminal.' % a.session, file=sys.stderr)
+            chosen = a.session
+        elif recorded and a.session and a.session != recorded:
+            print('Using hook-recorded session %s instead of differing --session %s.'
+                  % (recorded, a.session), file=sys.stderr)
+        elif not recorded and host and a.session and a.session != host:
+            print('Using current host session %s instead of differing --session %s.' % (host, a.session), file=sys.stderr)
+        a.session = chosen
+        if not a.session and a.command != 'lookup':
             print(json.dumps(NO_SESSION))
             return 1
     try:
         if a.command == 'history':
             result = history(a.root, a.topic, a.offset, a.limit)
+        elif a.command == 'recover-transfer':
+            result = recover_transfer(a.path, a.root, a.session, a.previous_session, a.resumed_at, a.fingerprint, a.confirm_holder)
+        elif a.command == 'repair':
+            result = repair(a.path, a.root, a.session)
         elif a.command == 'verify':
             result = verify(a.path, a.root, a.session, a.timeout, a.confirm_verify)
         elif a.command == 'prepare':
-            catalog = json.loads(read_text(a.catalog)) if a.catalog else None
+            catalog = load_state_json(a.catalog) if a.catalog else None
             result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
         elif a.command == 'acknowledge':
             result = acknowledge(a.path, a.root, a.session)
         elif a.command == 'wait':
             result = wait(a.root, a.target, a.status, a.timeout, a.interval)
         elif a.command == 'resume':
-            catalog = json.loads(read_text(a.catalog)) if a.catalog else None
+            catalog = load_state_json(a.catalog) if a.catalog else None
             result = resume(a.root, a.session, a.target, a.budget_bytes, a.confirm_verify, catalog,
                             a.reuse_receipt, a.legacy_next_step or 'next_step' in ledger._split_csv(a.fields or ''))
         elif a.command == 'save':
             request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
             result = save(a.root, a.session, request, draft)
         else:
-            result = lookup(a.root, a.max_age_days, a.offset, a.topic)
+            result = lookup(a.root, a.max_age_days, a.offset, a.topic, session=a.session)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
     result.setdefault('project', ledger.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
     if a.command == 'resume' and result['outcome'] == 'resumed':
         delivery_metrics(result, a.root, a.session, a.fields)
     telemetry(a.command, a.root, getattr(a, 'session', None), result)
-    if getattr(a, 'fields', None):
-        keep = {'outcome', 'action'} | set(ledger._split_csv(a.fields))
-        result = {k: v for k, v in result.items() if k in keep}
+    delivered_path = result.get('path')
+    result = project_output(result, getattr(a, 'fields', None))
     output = json.dumps(result, ensure_ascii=False)
     print(output)
-    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'verification-failed', 'verification-timeout', 'timeout', 'needs-confirmation') else 0
+    sys.stdout.flush()
+    if a.command == 'resume' and result['outcome'] == 'resumed':
+        try:
+            delivered(a.root, delivered_path, a.session)
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # Keep pending replay if post-delivery diagnostics cannot persist.
+    if a.command == 'save' and result['outcome'] == 'incomplete':
+        return 1
+    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'needs-original-draft', 'verification-failed', 'verification-timeout', 'timeout', 'needs-confirmation') else 0
 
 
 if __name__ == '__main__':

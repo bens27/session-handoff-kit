@@ -55,8 +55,14 @@ except as listed here.
   references outside the project root are not loaded. In fully automatic mode (`HANDOFF_AUTO=1`) outside AgentsRoom, the
   `Stop` hook runs `tmux send-keys` to type `/clear` and `resume` into your own
   pane, and the `auto` runner launches the agent command you give it. In
-  AgentsRoom the `Stop` hook instead tells the agent to call the AgentsRoom
-  `agents_restart` tool.
+  AgentsRoom, save/pressure guidance produces an `agents_restart` candidate with
+  `requires_preflight: true`; the Stop path does not type into an inherited tmux
+  pane. A host call requires `restart_preflight` to return `outcome: ready` and
+  `dispatch: true` from authoritative current capability, identity, complete
+  worker inventory and hold observations. This kit supplies no such host adapter.
+  If preflight cannot be established, keep the published checkpoint, stop and
+  start a fresh session manually with `continue the handoff`. The automatic-mode
+  default alone never grants dispatch permission.
 - **Network, opt-in only.** With `CONTEXT_WATCH_JEV=1` and a `TYPESAFE_API_KEY`,
   the `UserPromptSubmit` router POSTs to `https://api.typesafe.ai/v1/systemone`
   (3 s timeout, fails open): up to 4,000 characters of your opening prompt,

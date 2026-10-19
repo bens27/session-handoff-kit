@@ -22,7 +22,7 @@ class ResumeCliTests(unittest.TestCase):
         self.root.mkdir()
         (self.root / '.handoffs').mkdir()
         self.env = {k: v for k, v in os.environ.items()
-                    if k not in ('AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID',
+                    if k not in ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID',
                                  'HANDOFF_SKILL_ROOTS', 'CODEX_HOME', 'HANDOFF_AUTO')}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
@@ -54,11 +54,29 @@ class ResumeCliTests(unittest.TestCase):
         self.assertNotIn('selected', out)
         self.assertEqual([i['mine'] for i in out['items']], [False, False])
 
-    def test_lookup_selects_the_only_handoff(self):
+    def test_lookup_requires_selection_for_foreign_terminal_but_preserves_portable_recovery(self):
         only = self.save('alpha', terminal='term-a')
         _, out = self.run_cli('lookup', terminal='term-z')
-        self.assertEqual(out['selected'], only)
+        self.assertNotIn('selected', out)
+        self.assertEqual(out['items'][0]['path'], only)
         self.assertFalse(out['items'][0]['mine'])
+        _, own = self.run_cli('lookup', terminal='term-a')
+        self.assertEqual(own['selected'], only)
+        _, portable = self.run_cli('lookup')
+        self.assertEqual(portable['selected'], only)
+
+    def test_lookup_and_resume_share_explicit_untagged_session_context(self):
+        session_a = 'session-' + 'a' * 200 + '-owner'
+        session_b = 'session-' + 'a' * 200 + '-other'
+        own = self.save('untagged', session=session_a)
+        _, out = self.run_cli('lookup', '--session', session_a, terminal='term-a')
+        self.assertEqual(out['selected'], own)
+        self.assertTrue(out['items'][0]['mine'])
+        _, other = self.run_cli('lookup', '--session', session_b, terminal='term-a')
+        self.assertNotIn('selected', other)
+        self.assertFalse(other['items'][0]['mine'])
+        code, resumed = self.run_cli('resume', '--session', session_a, terminal='term-a')
+        self.assertEqual((code, resumed['outcome']), (0, 'resumed'))
 
     def skill(self, root, name, text):
         path = Path(root) / name / 'SKILL.md'
@@ -263,12 +281,16 @@ class ResumeCliTests(unittest.TestCase):
         code, out = self.run_cli('resume', 'other', '--session', 'new2')
         self.assertEqual((code, out['outcome'], out['stage']), (1, 'needs-context', 'prepare'), out)
 
-    def test_fields_limits_output_to_named_keys_plus_outcome_and_action(self):
+    def test_fields_trims_optional_output_but_preserves_context_and_diagnostics(self):
         path = self.save()
         _, out = self.run_cli('lookup', '--fields', 'selected,total')
-        self.assertEqual(out, dict(outcome='available', action=out['action'], selected=path, total=1))
+        self.assertEqual(out, dict(outcome='available', action=out['action'], selected=path, total=1, errors=[]))
         _, out = self.run_cli('resume', '--session', 'new', '--fields', 'next_step')
-        self.assertEqual(set(out), {'outcome', 'action', 'next_step'})
+        self.assertEqual(out['outcome'], 'resumed')
+        self.assertEqual(out['body'], BODY)
+        self.assertEqual(out['next_step'], 'Run the parser checks.')
+        self.assertEqual(out['path'], path)
+        self.assertNotIn('project', out)
         _, out = self.run_cli('acknowledge', path, '--session', 'new', '--fields', 'path')
         self.assertEqual(set(out), {'outcome', 'action', 'path'})
 

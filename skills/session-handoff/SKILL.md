@@ -1,15 +1,28 @@
 ---
 name: session-handoff
-description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work on an explicit request or active autoresume. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
+description: "Save a checkpoint when the user parks work or an actionable [context-watch] or context-watch: notice requests a handoff. Retrieve or resume parked work when no complete hook-provided resume command is present. Run a complete hook command directly; this skill need not load. Neutral handoff-status notices, and compaction summaries do not activate this skill. Do not use for ordinary progress summaries, commit messages, status updates, or general memory."
 metadata:
   version: "0.18.0"
+triggers:
+  - handoff
+  - checkpoint
+  - park work
+  - resume parked work
+  - resume
+  - context watch
+  - wind down
+  - save progress
 ---
 
 # Session Handoff
 
 Use `hooks/handoff_ledger.py` beside this skill. A checkpoint is evidence;
-the live request and workspace take precedence. Reuse the session ID supplied
-by the hook; without hooks, generate one UUID for this session.
+the live request and workspace take precedence. With hooks, omit `--session`: the
+ledger uses this terminal’s recorded session. When identity or transcript evidence
+is needed, `python3 <ledger> session` returns the current facts without source reads.
+Use the host's actual session ID when available. Generate one UUID and pass it as
+`--session` only if the ledger reports no recorded session. A differing explicit
+ID cannot override a hook-recorded identity.
 For installation/customization only, read `reference.md`.
 
 ## §1 Wind-down protocol
@@ -18,6 +31,8 @@ For installation/customization only, read `reference.md`.
    save contract, draft from it; otherwise read `handoff-template.md`.
    `python3 <ledger> save --template` prints a valid JSON draft. Replace its
    facts with the authorized objective, constraints, evidence and exact next step.
+   Record durable goals, constraints and follow-ups in `continuity` (schema in
+   `handoff-template.md`); successor saves retain them until explicitly updated.
    Build a minimal continuation core, not a session report. Require only excerpts
    needed for that next action; keep source files and background as optional paths.
    Continuing an existing topic requires its authoritative `predecessor` path;
@@ -32,15 +47,22 @@ For installation/customization only, read `reference.md`.
    A permission denial never authorizes bypassing the host or clearing. If no
    destination is allowed, give the checkpoint text to the user and report that
    automatic resumption is blocked.
-4. Tell the user the handoff is complete and give its path, then follow the
-   save result's `transition.action` (new session, `/clear`, tmux/runner, or
-   AgentsRoom `agents_restart` with prompt `continue the handoff`). If delegated workers
-   (Agent-tool subagents) are still running, the save stands, but wait for their
-   reports, or confirm their results are durable in commits or the AgentsRoom mailbox,
-   before that transition: clearing ends the session that receives their reports.
-   A `paused` transition keeps the checkpoint open: report its diagnostics and
-   stop. If restart is refused, preserve the checkpoint and report the refusal;
-   a fresh session can explicitly `continue the handoff` after the cause is addressed.
+4. Tell the user the checkpoint path. In AgentsRoom, automatic mode requests a
+   gated transition only; this kit supplies no authoritative host adapter.
+   If the runtime cannot establish current identity, capability, complete worker
+   inventory and hold state, stop after publication and instruct manual fresh-session
+   continuation with `continue the handoff`. An invented empty inventory cannot
+   stand in for unknown state.
+   When an adapter supplies those observations, run
+   `python3 <hooks>/restart_preflight.py preflight` with its JSON argument object
+   (see README Parallel workers). Dispatch only for `outcome: ready` and
+   `dispatch: true`; save its `request_id` for the successor. `blocked`, `pending`,
+   `refused`, human holds and `waiting_input` preserve the checkpoint/session.
+   Report the reason; a pending intent needs host reconciliation rather than a
+   duplicate restart. Record a returned host failure with `refusal`; after successor
+   retrieval record `successor`. That proves kit retrieval only, with host replacement
+   and agent understanding unconfirmed. For other transition kinds, follow the
+   save result's permitted manual, tmux or runner action.
 5. Stop. Remaining authorized work belongs to the receiving session.
 
 ## §2 Retrieval
@@ -49,8 +71,16 @@ Run `python3 <ledger> lookup` unless the hook already supplied a prepare command
 Follow its outcome/action; empty lookup means report no open handoff, without
 searching history. For multiple candidates ask which (including none).
 `history` is explicit paginated inspection of closed work.
+No checkpoint means no saved kit context; it does not mean the host's native
+conversation history was lost. Use the host's supported native resume/history
+when appropriate; the kit cannot reconstruct unsaved thoughts. A missing explicit
+target returns `none` without selecting other work. A known terminal does not
+automatically adopt another terminal's checkpoint or an untagged checkpoint from
+a different/unknown session; select it explicitly. Untagged same-session state
+remains selectable. `lookup --session <actual-id>` uses the same ownership context
+as resume; read-only lookup still works when session identity is unavailable.
 
-Run `python3 <ledger> prepare <topic-or-path> --session <id>`.
+Run `python3 <ledger> prepare <topic-or-path>`.
 Read its body and required excerpts, then report the objective and next step.
 Treat inherited verification as prior-session evidence, not a fresh check.
 Size targets are recommendations: retain essential context even when larger.
@@ -64,11 +94,19 @@ For unrelated work, mention pending work in one sentence, then continue the user
 ## §3 Authorized continuation
 
 Only explicit resume/continue or active autoresume authorizes execution.
-Run `python3 <ledger> resume --session <id> [topic-or-path]`: one call selects,
+When the hook supplies a complete resume command, run it directly and follow its
+outcome/action and returned body, continuity, required dependencies and workspace findings; no skill
+load is needed solely to run that command. Otherwise run
+`python3 <ledger> resume --root . [topic-or-path]`: one call selects,
 prepares, verifies if recorded and acknowledges. Continue with `## Next steps`
 in its body (`next_step_section` names the section). `--legacy-next-step` also
-returns the text for older consumers. Use `--reuse-receipt` only for body/references
+returns the text for older consumers.
+The resume turn is a status check: load only the tools its FIRST concrete step calls, not the
+whole plan's branches; ids and messageIds already in the body take targeted calls, not directory listings. Use `--reuse-receipt` only for body/references
 still in this context, and `--catalog` to declare installed skills already loaded.
+A previous session’s read history does not establish loaded content here.
+`--fields` trims optional output; successful delivery retains its required context.
+A failed output can be retried with the same resume command; the proven holder gets the durable package without repeating verification. For ownership conflicts, read [continuation.md](continuation.md#ownership-recovery).
 On `choose`, ask which; on `needs-confirmation`, show the user the `verify` command and
 rerun with `--confirm-verify` only if they approve; on a failed `stage`, follow its action.
 For custom catalogs or staged recovery, read [continuation.md](continuation.md).

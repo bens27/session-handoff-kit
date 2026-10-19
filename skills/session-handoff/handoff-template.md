@@ -4,7 +4,8 @@ Supply `topic`, a one-line `description`, and `body` containing the Markdown
 sections below. Optional fields are `predecessor` (authoritative path; required when continuing an existing topic),
 `skills` (only required execution dependencies), `references` (required files
 or `path#L10-L30` excerpts), `optional_references` (background, not loaded),
-and `verify` (one relevant command). Arrays are accepted for skills/references.
+`verify` (one relevant command), and `continuity` (durable goals, constraints
+and follow-ups; see below). Arrays are accepted for skills/references.
 Only explicit user parking overrides `reason` with `user-parked`.
 
 ```json
@@ -15,6 +16,28 @@ Only explicit user parking overrides `reason` with `user-parked`.
 `status: open`, and retry identity. It validates the complete document before
 publication. Do not copy unrelated skill history or whole predecessor documents
 into the required package. Carry essential constraints into the current body.
+
+## Continuity across successors
+
+Capture the original authorized goal, lasting constraints, unresolved follow-ups
+and delegated work as stable IDs independently of the next-action summary:
+
+```json
+{"continuity":[{"id":"goal","text":"Repair handoff delivery while preserving ownership checks.","status":"open"},{"id":"measurement","text":"Collect originating-session measurements.","status":"delegated","owner":"originating-session agent"}]}
+```
+
+Each item requires nonempty `id`, `text` and `status`. Status is `open`,
+`delegated`, `resolved` or `retired`; optional fields are `owner` and `evidence`.
+Delegation requires `owner`; resolution or retirement requires `evidence`
+(a result/artifact or reason). Update an existing ID to record its disposition.
+Omitting `continuity`, sending `[]`, or leaving an ID out retains prior entries.
+The register inherits only from a trusted predecessor. It records work and
+constraints; live user instructions and current authorization take precedence.
+
+For a trusted predecessor, omitted `skills`, `references` and
+`optional_references` inherit. Supply a new list to replace a field, or `[]` to
+clear it when that dependency is no longer needed. Review inherited dependencies
+against the next action. Previously read skills are not loaded in a fresh context.
 
 ## Body outline
 
@@ -97,4 +120,4 @@ the change; the receiver should only implement it.
   Size warnings never block saving or resumption. Narrow unnecessary background
   when useful; `--budget-bytes` adjusts the recommendation without approval.
 
-To change this template, read "Customizing the template" in `reference.md` first.
+To change this template, read "Customizing" in `reference.md` first.

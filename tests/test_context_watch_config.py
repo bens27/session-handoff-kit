@@ -62,7 +62,7 @@ class Case(unittest.TestCase):
         p = subprocess.run([sys.executable, os.path.join(HOOKS, "handoff_ledger.py"), "save",
                             "--session", "old", "--request-id", "c1"],
                            input=json.dumps({"topic": "work", "description": "Fix it.", "body": BODY}),
-                           env=self.env(), cwd=self.project, capture_output=True, text=True, timeout=30)
+                           env=self.env({"AGENTSROOM_AGENT_ID": "agent-path"}), cwd=self.project, capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
 
 
@@ -76,7 +76,7 @@ class CanonicalLedgerPath(Case):
         outs = []
         for hook in (linked_hook, HOOK):
             notice = self.pressure(140000, hook=hook)
-            status = self.run_hook("SessionStart", {"AUTORESUME": "1"}, hook, source="clear")
+            status = self.run_hook("UserPromptSubmit", {"AGENTSROOM_AGENT_ID": "agent-path"}, hook, prompt="continue the handoff")
             self.assertRegex(status, " (prepare|resume) ")
             outs.append((ledger_paths(notice), ledger_paths(status)))
         (n1, s1), (n2, s2) = outs
@@ -111,6 +111,8 @@ class AutoSettingsFromConfig(Case):
         self.assertIn("70,000-token handoff threshold", msg)
         self.assertIn("Fully automatic mode is active", msg)
         self.assertIn("agents_restart", msg)
+        self.assertIn("restart_preflight", msg)
+        self.assertIn("manual fresh-session continuation", msg)
 
     def test_environment_overrides_the_file(self):
         self.project_config({"auto": True, "at": 70000})

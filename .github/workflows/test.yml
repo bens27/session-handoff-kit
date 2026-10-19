@@ -10,6 +10,11 @@ jobs:
   test:
     name: tests
     runs-on: ubuntu-latest
+    env:
+      CONTEXT_WATCH_LOG: "0"
+      CONTEXT_WATCH_RESUME_LOG: "0"
+      CONTEXT_WATCH_ORIGIN: test
+      CONTEXT_WATCH_JEV: "0"
 
     steps:
       - name: Check out repository
@@ -20,38 +25,35 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Set up Node for extension checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prepare isolated test state
+        shell: bash
+        run: |
+          handoff_test_home="$(mktemp -d "${RUNNER_TEMP}/handoff-home.XXXXXX")"
+          handoff_test_tmp="$(mktemp -d "${RUNNER_TEMP}/handoff-tmp.XXXXXX")"
+          {
+            echo "HOME=$handoff_test_home"
+            echo "USERPROFILE=$handoff_test_home"
+            echo "TMPDIR=$handoff_test_tmp"
+          } >> "$GITHUB_ENV"
+
+      - name: Check verifier prerequisites
+        run: |
+          git --version
+          node --version
+
+      - name: Run all unittest regressions
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: Verify packaging
         run: python3 tests/verify-packaging.py
 
-      - name: Verify Claude auto launcher
-        run: python3 tests/test_claude_auto.py
-
-      - name: Verify Codex auto launcher
-        run: python3 tests/test_codex_auto.py
-
       - name: Verify ledger
         run: python3 tests/verify-ledger.py
-
-      - name: Verify deterministic protocol
-        run: python3 tests/test_protocol.py
-
-      - name: Verify integrity and cost regressions
-        run: python3 tests/test_safety.py
-
-      - name: Verify version bump
-        run: python3 tests/test_bump_version.py
-
-      - name: Verify context-watch config
-        run: python3 tests/test_context_watch_config.py
-
-      - name: Verify context-watch regressions
-        run: python3 tests/test_context_watch_regressions.py
-
-      - name: Verify resume CLI
-        run: python3 tests/test_resume_cli.py
-
-      - name: Verify save CLI
-        run: python3 tests/test_save_cli.py
 
       - name: Verify watcher
         run: python3 tests/verify-watcher.py

@@ -260,7 +260,7 @@ def content_fingerprint(text):
     lines = text.splitlines()
     if fm:
         end = next(i for i in range(1, len(lines)) if lines[i].strip() == '---')
-        volatile = ('claimed:', 'claim_owner:', 'status:', 'resumed:', 'resumed_by:', 'superseded:', 'superseded_by:', 'abandoned:')
+        volatile = ('claimed:', 'claim_owner:', 'status:', 'resumed:', 'resumed_by:', 'transfer_receipt:', 'superseded:', 'superseded_by:', 'abandoned:')
         lines = [l for l in lines[1:end] if not l.startswith(volatile)] + lines[end + 1:]
     return hashlib.sha256('\n'.join(lines).encode()).hexdigest()
 
@@ -314,6 +314,15 @@ def seal(checkpoint_id, fingerprint):
                 mac=_mac(key, checkpoint_id, fingerprint) if key else "")
 
 
+def valid_seal(receipt, checkpoint_id, fingerprint):
+    import hmac
+    key = _receipt_key()
+    return bool(key and isinstance(receipt, dict) and isinstance(receipt.get('mac'), str)
+                and receipt.get('checkpoint_id') == checkpoint_id
+                and receipt.get('fingerprint') == fingerprint
+                and hmac.compare_digest(receipt['mac'], _mac(key, checkpoint_id, fingerprint)))
+
+
 def trusted(path, text=None, fm=None):
     """True only when this machine's own save published exactly this content.
     Legacy, hand-written, cloned or edited checkpoints are untrusted: their
@@ -351,7 +360,8 @@ def _records(root, errors=None):
             if in_fallback and fm.get("project") and not _same_dir(fm["project"], root):
                 continue
             if fm.get('checkpoint_id') and not publication_valid(path, text, fm):
-                fm['status'] = 'unpublished'
+                # Explicit abandonment closes interrupted work; it never makes it trusted.
+                fm['status'] = 'abandoned' if fm.get('status') == 'abandoned' else 'unpublished'
             name_ended, name_topic = _name_parts(path)
             topic = fm.get("topic") or name_topic
             if _is_legacy_single_file(path, legacy) and "topic" not in fm:
@@ -418,6 +428,7 @@ def scan(root, max_age_days=14, stats=None):
                           description=(fm.get("description") or "")[:240],
                           skills=(fm.get("skills") or "")[:240], git=(fm.get("git") or "")[:240],
                           terminal=(fm.get("terminal") or "")[:120],
+                          session_id=fm.get("session_id") or "",
                           age_days=round(age, 1), problems=r["problems"][:8]))
     found.sort(key=lambda h: (h["ended"], h["path"]), reverse=True)
     if stats is not None:
@@ -448,6 +459,9 @@ def resolve(topic_or_path, root):
         "description": (r["fm"].get("description") or "")[:240],
         "references": _split_csv(r["fm"].get("references") or ""),
         "problems": r["problems"],
+        "fingerprint": content_fingerprint(r["text"]),
+        "resumed_by": r["fm"].get("resumed_by"),
+        "resumed": r["fm"].get("resumed"),
     } for r in _records(root) if r["topic"] == topic]
     chain.sort(key=lambda h: (h["ended"], h["path"]))
 
@@ -699,14 +713,14 @@ def mark_superseded(path):
 
 def _cli(argv):
     if not argv or argv[0] in ('--help', '-h'):
-        print('Preferred workflow: resume [--session S] (one-shot) | lookup | save | prepare | verify | acknowledge | wait | history | report.\nRun a command with --help for arguments. Legacy interfaces below:')
+        print('Preferred workflow: resume [--session S] (one-shot) | lookup | save | prepare | verify | acknowledge | wait | history | report | session.\nRun a command with --help for arguments. Legacy interfaces below:')
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
     # Legacy `resume <path> [--owner X]` keeps its direct transfer; any other resume form is the one-shot protocol command.
     legacy_resume = cmd == "resume" and args and not args[0].startswith("-") and all(
         not a.startswith("-") or a == "--owner" for a in args[1:])
-    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history", "report", "resume", "wait") and not legacy_resume:
+    if cmd in ("lookup", "save", "prepare", "verify", "acknowledge", "history", "report", "resume", "wait", "session", "repair", "recover-transfer") and not legacy_resume:
         from handoff_protocol import cli
         return cli(argv)
     if cmd == "list":

@@ -19,7 +19,7 @@ class SessionBloatTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / 'project'
         self.root.mkdir()
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(('HANDOFF_', 'CONTEXT_WATCH_', 'AUTORESUME', 'AGENTSROOM_'))}
+                    if not k.startswith(('CODEX_THREAD_ID', 'HANDOFF_', 'CONTEXT_WATCH_', 'AUTORESUME', 'AGENTSROOM_'))}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, AGENTSROOM_AGENT_ID='terminal-a',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', CONTEXT_WATCH_THINKING='0')
         self.clock = None
@@ -70,6 +70,7 @@ with patch('time.time', return_value=stamp):
         self.hook(140000)
         first = self.save()
         self.assertEqual(first['transition']['kind'], 'agents_restart')
+        self.hook(31000, session='s2', event='SessionStart')
         self.cli('resume', first['path'], session='s2')
         notice = self.hook(140000, session='s2')
         second = self.save(session='s2')
@@ -80,7 +81,7 @@ with patch('time.time', return_value=stamp):
         self.assertNotIn('make your last action a call', notice)
         self.assertIn('paused', notice)
         startup = self.hook(31000, session='s3', event='SessionStart')
-        self.assertIn('paused', startup)
+        self.assertEqual(startup, '')
         self.assertNotIn('Fully automatic:', startup)
         stopped = self.hook(140000, session='s2', event='Stop')
         self.assertIn('paused', stopped)
@@ -177,9 +178,11 @@ with patch('time.time', return_value=stamp):
         self.assertIn('restart-cooldown', second['transition']['diagnostics']['reasons'])
 
     def test_normal_resume_and_expired_hour_budget_allow_restart(self):
-        self.clock = time.time()
+        # Whole seconds avoid sub-microsecond rounding across serialized timestamps.
+        self.clock = float(int(time.time()))
         self.hook(140000)
         first = self.save()
+        self.hook(31000, session='s2', event='SessionStart')
         self.cli('resume', first['path'], session='s2')
         self.clock += 601
         notice = self.hook(140000, session='s2')
@@ -194,6 +197,7 @@ with patch('time.time', return_value=stamp):
 
     def test_lost_ephemeral_note_still_detects_rapid_resume(self):
         first = self.save()
+        self.hook(31000, session='s2', event='SessionStart')
         self.cli('resume', first['path'], session='s2')
         # Simulate cleanup of temporary hook notes; durable ledger remains.
         for note in Path(self.tmp.name).glob('context-watch-session-*.json'):
@@ -208,6 +212,7 @@ with patch('time.time', return_value=stamp):
         self.hook(140000)
         first = self.save()
         self.assertEqual(first['transition']['kind'], 'tmux')
+        self.hook(31000, session='s2', event='SessionStart')
         self.cli('resume', first['path'], session='s2')
         self.hook(140000, session='s2')
         second = self.save(session='s2')
@@ -239,6 +244,7 @@ cli('resume', saved['path'], '--session', 'second')
 pressure('second')
 cli('save', '--session', 'second', doc=dict(topic='work', description='next', body=body + 'Later.\\n', predecessor=saved['path']))
 ''' % (str(HOOKS / 'handoff_ledger.py'), str(HOOKS / 'context_watch.py'), BODY))
+        self.env['CODEX_THREAD_ID'] = 'parent-thread-must-not-leak'
         p = subprocess.run([sys.executable, str(HOOKS / 'context_watch.py'), 'auto', '--max', '3', '--',
                             sys.executable, str(child)], cwd=self.root, env=self.env,
                            capture_output=True, text=True, timeout=30)
@@ -262,12 +268,17 @@ cli('save', '--session', 'second', doc=dict(topic='work', description='next', bo
     def test_filtered_resume_metrics_measure_only_delivered_json(self):
         path = self.save()['path']
         out = self.cli('resume', path, '--fields', 'metrics', session='s2')
-        self.assertEqual(set(out), {'outcome', 'action', 'metrics'})
+        self.assertEqual(out['outcome'], 'resumed')
+        self.assertEqual(out['body'], BODY)
+        self.assertEqual(out['path'], path)
+        self.assertNotIn('project', out)
         self.assertEqual(out['metrics']['delivery_bytes'], len(json.dumps(out, ensure_ascii=False).encode()))
 
     def test_save_retry_after_transfer_does_not_restart_closed_checkpoint(self):
         first = self.save()
+        self.hook(31000, session='s2', event='SessionStart')
         self.cli('resume', first['path'], session='s2')
+        self.hook(31000, session='s1', event='SessionStart')
         retried = self.save()
         self.assertEqual(retried['path'], first['path'])
         self.assertEqual(retried['transition']['kind'], 'none')

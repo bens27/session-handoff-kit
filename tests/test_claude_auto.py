@@ -22,7 +22,7 @@ class LauncherTests(unittest.TestCase):
                 exe = binary / name
                 exe.write_text('#!/usr/bin/env python3\nimport os,sys,json\nfrom pathlib import Path\nPath(os.environ["CAPTURE"]).write_text(json.dumps({"args":sys.argv,"auto":os.getenv("HANDOFF_AUTO"),"max":os.getenv("HANDOFF_AUTO_MAX")}))\n')
                 exe.chmod(0o755)
-            env = dict(os.environ, CLAUDE_CONFIG_DIR=str(config), CAPTURE=str(root / 'capture'),
+            env = dict(os.environ, HOME=str(root / 'home'), USERPROFILE=str(root / 'home'), CLAUDE_CONFIG_DIR=str(config), CAPTURE=str(root / 'capture'),
                        PATH=str(binary)+os.pathsep+os.environ['PATH'], TMUX_PANE='%99')
             # Host identities would suppress the launcher's own terminal ID.
             for key in ('AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID'):

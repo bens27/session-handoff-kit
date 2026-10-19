@@ -367,7 +367,22 @@ identity and publication identity. Identical request retries return the same
 checkpoint; changed content under the same ID is refused. Temporary-file fsync
 and exclusive atomic publication prevent partial Markdown files. Directory
 failures try the other supported location, then return `blocked` with recovery
-instructions. Neither CLI nor skill bypasses host permission denial.
+instructions. New saves persist authenticated, exact-content publication hashes
+in `~/.local/state/session-handoff/publications/` before publishing Markdown.
+`repair PATH` checks it under publisher/checkpoint locks, verifies the original
+publishing terminal (session when no terminal exists), current claims and
+current authoritative lineage, and seals only unchanged open content. It needs
+no original draft or request ID. Intent storage failure degrades to publication
+with an explicit retain-original-request/draft warning. Intents contain hashes
+rather than checkpoint text, failed destinations remove theirs, and subsequent
+save/resume operations prune intents older than 30 days. Missing intent on legacy saves remains blocked
+and requires the original save request. That retry keeps its original `--session` despite a newer hook
+pointer only when session and request ID name an unpublished checkpoint this same terminal wrote; otherwise
+hook identity still wins. A save whose topic or predecessor resolves to unpublished work returns
+`incomplete` with the repair/original-save command, the explicit `abandon PATH` escape and the
+distinct-topic option, and publishes nothing, so no successor silently inherits from an untrusted,
+unfinished record. Explicit abandonment lists the interrupted record as `abandoned` (it stays
+untrusted and unresumable) and lifts the gate; a successor of it inherits nothing and is warned. Neither CLI nor skill bypasses host permission denial.
 
 Lineage is explicit through `predecessor`; branch equality never supersedes work. A resumed predecessor
 can be continued only by the session that resumed it (others get `conflict`), and a
@@ -400,11 +415,49 @@ accepts `--topic/--description/--body/--attach`, and returns `transition`
 Retrying an already transferred/closed save returns transition `none` and never
 requests a restart; retrying a paused publication preserves its pause.
 
+Before acknowledgement, one-shot resume persists a full replay package with the
+per-transfer receipt. Failed stdout delivery leaves pending replay discoverable
+by the same command, including argumentless selection. A successful flush marks
+transport success; it does not prove host consumption. Explicit path replay
+remains available for two hours to the proven holder while checkpoint/dependencies are unchanged
+and authoritative, with current workspace findings and no repeated verification.
+A newer successor or live foreign claim blocks replay. Full replay restores
+previously reused body/references and previously loaded required skills. Expired
+payloads are pruned on subsequent resume; compact holder provenance is retained.
+Pending replay alongside current open work requires explicit selection.
+
+AgentsRoom save transition candidates include `requires_preflight: true`.
+Dispatch requires the standalone preflight module to return ready/dispatch from
+current authoritative host observations; unknown capability, identity, inventory
+or hold state requires manual continuation. Host observation/dispatch serialization
+and successor request-ID/receipt wiring remain adapter boundaries, not implemented
+host guarantees. Runtime snapshots include the preflight module and smoke-check
+its CLI alongside the ledger; its state parsers share the core corruption decoder.
+
 Default resume JSON delivers the full body once and identifies its next-action
 section with `next_step_section`. `--legacy-next-step` or `--fields next_step`
 opts into the older duplicated text field. One-shot resume also accepts the
 installed `--catalog` and same-context `--reuse-receipt` options. Existing
 dependency, expiry, trust and verification checks govern reuse.
+
+`--fields` trims optional output, preserving diagnostics and the available
+successful delivery envelope: body, references, skills, next-step section,
+verification/trust/workspace facts, optional/withheld reference paths, receipt
+and reuse markers, predecessor and continuity. Delivery metrics use the same
+projection as CLI serialization.
+
+Optional draft `continuity` is a list of items with nonempty `id`, `text` and
+`status`; optional keys are `owner` and `evidence`. Status is open, delegated,
+resolved or retired. Delegation requires owner; resolution/retirement requires
+evidence (result or reason). A trusted predecessor's register merges by ID;
+omission and an empty list preserve prior items. Explicit updates record their
+new disposition. Metadata stores the register as one-line JSON. Trusted
+predecessor skills/references/optional_references inherit only when the draft
+omits the field; explicit lists replace it, including `[]`. Untrusted
+predecessors supply neither implicit dependencies nor register entries. The raw
+draft still defines retry identity. These records preserve declared obligations,
+not unrecorded transcript meaning or new authorization.
+
 
 Automatic transition guards operate on trusted terminal-scoped records:
 context pressure within 600 seconds of resume, a third pressure save of one
@@ -502,12 +555,60 @@ CONTEXT_WATCH_RESUME_LOG (0 disables); CONTEXT_WATCH_LOG=0 disables it too.
 Events identify version/origin; tests disable production sinks. `report` excludes
 known tests, separates legacy unknown-origin records, and bounds its read window.
 
-Without autoresume, startup gives a neutral availability hint; only an explicit
-retrieval/resume request gets detailed selection and commands. Neutral opening
-status is emitted once per project/session across SessionStart and UserPromptSubmit;
-explicit handoff commands, compaction guidance and pressure warnings remain available.
+SessionStart is silent for ordinary empty, owned, foreign and paused checkpoint
+state, including automatic-mode startup/clear. An incomplete owned publication
+names only that checkpoint and its save-repair command; compaction recovery remains.
+An anchored `continue the handoff` or `resume the handoff` prompt (case-insensitive,
+optional final period/exclamation mark) inspects ownership read-only in a worker
+with a one-second timeout. Exactly one owned, trusted, open, authoritative checkpoint
+gets an exact-path `resume --fields path,body` command. This projection always
+retains required references/skills, workspace findings, verification and warnings.
+It includes an instruction that the
+skill need not load. No owned checkpoint produces no output; ambiguous or untrusted
+owned state gives one skill pointer. Inspection failure/timeout is silent. Selection
+never claims, acknowledges or verifies. Manual retrieval, other CLI flows and
+pressure-save guidance remain available, including pressure on a matching prompt.
 Informational compaction, floor, unrelated-work and error notices do not activate
 the skill.
+
+With hooks, omit `--session`. The terminal’s recorded identity takes precedence
+over an explicit ID or HANDOFF_SESSION_ID only while bound to the current host
+session. Pointers record the host session at hook time; a mismatching current
+CODEX_THREAD_ID invalidates an older pointer (legacy pointers require an exact
+session match). The current host ID then takes precedence over explicit and
+HANDOFF_SESSION_ID values; differing explicit hook/host IDs produce a warning.
+The headless runner removes inherited host/session IDs before launching each
+fresh child; the child supplies its own actual session identity.
+Without a recorded identity, explicit IDs remain supported. Resume preparation
+receipts record the terminal/runner that performed the transfer and its exact time.
+A later save may continue its own session or a transfer proven by that local receipt
+to belong to the same terminal (runner when no terminal was recorded). The original
+saver’s terminal is not proof of the resumer’s ownership. A newer live claim still
+blocks, and foreign or untraceable transfers remain conflicts with holder details
+and a save command to run in the holding terminal. Receipts persist per checkpoint
+and resuming session in `~/.local/state/session-handoff/transfers/`; a different
+topic's preparation cannot overwrite them. Existing temporary receipts remain a
+read fallback, but unsigned receipts supply no terminal ownership evidence and
+unsigned preparation must be repeated. Transfer receipts authenticate their full
+payload, including project/session/path, fingerprints, transfer timestamp and
+terminal/runner/provenance. The local key remains within the same-user trust
+boundary; this does not isolate arbitrary commands from that user’s credentials.
+Malformed or excessively nested shared state is treated as corrupt: cleanup skips
+it, receipt reads supply no ownership proof, and repair returns a structured
+refusal. Cleanup authenticates receipt metadata before creating a path lock.
+Terminal provenance takes precedence even over a matching session ID.
+Acknowledgement marks the checkpoint `transfer_receipt: signed` (excluded from the
+content fingerprint). A marked transfer whose receipt is missing, corrupt or fails
+authentication is untraceable: no session ID proves ownership, and save returns the
+holder conflict with the `recover-transfer` command. Only unmarked true-legacy transfers
+keep session-ID ownership. Transfers acknowledged before the marker existed are not
+migrated and keep that legacy fallback until their next transfer.
+For untraceable legacy holders, `recover-transfer` requires explicit per-checkpoint
+user confirmation of the actual resuming terminal, exact prior session/timestamp
+and checkpoint fingerprint. Locked checks reject changed/newer state, live foreign
+claims and proven foreign holders; durable user-attested provenance makes retry
+idempotent without rewriting the checkpoint or lineage. Saver identity never
+supplies resumer evidence.
 Save help and `save --template` expose the draft contract directly.
 
 A preparation response includes an opaque delivery receipt. `--reuse-receipt`

@@ -10,7 +10,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 LEDGER = REPO / 'skills/session-handoff/hooks/handoff_ledger.py'
 BODY = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun the parser checks.\n'
-CLEARED = ('AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID', 'HANDOFF_AUTO', 'HANDOFF_RUN_ID',
+CLEARED = ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID', 'HANDOFF_AUTO', 'HANDOFF_RUN_ID',
            'TMUX_PANE', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME')
 
 

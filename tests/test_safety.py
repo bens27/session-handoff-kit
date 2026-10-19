@@ -20,7 +20,7 @@ class SafetyReview(unittest.TestCase):
         self.root = Path(self.tmp.name) / 'project'
         self.root.mkdir()
         (self.root / '.handoffs').mkdir()
-        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('CONTEXT_WATCH_', 'HANDOFF_', 'AUTORESUME', 'TYPESAFE_', 'AGENTSROOM_'))}
+        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('CODEX_THREAD_ID', 'CONTEXT_WATCH_', 'HANDOFF_', 'AUTORESUME', 'TYPESAFE_', 'AGENTSROOM_'))}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_LOG='0',
                         CONTEXT_WATCH_RESUME_LOG='0', CONTEXT_WATCH_ORIGIN='test', TYPESAFE_API_KEY='')
 
@@ -91,12 +91,16 @@ class SafetyReview(unittest.TestCase):
 
     def test_generic_two_word_requests_find_existing_handoff(self):
         self.save()
-        for prompt in ['retrieve handoff','resume handoff','Retrieve handoff!','show handoff','resume the handoff','retrieve work']:
+        for prompt in ['retrieve handoff','resume handoff','Retrieve handoff!','show handoff','retrieve work']:
             with self.subTest(prompt=prompt):
                 response=self.hook(prompt)
                 self.assertRegex(response,' (prepare|resume) ')
                 if prompt.lower().startswith(('retrieve', 'show')):
                     self.assertNotIn('--execute',response)
+
+    def test_explicit_lean_resume_is_silent_for_another_sessions_checkpoint(self):
+        self.save(session='writer')
+        self.assertEqual(self.hook('resume the handoff'), '')
 
     def test_installer_preserves_existing_hook_failure(self):
         home=Path(self.tmp.name)/'codex'

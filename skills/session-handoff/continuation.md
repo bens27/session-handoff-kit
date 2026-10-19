@@ -46,3 +46,77 @@ loaded skills count toward context size without being emitted again.
 `new-path`, `claim`, `resume`, and manual file writing remain legacy interfaces,
 not the automatic checkpoint protocol. Automatic clearing requires a validated
 `save` receipt matching this session's trigger, not a recent file modification.
+
+## Delivery recovery
+
+`--fields path,body` preserves required references, execution skills, verification,
+workspace findings and warnings. Read those fields before continuing. The one-shot
+resume stores a complete package before acknowledgement. Retry the same command
+if output fails; pending delivery is discoverable even by argumentless resume.
+Replay payloads expire after two hours. Pending delivery alongside current open work requires explicit selection. An explicit path can replay within that window after a successful stdout flush too: flush proves
+transport success, not host consumption. Replay requires the authoritative,
+unchanged checkpoint, unchanged dependencies and proven holder; it refreshes
+workspace findings and does not rerun verification. After context loss replay
+includes the full body, references and skills, including previously reused or
+loaded material. A newer successor or live foreign claim blocks replay.
+
+Receipts are durable per checkpoint and resuming session under
+`~/.local/state/session-handoff/transfers/`; preparing another topic preserves
+prior transfer provenance. Holder provenance and replay packages are HMAC-authenticated. Unsigned historical
+receipts give no terminal ownership proof; unsigned preparation requires fresh
+`prepare --execute`. Expired payloads are pruned on subsequent resume operations,
+while compact authenticated holder provenance is retained for lineage continuation. With a current host session ID, an older terminal pointer is ignored;
+omit `--session` to use the current host or a hook pointer bound to that host.
+
+## Ownership recovery
+
+An untraceable legacy holder stays blocked automatically. Ask the user to confirm
+that this terminal actually performed that particular transfer, using the original
+resuming transcript. The original saver terminal proves no resumer ownership.
+Use the conflict's `recovery.command`, or obtain the exact fingerprint, prior
+`resumed_by` and `resumed` timestamp from `resolve <path> --json`, then run:
+
+```sh
+python3 <ledger> recover-transfer <path> --previous-session <old-id> --resumed-at <exact-time> --fingerprint <fingerprint> --confirm-holder
+```
+
+Add `--confirm-holder` only after that per-checkpoint user confirmation. The
+command requires a stable terminal, checks unchanged content and authoritative
+state under lock, rejects live foreign claims and existing foreign holder
+provenance, and records durable user-attested provenance. Repeating the same
+recovery in that terminal is idempotent. It changes no checkpoint or lineage and
+executes no historical next steps. Then retry the preserved continuation draft.
+
+## Publication recovery
+
+If a checkpoint document exists but its publication receipt is missing, run the
+hook's exact `repair <path>` command in the publishing terminal. New saves persist
+authenticated publication hashes before writing the document, so repair needs
+neither the original request ID nor the original draft. It checks the exact
+content, project, owner, current claims and authoritative lineage under lock.
+After `outcome: saved`, follow current lookup/continuation policy. Legacy saves
+without durable intent still require their original save request and draft;
+keep the current session and evidence when repair is blocked. If optional intent
+storage is unavailable, publication can still succeed with a warning to retain
+the original request and draft. Intents retain hashes rather than body text;
+failed destinations remove theirs and intents older than 30 days are pruned
+on subsequent save/resume operations. The legacy original-draft path remains
+available after expiry. Local HMAC receipts detect unsigned or modified state;
+they do not sandbox commands running with access to the same user’s signing key.
+
+An unreadable ledger record blocks preparation and resume until read access is
+restored. This preserves the existing authority policy: front matter, rather than
+filename, assigns a topic, so an unreadable file may hide a newer successor.
+
+## Successor retrieval evidence
+
+When a host adapter supplies a pending restart request ID, perform read-only
+`prepare` and pass its opaque `delivery_receipt`, actual new session and stable
+terminal to `restart_preflight.py successor`. It checks the local preparation
+cache and unchanged dependencies without claiming or acknowledging work. Then
+follow the authorized continuation flow; reuse that body/reference receipt only
+while its content remains in context. The receipt proves kit retrieval only,
+with `host_confirmed: false`. Automatic request-ID propagation, host identity
+proof, serialized host dispatch and successor receipt wiring are not provided
+by these standalone modules; the host adapter must supply them. Without one,
+retain the checkpoint for manual continuation.
