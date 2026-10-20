@@ -1,12 +1,12 @@
 # Project skill activation
 
-For changes to handoff lifecycle, context hooks, resumption, or harness architecture, read the canonical `~/.agents/skills/n-agentic-harnesses/SKILL.md` and only the references relevant to the change. This project activates that otherwise explicit-only skill; runtime variants remain optional supporting material.
+For changes to handoff lifecycle, context hooks, resumption, or harness architecture, read `SPEC.md`, `README.md` and `docs/` for the parts the change touches. If the personal skill `~/.agents/skills/n-agentic-harnesses/SKILL.md` is installed, also read it and only the references relevant to the change; the repository does not ship it, so its absence is not a blocker.
 
-For behavior changes to hooks, ledger state, or automatic resumption, read `~/.agents/skills/tdd/SKILL.md` and use a focused regression test. Documentation-only and metadata-only changes do not need a test-first workflow.
+For behavior changes to hooks, ledger state, or automatic resumption, use a focused regression test (red, then green); if `~/.agents/skills/tdd/SKILL.md` is installed, read it too. Documentation-only and metadata-only changes do not need a test-first workflow.
 
 When briefing parallel workers on this kit, read "Parallel workers" in `README.md` and assign doc-section ownership in each brief.
 
-The optional workflow index is `~/.agents/skills/skill-index/SKILL.md`; consult it when choosing a requested specialist workflow. If a referenced personal skill is unavailable on another machine, continue with repository documentation and report the missing guidance when material.
+The optional workflow index `~/.agents/skills/skill-index/SKILL.md` may help when choosing a requested specialist workflow. These personal skills are not part of this repository: if one is unavailable on a machine, continue with repository documentation and mention the missing guidance only when it materially affects the change.
 
 ## Cross-session messages
 
