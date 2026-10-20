@@ -13,6 +13,8 @@ import shlex
 from pathlib import Path
 import sys
 import time
+import fcntl
+import hmac
 import math
 
 import handoff_ledger as ledger
@@ -35,6 +37,7 @@ def adopt_command(root, request_id):
 
 
 INTENT_MAX_AGE = 7 * 86400  # a pending restart older than this is not adopted
+SETTLED_RETENTION = 30 * 86400  # retrieved/refused intents kept at least this long
 
 
 def intent_expired(record, now=None):
@@ -111,6 +114,61 @@ def status(root, request_id):
     return record
 
 
+def _checkpoint_live(root, path):
+    """True while a checkpoint is open and authoritative, i.e. an intent still guards it."""
+    try:
+        if ledger._read_fm(path).get('status') != 'open':
+            return False
+        # resolve() keeps the caller's root spelling; compare canonical paths, or
+        # an open checkpoint under a symlinked root reads as done and loses its guard.
+        authoritative = ledger.resolve(path, root).get('authoritative')
+        return (authoritative is not None
+                and os.path.realpath(authoritative) == os.path.realpath(path))
+    except (OSError, ValueError):
+        return os.path.exists(path)  # unreadable but present: keep the guard
+
+
+def prune_settled(root, now=None, held=()):
+    """Delete retrieved/refused intents older than SETTLED_RETENTION whose checkpoint is done.
+
+    Pending intents (expired or not) and invalid records are never touched. Call with
+    the registry lock held; each candidate is re-read under its own lock before deletion
+    (``held`` names locations the caller already holds; they are skipped, never re-locked).
+    Returns the pruned request IDs.
+    """
+    now = time.time() if now is None else now
+    pruned = []
+    def eligible(record):
+        return (record is not None and record['state'] in ('retrieved', 'refused')
+                and now - record['intent_at'] > SETTLED_RETENTION
+                and not _checkpoint_live(root, record['path']))
+
+    held = {os.path.realpath(h) for h in held}
+    for entry in sorted(Path(_location(root, 'x')).parent.glob('*.json')):
+        if os.path.realpath(entry) in held:
+            continue
+        try:
+            request_id = protocol.load_state_json(str(entry)).get('request_id')
+            if os.path.realpath(entry) != _location(root, request_id) or not eligible(status(root, request_id)):
+                continue
+            with open(str(entry) + '.lock', 'a') as lock:
+                # Never wait under the registry lock: a busy record is kept for a later prune.
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    if not eligible(status(root, request_id)):
+                        continue
+                    entry.unlink()
+                    # Intent writers hold the registry lock this caller holds, so no
+                    # new record can be created at this location against the old sidecar.
+                    os.unlink(str(entry) + '.lock')
+                    pruned.append(request_id)
+                finally:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue  # unreadable, invalid or busy: preserve it
+    return pruned
+
+
 def preflight(root, path, session, terminal, request_id, workers=None,
               host_capable=False, hold=False, observations=None):
     """Persist intent before returning dispatch=True exactly once per request.
@@ -137,6 +195,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     registry = str(Path(location).parent / 'registry')
     with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(registry), ledger.locked(path), ledger.locked(location):
         try:
+            prune_settled(root, held=(location,))
             previous = status(root, request_id)
         except ValueError:
             return blocked('invalid-persisted-intent')
@@ -259,7 +318,9 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
         if intent_expired(record):
             raise ValueError('Restart intent expired.')
         receipt = protocol.load_state_json(protocol.receipt_path(record['root'], session) + '.delivery')
-        if (receipt.get('token') != delivery_receipt or not delivery_receipt
+        token = receipt.get('token')
+        if (not isinstance(token, str) or not isinstance(delivery_receipt, str)
+                or not hmac.compare_digest(token.encode(), delivery_receipt.encode()) or not delivery_receipt
                 or os.path.realpath(receipt.get('path', '')) != record['path']
                 or receipt.get('fingerprint') != protocol.snapshot(record['path'])):
             raise ValueError('Missing or stale successor delivery receipt.')
@@ -280,8 +341,13 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
         text = Path(record['path']).read_text()
         if ledger.content_fingerprint(text) != record['fingerprint']:
             raise ValueError('Checkpoint changed since restart intent.')
+        # Keep the receipt proven here: a later resume rewrites the live .delivery
+        # file. Only the token's digest is kept; the token itself grants reuse.
         record.update(state='retrieved', successor_session=session,
-                      retrieval_fingerprint=receipt['fingerprint'], host_confirmed=False)
+                      retrieval_fingerprint=receipt['fingerprint'], host_confirmed=False,
+                      retrieval_receipt=dict(token_sha256=hashlib.sha256(delivery_receipt.encode()).hexdigest(),
+                                             path=record['path'], fingerprint=receipt['fingerprint'],
+                                             created=created, references=dict(references), confirmed_at=now))
         protocol.write_json(location, record)
         return record
 

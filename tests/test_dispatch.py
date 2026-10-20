@@ -531,6 +531,28 @@ class PendingDispatchTests(Base):
                 self.assertTrue(any('expired' in w for w in r.get('warnings', [])), (session, host, r))
         self.assertEqual(json.loads(location.read_text())['state'], 'pending')
 
+    def test_restart_request_id_resolves_its_checkpoint_among_several_open_ones(self):
+        """121baf95: with two open checkpoints on one terminal, host.restart_request_id naming
+        one pending intent selects that checkpoint; without it the choice stays the user's."""
+        self.record_hook_session('sess-a')
+        path = self.save()
+        other = self.save(topic='lexer')
+        self.assertEqual(self.intent(path)['outcome'], 'ready')
+        self.record_hook_session('sess-b')
+        r = self.dispatch(prompt='continue the handoff', host={'restart_request_id': 'restart-1'})
+        self.assertEqual((r['outcome'], r['code']), ('proceed', 'restart_successor'), r)
+        self.assertEqual(r['target']['path'], path, r)
+        self.assertIn('--request-id restart-1', r['next_action']['command'])
+        r = self.dispatch(prompt='continue the handoff')
+        self.assertEqual(r['outcome'], 'ask', r)
+        self.assertEqual({c['path'] for c in r['target']['candidates']}, {path, other}, r)
+        for unknown in ('restart-9', 'restart-1'):  # unknown id; the predecessor itself
+            if unknown == 'restart-1':
+                self.record_hook_session('sess-a')
+            r = self.dispatch(prompt='continue the handoff', host={'restart_request_id': unknown})
+            self.assertNotEqual(r.get('code'), 'restart_successor', (unknown, r))
+            self.assertFalse(r.get('authorized_to_execute'), (unknown, r))
+
     def test_successor_procedure_ends_in_an_ordinary_resume(self):
         self.record_hook_session('sess-a')
         path = self.save()

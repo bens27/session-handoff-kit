@@ -74,12 +74,18 @@ class PlantedSymlinks(unittest.TestCase):
         open(latch, "w").close()
         env = {"HANDOFF_AUTO": "1", "TMUX_PANE": "%1", "AGENTSROOM_AGENT_ID": "",
                "HANDOFF_AUTO_RUNNER": ""}
-        with mock.patch.dict(os.environ, env), \
-                mock.patch.object(self.cw, "handoff_written_since", lambda *a, **k: True), \
-                mock.patch.object(self.cw.subprocess, "Popen"), \
-                self.assertRaises(SystemExit):
-            self.cw.handle_stop({"session_id": "sym-count", "cwd": cwd})
+        import gc, warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with mock.patch.dict(os.environ, env), \
+                    mock.patch.object(self.cw, "handoff_written_since", lambda *a, **k: True), \
+                    mock.patch.object(self.cw.subprocess, "Popen"), \
+                    self.assertRaises(SystemExit):
+                self.cw.handle_stop({"session_id": "sym-count", "cwd": cwd})
+            gc.collect()
         self.assertVictimIntact()
+        # 310304b8 item 5: reading the counter leaves no file handle open
+        self.assertEqual([str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], [])
 
     def test_auto_count_path_is_collision_free_sha1(self):
         a = os.path.join(self.tmp, "a_b")

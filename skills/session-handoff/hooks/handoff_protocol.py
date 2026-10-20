@@ -35,9 +35,19 @@ def load_state_json(path, limit=None):
 
 
 def terminal_id():
-    """Wrapper identity that survives /clear: one terminal, one current handoff."""
-    value = os.environ.get('HANDOFF_TERMINAL_ID') or os.environ.get('AGENTSROOM_AGENT_ID') or ''
-    return value.strip().splitlines()[0][:120] if value.strip() else ''
+    """Wrapper identity that survives /clear: one terminal, one current handoff.
+
+    A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID. Ids over
+    120 characters keep a readable prefix plus a digest of the whole value, so
+    two long ids sharing a prefix never name the same terminal."""
+    for name in ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
+        value = (os.environ.get(name) or '').strip()
+        if value:
+            value = value.splitlines()[0].strip()
+            if len(value) > 120:
+                value = value[:100] + '-' + hashlib.sha256(value.encode('utf-8', 'replace')).hexdigest()[:16]
+            return value
+    return ''
 
 
 def terminal_session(root):

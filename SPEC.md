@@ -444,6 +444,14 @@ identity, refuses a pending intent older than 7 days (as does the stepwise
 checkpoint's restart), prepares internally, records
 the durable receipt, stops with `outcome: held` under a dispatcher hold, then
 resumes, emitting the body once; a failed resume is `blocked` at stage `resume`.
+The retrieved intent keeps `retrieval_receipt` (`token_sha256`, `path`,
+`fingerprint`, `created`, `references`, `confirmed_at`), so the confirmed
+delivery stays verifiable after a later resume rewrites the live `.delivery`
+file; only the token's SHA-256 is stored, never the token. Each preflight first
+prunes, under the registry lock, retrieved/refused intents older than 30 days
+whose checkpoint is no longer open and authoritative (compared by real path),
+without waiting on a busy record's lock and removing its lock sidecar; pending intents (expired
+or not) and invalid records are never pruned.
 Only the agent invokes the MCP restart tool, as its final tool action before ending
 the turn. Pending/refused/retrieved states supply no new dispatch prompt. This
 orchestration provides no atomic host transaction or host replacement guarantee.
@@ -691,7 +699,11 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    until the host reconciles it. Besides a caller-supplied
    `host.restart_request_id`, the dispatcher scans `.handoffs/restart/`
    read-only for pending intents of this session, this terminal or the target
-   checkpoint; a missing directory is not created. Only intents relevant to the
+   checkpoint; a missing directory is not created. Without an explicit target,
+   a supplied `restart_request_id` naming a valid, unexpired pending intent of
+   this terminal makes that intent's checkpoint the exact target before the
+   ambiguity check, so several open checkpoints do not give
+   `target_ambiguous`; any other intent leaves selection unchanged. Only intents relevant to the
    caller (its session, terminal or target, read from the raw record) can fail
    a dispatch: an invalid relevant one gives `dispatch_state_invalid` naming the
    file for resume and retrieve. Save and pressure never block on intent state,
@@ -897,7 +909,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Announcer ignores older open handoffs |
 | `CONTEXT_WATCH_AUTORESUME` | — | Legacy alias for `AUTORESUME` |
 | `HANDOFF_AUTO` | on in AgentsRoom, else off | `1` = fully automatic (`0` turns the AgentsRoom default off): implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
-| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
+| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked). Each value is stripped and its first line used; a blank one falls through to the next. Over 120 characters it becomes the first 100 plus `-` and 16 hex of its SHA-256, so long ids sharing a prefix stay distinct |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## 12. Surface compatibility

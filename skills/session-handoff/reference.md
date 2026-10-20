@@ -385,6 +385,9 @@ if state changed, keep the intent pending and report instead of dispatching.
 The kit serializes intent creation with a durable project registry lock as well
 as publisher/checkpoint locks. Another pending intent for this terminal or path,
 and a retrieved/refused intent for this checkpoint, blocks a new request ID.
+Retrieved/refused intents older than 30 days whose checkpoint is no longer open
+and authoritative are pruned at the next preflight; pending intents are never
+pruned. A retrieved intent keeps `retrieval_receipt` (token SHA-256 only).
 Every persisted intent is validated; malformed or noncanonical records block
 without replacement. This serializes kit permission, not the external host call.
 
@@ -433,6 +436,8 @@ emitting the body once. Its `restart` object and `report` line give the observed
 predecessor -> successor identity apart from host acceptance, which stays
 `host_confirmed:false`: receipt confirmation is kit delivery evidence only.
 A rerun by the same successor replays; another successor is refused.
+Dispatch given `host.restart_request_id` and no target selects that pending,
+unexpired intent's checkpoint on this terminal exactly, even among several open ones.
 
 A pending intent older than 7 days is refused (stage `intent`), also by the
 stepwise `successor` command. Dispatch reports it as a stale warning instead of

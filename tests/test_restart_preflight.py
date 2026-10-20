@@ -1,4 +1,5 @@
 """Restart safety through the public lifecycle seam with real saved checkpoints."""
+import json
 import os
 from unittest.mock import patch
 import sys
@@ -201,6 +202,89 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertEqual(ready['outcome'], 'ready', ready)
         self.assertEqual(restart.status(self.root, 'restart-1')['state'], 'pending')
 
+    def test_settled_intents_are_pruned_only_when_old_and_their_checkpoint_is_done(self):
+        """310304b8 item 1: retrieved/refused intents are retained while they still guard an
+        open checkpoint or are recent, and pruned by the next preflight once both are over."""
+        import time
+        self.preflight()
+        prepared = protocol.prepare(self.path, self.root, 'new')
+        restart.confirm_successor(self.root, 'restart-1', 'new', 'term', prepared['delivery_receipt'])
+        location = Path(restart._location(self.root, 'restart-1'))
+
+        def age(days):
+            record = json.loads(location.read_text())
+            record['intent_at'] = time.time() - days * 86400
+            protocol.write_json(str(location), record)
+
+        age(restart.SETTLED_RETENTION / 86400 + 1)
+        # Old, but its checkpoint is still open and authoritative: kept, still guards it
+        self.assertEqual(self.preflight(request_id='restart-2')['reason'], 'conflicting-restart-intent')
+        self.assertTrue(location.exists())
+        successor = protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'work', 'description': 'Continue work', 'predecessor': self.path,
+            'body': '## Objective\nFix it\n## Current state\nLater\n## Next steps\nGo\n'})['path']
+        age(1)  # checkpoint superseded, but the intent is recent: kept
+        self.assertEqual(self.preflight(path=successor, request_id='restart-2')['outcome'], 'ready')
+        self.assertTrue(location.exists())
+        age(restart.SETTLED_RETENTION / 86400 + 1)
+        self.assertEqual(self.preflight(path=successor, request_id='restart-2')['outcome'], 'pending')  # replay
+        self.assertFalse(location.exists())
+        self.assertIsNone(restart.status(self.root, 'restart-1'))
+        self.assertEqual(restart.status(self.root, 'restart-2')['state'], 'pending')  # pending never pruned
+
+    def _settle_and_age(self, request_id='restart-1'):
+        import time
+        self.preflight(request_id=request_id)
+        prepared = protocol.prepare(self.path, self.root, 'new')
+        restart.confirm_successor(self.root, request_id, 'new', 'term', prepared['delivery_receipt'])
+        location = Path(restart._location(self.root, request_id))
+        record = json.loads(location.read_text())
+        record['intent_at'] = time.time() - restart.SETTLED_RETENTION - 86400
+        protocol.write_json(str(location), record)
+        return location
+
+    def test_symlinked_root_keeps_the_intent_of_an_open_checkpoint(self):
+        """Lane E M1: a root reached through a symlink still sees its open checkpoint as live,
+        so an old settled intent keeps guarding it instead of being pruned."""
+        location = self._settle_and_age()
+        link = Path(self.tmp.name).resolve().parent / ('link-' + Path(self.root).name)
+        os.symlink(self.root, link)
+        self.addCleanup(os.unlink, link)
+        self.assertTrue(restart._checkpoint_live(str(link), self.path))
+        self.assertEqual(restart.prune_settled(str(link)), [])
+        self.assertTrue(location.exists())
+        self.assertEqual(self.preflight(root=str(link), request_id='restart-2')['reason'],
+                         'conflicting-restart-intent')
+
+    def test_preflight_never_prunes_the_intent_it_is_replaying(self):
+        """Lane E L2: the location preflight holds is skipped, even when it is old and done."""
+        location = self._settle_and_age()
+        protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'work', 'description': 'Continue work', 'predecessor': self.path,
+            'body': '## Objective\nFix it\n## Current state\nLater\n## Next steps\nGo\n'})
+        self.assertFalse(restart._checkpoint_live(self.root, self.path))
+        self.assertEqual(self.preflight()['outcome'], 'retrieved')  # replayed, not re-created
+        self.assertTrue(location.exists())
+        self.assertEqual(restart.prune_settled(self.root), ['restart-1'])
+        self.assertFalse(location.exists())
+        self.assertFalse(Path(str(location) + '.lock').exists())  # L3: no orphan sidecar
+
+    def test_prune_skips_a_busy_record_without_waiting(self):
+        """Lane E L1: prune runs under the registry lock, so it never waits on a record lock."""
+        import fcntl
+        import time
+        location = self._settle_and_age()
+        protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'work', 'description': 'Continue work', 'predecessor': self.path,
+            'body': '## Objective\nFix it\n## Current state\nLater\n## Next steps\nGo\n'})
+        with open(str(location) + '.lock', 'a') as busy:
+            fcntl.flock(busy, fcntl.LOCK_EX)
+            started = time.monotonic()
+            self.assertEqual(restart.prune_settled(self.root), [])
+            self.assertLess(time.monotonic() - started, 1)
+        self.assertTrue(location.exists())
+        self.assertEqual(restart.prune_settled(self.root), ['restart-1'])
+
     def test_failure_keeps_checkpoint_and_refuses_duplicate_dispatch(self):
         self.preflight()
         restart.record_refusal(self.root, 'restart-1', 'host unavailable')
@@ -257,6 +341,23 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertEqual(restart.confirm_successor(self.root, 'restart-1', 'new', 'term', result['delivery_receipt']), receipt)
         with self.assertRaises(ValueError):
             restart.confirm_successor(self.root, 'restart-1', 'old', 'term', result['delivery_receipt'])
+
+    def test_confirmed_delivery_receipt_stays_verifiable_after_resume_rewrites_it(self):
+        """310304b8 item 2: the receipt proven at confirm time is kept on the intent, so a
+        later resume (which rewrites the live .delivery file) does not erase the evidence."""
+        import hashlib
+        self.preflight()
+        prepared = protocol.prepare(self.path, self.root, 'new')
+        token = prepared['delivery_receipt']
+        restart.confirm_successor(self.root, 'restart-1', 'new', 'term', token)
+        resumed = protocol.resume(self.root, 'new', self.path)
+        self.assertEqual(resumed['outcome'], 'resumed', resumed)
+        live = protocol.load_state_json(protocol.receipt_path(self.root, 'new') + '.delivery')
+        self.assertNotEqual(live['token'], token)  # the live receipt moved on
+        kept = restart.status(self.root, 'restart-1')['retrieval_receipt']
+        self.assertEqual(kept['token_sha256'], hashlib.sha256(token.encode()).hexdigest())
+        self.assertEqual(kept['path'], self.path)
+        self.assertNotIn(token, json.dumps(restart.status(self.root, 'restart-1')))
 
     def test_successor_terminal_comes_from_the_environment_not_stdin(self):
         """H1: a caller claiming the intent's terminal from elsewhere is refused."""

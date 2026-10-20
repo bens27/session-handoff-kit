@@ -195,6 +195,29 @@ def _candidate(item):
                 mine=bool(item.get('mine')))
 
 
+def intent_target_request(root, request, host):
+    """Let host.restart_request_id name the checkpoint before any ambiguity check.
+
+    Applies only without an explicit target, and only to a valid, unexpired
+    pending intent of this terminal; the intent's path is then an exact target,
+    validated like any other. Anything else leaves selection unchanged, and
+    pending_dispatch still reports invalid or foreign intents.
+    """
+    request_id = host.get('restart_request_id')
+    if request.get('target') is not None or not isinstance(request_id, str):
+        return request
+    import restart_preflight
+    try:
+        record = restart_preflight.status(root, request_id)
+    except (OSError, ValueError):
+        return request
+    terminal = protocol.terminal_id()
+    if (not record or record['state'] != 'pending' or restart_preflight.intent_expired(record)
+            or not terminal or record['terminal'] != terminal):
+        return request
+    return dict(request, target=record['path'])
+
+
 def select_target(root, request, session):
     """Exact path/topic never falls back; otherwise zero/one/many owned is deterministic."""
     operation, target = request['_operation'], request.get('target')
@@ -556,7 +579,7 @@ def route(request, root):
     if saving:
         target, decision = save_target(root, request, session)
     else:
-        target, decision = select_target(root, request, session)
+        target, decision = select_target(root, intent_target_request(root, request, host), session)
         if target and target.get('path') and os.path.isfile(target['path']):
             target['fingerprint'] = protocol.snapshot(target['path'])
     if decision and decision[1] != 'history_only':

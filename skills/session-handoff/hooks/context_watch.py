@@ -279,7 +279,8 @@ def write_terminal_pointer(cwd, sid):
 def read_first_latch(path):
     """(occupancy, transcript usage) recorded by the first notice; (0, None) if unknown."""
     try:
-        occ, _limit, base = (int(x) for x in open(path).read().strip().split("/"))
+        with open(path) as f:
+            occ, _limit, base = (int(x) for x in f.read().strip().split("/"))
         return occ, base
     except Exception:
         return 0, None
@@ -1044,7 +1045,8 @@ def handle_stop(evt):
     # once, so without a cap it would clear and resume forever.
     max_clears = auto_max(cwd)
     try:
-        count = int(open(counter).read().strip() or 0)
+        with open(counter) as f:
+            count = int(f.read().strip() or 0)
     except Exception:
         count = 0
     if count >= max_clears:

@@ -229,6 +229,10 @@ other settings come from that profile. No global auto-mode setting is changed.
 **Automatic transition settings.** `HANDOFF_AUTO=1` requests an automatic
 transition after saving. Each save records its terminal (`HANDOFF_TERMINAL_ID`,
 else `AGENTSROOM_AGENT_ID`), so continuation stays scoped to that terminal.
+The kit trusts that variable as given: separate AgentsRoom tabs, even of the
+same role, carry distinct agent IDs and so separate terminals, but whether an
+ID survives a host relaunch is the host's promise, not something the kit can
+check.
 AgentsRoom defaults this setting to on (`HANDOFF_AUTO=0` or `"auto": false`
 opts out); elsewhere it is opt-in. The default requests a gated transition,
 not permission or proof that a host restart can occur.
@@ -416,7 +420,7 @@ Other variables:
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
 | `HANDOFF_AUTO` | on in AgentsRoom, else off | Requests automatic transition (`0` opts out). AgentsRoom requires authoritative preflight and falls back to manual continuation when unavailable; outside AgentsRoom, tmux Stop or the headless runner performs the configured transition. |
-| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only) | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked) |
+| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only) | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked). A blank value falls through to the next; ids over 120 characters keep 100 plus a 16-hex SHA-256 suffix |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 
 ## How automated does it get
@@ -583,7 +587,12 @@ native cycle in one command with compact output:
   preserves state. A pending intent older than 7 days is refused (stage `intent`,
   `restart-intent-expired`), also by the stepwise `successor`; dispatch reports it
   as a stale warning rather than routing a successor, and it blocks only its own
-  checkpoint's restart, so a new save can restart. A dispatcher hold applying to the project, topic or
+  checkpoint's restart, so a new save can restart. The retrieved intent keeps a
+  `retrieval_receipt` (token SHA-256, path, fingerprint, created, references,
+  confirmed_at; never the token), still verifiable after a later resume rewrites
+  `.delivery`. Retrieved/refused intents older than 30 days whose checkpoint is no
+  longer open and authoritative (compared by real path, so symlinked roots agree)
+  are pruned at the next preflight, skipping busy records; pending intents never are. A dispatcher hold applying to the project, topic or
   terminal yields `outcome: held` (stage `hold`) after the receipt is recorded and
   before any resume; rerun after an explicit release.
 
@@ -772,6 +781,9 @@ only the `branch` file the result names.
   retired.
 - **Pending restarts** are found through a supplied `restart_request_id` or a
   read-only scan of `.handoffs/restart/` for this session, terminal or target.
+  Without an explicit target, a `restart_request_id` naming a valid, unexpired
+  pending intent of this terminal selects that intent's checkpoint exactly,
+  before the several-open-checkpoints ambiguity check.
   The requesting session is blocked (`dispatch_pending`); its successor on the
   intent's terminal, as the environment reports it, gets `restart_successor`:
   one `restart_preflight.py adopt` command that prepares, records the successor
