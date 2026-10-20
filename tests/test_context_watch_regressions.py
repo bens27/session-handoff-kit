@@ -92,6 +92,17 @@ class FloorPolicy(HookCase):
 
 
 class NormalPolicyUnchanged(HookCase):
+    def test_threshold_notice_is_emitted_once_per_crossing(self):
+        """Item 6: later hooks in the same crossing stay silent until the second notice band."""
+        extra = {"CONTEXT_WATCH_THINKING": "0", "AGENTSROOM_AGENT_ID": "agent-7", "HANDOFF_AUTO": "1"}
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
+        self.assertEqual(self.run_hook(extra=extra), "")
+        self.assertEqual(self.run_hook(event="UserPromptSubmit", extra=extra), "")
+        for tokens in (142000, 150000, 160000):
+            self.write([claude_call(tokens)], "a")
+            self.assertEqual(self.run_hook(extra=extra), "", tokens)
+
     def test_second_notice_and_compaction_rearm(self):
         self.write([claude_call(20000), claude_call(140000)])
         first = self.context(self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"}))
@@ -196,8 +207,8 @@ class AgentsRoomRestart(HookCase):
     def test_auto_agentsroom_trigger_asks_agent_to_restart_itself(self):
         msg = self.trigger({"HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "agent-7"})
         self.assertIn("agents_restart", msg)
-        self.assertIn('reference.md', msg)
-        self.assertIn('AgentsRoom restart section', msg)
+        self.assertIn('restart_preflight.py restart --root', msg)
+        self.assertNotIn('reference.md', msg)
         self.assertIn('restart_prompt', msg)
         self.assertNotIn('with prompt "continue the handoff"', msg)
         self.assertNotIn('with prompt "resume"', msg)

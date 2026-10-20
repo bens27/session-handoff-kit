@@ -507,11 +507,29 @@ class PendingDispatchTests(Base):
             self.assertEqual((r['outcome'], r['code']), ('proceed', 'restart_successor'), (host, r))
             self.assertFalse(r['authorized_to_execute'], r)
             command = r['next_action']['command']
-            self.assertIn(' prepare ' + path, command)
+            self.assertEqual(shlex.split(command)[1:3], [os.path.realpath(HOOKS / 'restart_preflight.py'), 'adopt'], command)
+            self.assertIn('--request-id restart-1', command)
             self.assertNotIn(' resume ', ' ' + command + ' ')
-            self.assertIn('restart_preflight.py', r['next_action']['text'])
-            self.assertIn('successor', r['next_action']['text'])
-            self.assertIn('restart-1', r['next_action']['text'])
+            self.assertNotIn('prepare', r['next_action']['text'])
+
+    def test_expired_pending_intent_is_a_stale_warning_not_a_successor_route(self):
+        """F1b: adopt refuses an intent past INTENT_MAX_AGE, so dispatch must not route
+        a successor (or block the predecessor) on it; it warns and preserves the record."""
+        import time
+        self.record_hook_session('sess-a')
+        path = self.save()
+        self.assertEqual(self.intent(path)['outcome'], 'ready')
+        [location] = (Path(self.root) / '.handoffs' / 'restart').glob('*.json')
+        record = json.loads(location.read_text())
+        record['intent_at'] = time.time() - 30 * 86400
+        location.write_text(json.dumps(record))
+        for session in ('sess-b', 'sess-a'):
+            self.record_hook_session(session)
+            for host in ({'restart_request_id': 'restart-1'}, {}):
+                r = self.dispatch(prompt='continue the handoff', host=host)
+                self.assertNotIn(r.get('code'), ('restart_successor', 'dispatch_pending'), (session, host, r))
+                self.assertTrue(any('expired' in w for w in r.get('warnings', [])), (session, host, r))
+        self.assertEqual(json.loads(location.read_text())['state'], 'pending')
 
     def test_successor_procedure_ends_in_an_ordinary_resume(self):
         self.record_hook_session('sess-a')
@@ -519,18 +537,15 @@ class PendingDispatchTests(Base):
         self.assertEqual(self.intent(path)['outcome'], 'ready')
         self.record_hook_session('sess-b')
         r = self.dispatch(prompt='continue the handoff')
-        prepared = self.cli(*shlex.split(r['next_action']['command'])[2:])
-        self.assertEqual(prepared['outcome'], 'retrieved', prepared)
-        stdin = dict(root=str(self.root), request_id='restart-1', session='sess-b', terminal='term-a',
-                     delivery_receipt=prepared['delivery_receipt'])
         e = dict(self.env, HANDOFF_TERMINAL_ID='term-a')
-        p = subprocess.run([sys.executable, '-B', str(HOOKS / 'restart_preflight.py'), 'successor'], cwd=self.root,
-                           env=e, input=json.dumps(stdin), capture_output=True, text=True, timeout=60)
-        self.assertEqual(json.loads(p.stdout)['state'], 'retrieved', p.stdout + p.stderr)
+        p = subprocess.run(shlex.split(r['next_action']['command']), cwd=self.root,
+                           env=e, capture_output=True, text=True, timeout=60)
+        adopted = json.loads(p.stdout)
+        self.assertEqual((adopted['outcome'], adopted['restart']['state']), ('resumed', 'retrieved'), p.stdout + p.stderr)
+        self.assertEqual(adopted['path'], path)
+        self.assertIn('body', adopted)
         r = self.dispatch(prompt='continue the handoff')
-        self.assertEqual((r['outcome'], r['code']), ('proceed', 'ok'), r)
-        self.assertTrue(r['authorized_to_execute'])
-        self.assertIn(' resume ' + path, r['next_action']['command'])
+        self.assertNotEqual(r.get('code'), 'restart_successor', r)
 
     def test_pending_intent_on_another_terminal_does_not_affect_this_one(self):
         self.record_hook_session('sess-a')
@@ -569,14 +584,13 @@ class PendingDispatchTests(Base):
         self.record_hook_session('sess-b')
         r = self.dispatch(prompt='continue the handoff')
         self.assertEqual((r['outcome'], r['code']), ('proceed', 'restart_successor'), r)
-        self.assertIn('"terminal": "term-a"', r['next_action']['text'])
-        prepared = self.cli(*shlex.split(r['next_action']['command'])[2:])
-        stdin = dict(root=str(self.root), request_id='restart-1', session='sess-b', terminal='term-a',
-                     delivery_receipt=prepared['delivery_receipt'])
-        p = subprocess.run([sys.executable, '-B', str(HOOKS / 'restart_preflight.py'), 'successor'], cwd=self.root,
-                           env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'), input=json.dumps(stdin),
+        command = shlex.split(r['next_action']['command'])
+        intruder = subprocess.run(command, cwd=self.root, env=dict(self.env, HANDOFF_TERMINAL_ID='term-b'),
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(json.loads(intruder.stdout)['outcome'], 'blocked', intruder.stdout)
+        p = subprocess.run(command, cwd=self.root, env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
                            capture_output=True, text=True, timeout=60)
-        self.assertEqual(json.loads(p.stdout)['state'], 'retrieved', p.stdout + p.stderr)
+        self.assertEqual(json.loads(p.stdout)['restart']['state'], 'retrieved', p.stdout + p.stderr)
 
     def test_scan_without_restart_dir_creates_nothing(self):
         self.record_hook_session('sess-a')

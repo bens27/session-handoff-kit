@@ -728,7 +728,8 @@ def _cli(argv):
         return dispatch_cli(argv)
     if cmd == "list":
         as_json = "--json" in args
-        args = [a for a in args if a != "--json"]
+        indent = 2 if "--pretty" in args else None
+        args = [a for a in args if a not in ("--json", "--pretty")]
         max_age = 14
         if "--max-age-days" in args:
             i = args.index("--max-age-days")
@@ -741,7 +742,7 @@ def _cli(argv):
         stats = {}
         handoffs = scan(root, max_age, stats)
         if as_json:
-            print(json.dumps(handoffs, indent=2))
+            print(json.dumps(handoffs, indent=indent))
         else:
             for h in handoffs:
                 print("%s\t%s\t%s\t%s" % (h["ended"], h["topic"], h["path"],
@@ -759,7 +760,8 @@ def _cli(argv):
         return 0
     if cmd == "resolve":
         as_json = "--json" in args
-        args = [a for a in args if a != "--json"]
+        indent = 2 if "--pretty" in args else None
+        args = [a for a in args if a not in ("--json", "--pretty")]
         if not args:
             print("usage: handoff_ledger.py resolve <topic-or-path> [dir] [--json]",
                   file=sys.stderr)
@@ -772,7 +774,7 @@ def _cli(argv):
         resolved['history_count'] = len(resolved['chain'])
         resolved['chain'] = resolved['chain'][-1:]
         if as_json:
-            print(json.dumps(resolved, indent=2))
+            print(json.dumps(resolved, indent=indent))
         else:
             for h in resolved["chain"]:
                 print("%s\t%s\t%s\t%s" % (h["ended"], h["status"], h["path"],
@@ -793,7 +795,8 @@ def _cli(argv):
         return 0
     if cmd == "new-path":
         as_json = "--json" in args
-        args = [a for a in args if a != "--json"]
+        indent = 2 if "--pretty" in args else None
+        args = [a for a in args if a not in ("--json", "--pretty")]
         if not args:
             print("usage: handoff_ledger.py new-path <topic> [dir] [--json]",
                   file=sys.stderr)
@@ -804,7 +807,7 @@ def _cli(argv):
         root = args[1] if len(args) > 1 else "."
         result = new_path(args[0], root)
         if as_json:
-            print(json.dumps(dict(result, template=read_template()), indent=2))
+            print(json.dumps(dict(result, template=read_template()), indent=indent))
         else:
             for key in ("directory", "filename", "path", "created", "project", "git",
                         "reason", "skills"):

@@ -291,14 +291,15 @@ def transition(root, guard=None):
             % ', '.join(guard['reasons'])))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
         return dict(kind='agents_restart', requires_preflight=True, action=(
-            'Follow the AgentsRoom restart section of %s to gather current identity, host capability, complete worker inventory and hold state. '
-            'Run python3 %s preflight with those observations. Only outcome: ready and dispatch: true '
-            'permit calling AgentsRoom agents_restart for agent %s as the final tool action, using the '
-            'returned restart_prompt instead of bare "%s"; then end the turn. '
-            'Unknown observations require manual fresh-session continuation; pending intent requires '
+            'Settle and inventory every worker you delegated (agents_spawned_list includeClosed:true, mailbox '
+            'and continuity delegations; each as {id, report:{path,sha256}}), check live holds/needsInput, then run '
+            'python3 %s restart --root %s --workers \'<JSON list>\' --host-capable [--hold]. Omit --workers '
+            'when inventory is unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
+            'agents_restart for agent %s as the final tool action with the returned restart_prompt, never bare '
+            '"%s"; then end the turn. Blocked means manual fresh-session continuation; pending intent requires '
             'reconciliation, never redispatch. Preserve human holds and worker results.')
-            % (shlex.quote(os.path.join(os.path.dirname(__file__), '..', 'reference.md')),
-               shlex.quote(os.path.join(os.path.dirname(__file__), 'restart_preflight.py')),
+            % (shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')),
+               shlex.quote(os.path.realpath(ledger.project_root(root))),
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')

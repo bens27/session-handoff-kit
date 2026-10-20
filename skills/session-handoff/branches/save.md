@@ -36,10 +36,12 @@ its restart section as directed below.
    destination is allowed, give the checkpoint text to the user and report that
    automatic resumption is blocked.
 4. Tell the user the checkpoint path. For an AgentsRoom `agents_restart`
-   transition, follow [AgentsRoom restart](../reference.md#agentsroom-restart): observe current
-   identity, supported capability, owned and local workers, and human holds;
-   persist preflight intent; then make the supported `agents_restart` call as the
-   final tool action using the returned `restart_prompt`. End the turn immediately.
+   transition, follow [AgentsRoom restart](../reference.md#agentsroom-restart): observe
+   supported capability, owned and local workers, and human holds; run
+   `restart_preflight.py restart --root <root> --workers '<JSON list>' --host-capable
+   [--hold]`, which reads identity, persists observations and preflight intent;
+   then make the supported `agents_restart` call as the final tool action using
+   the returned `restart_prompt`. End the turn immediately.
    Unknown observations, `blocked`, `pending`, `refused` and human holds preserve
    the checkpoint/session. Reconcile pending intent instead of redispatching.
    For other transition kinds follow the save result's permitted action.

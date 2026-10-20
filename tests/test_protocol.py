@@ -444,6 +444,8 @@ with patch('time.time', return_value=float(sys.argv[2])):
         self.assertTrue(saved['transition']['requires_preflight'])
         self.assertIn('dispatch: true', saved['transition']['action'])
         self.assertIn('manual', saved['transition']['action'])
+        self.assertIn('restart_preflight.py restart --root ', saved['transition']['action'])
+        self.assertNotIn('reference.md', saved['transition']['action'])
 
     def test_auto_clear_resumes_this_terminals_handoff_not_the_newest(self):
         # Two wrapped terminals in one project: B saves after A. Each cleared

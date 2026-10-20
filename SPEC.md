@@ -430,9 +430,20 @@ Pending replay alongside current open work requires explicit selection.
 AgentsRoom save transition candidates include `requires_preflight: true`.
 Dispatch requires the standalone preflight module to return ready/dispatch from
 current authoritative host observations; unknown capability, identity, inventory
-or hold state requires manual continuation. The bundled AgentsRoom restart procedure gathers supported host observations;
-new ready intents return `restart_prompt` binding the exact checkpoint and request
-ID to read-only successor preparation, durable receipt recording, then resume.
+or hold state requires manual continuation. The predecessor runs one command,
+`restart_preflight.py restart --root R --workers '<JSON>' --host-capable [--hold]`,
+which reads hook/host identity, selects its single open checkpoint, derives the
+deterministic request ID, adds durable holds and preflights; observations are
+stored under the intent lock only with a new ready intent. A rerun after a host
+refusal returns `refused` (a retry needs a new save).
+New ready intents return `restart_prompt`: one sentence naming one successor
+command, `restart_preflight.py adopt '<binding JSON>'`, whose only argument is the
+compact binding. It refuses a binding that differs from the recorded intent, checks
+identity, refuses a pending intent older than 7 days (as does the stepwise
+`successor`; dispatch warns on it instead of routing, and it blocks only its own
+checkpoint's restart), prepares internally, records
+the durable receipt, stops with `outcome: held` under a dispatcher hold, then
+resumes, emitting the body once; a failed resume is `blocked` at stage `resume`.
 Only the agent invokes the MCP restart tool, as its final tool action before ending
 the turn. Pending/refused/retrieved states supply no new dispatch prompt. This
 orchestration provides no atomic host transaction or host replacement guarantee.
@@ -690,10 +701,10 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    `dispatch_pending` for resume. A different session on the intent's terminal,
    taken from the environment (`HANDOFF_TERMINAL_ID`/`AGENTSROOM_AGENT_ID`),
    never from a target path or stdin, is the successor: it gets
-   `restart_successor`, a `prepare` command and text naming
-   `restart_preflight.py successor` (its stdin carries the caller's own
-   terminal) and then `resume`; a foreign terminal naming the checkpoint gets
-   `dispatch_pending`. `confirm_successor` refuses when the environment has no
+   `restart_successor` with the single `restart_preflight.py adopt` command
+   (identity, preparation, receipt and resume in one call); a foreign terminal
+   naming the checkpoint gets `dispatch_pending`, and `adopt` from it is blocked.
+   `confirm_successor` refuses when the environment has no
    terminal, it differs from the intent's, or a supplied `terminal` differs from
    the environment's. `authorized_to_execute` stays false until the successor
    receipt makes the intent `retrieved`. `restart_preflight` itself still refuses a conflicting

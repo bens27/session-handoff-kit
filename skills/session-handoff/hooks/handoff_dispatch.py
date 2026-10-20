@@ -341,6 +341,16 @@ def pending_dispatch(root, host, session, path=None, saving=False):
         warnings.append(text)
         return None
 
+    reported = set()
+
+    def expired(record):
+        # adopt refuses an expired intent, so routing a successor to it is a dead end
+        if record['request_id'] not in reported:
+            reported.add(record['request_id'])
+            warnings.append('Stale restart intent %s (session %s) expired after %d days; it is preserved but not '
+                            'routed. Save a new checkpoint to restart.'
+                            % (record['request_id'], record['session'], restart_preflight.INTENT_MAX_AGE // 86400))
+
     request_id = host.get('restart_request_id')
     if request_id is not None:
         try:
@@ -349,6 +359,9 @@ def pending_dispatch(root, host, session, path=None, saving=False):
             failure = invalid('for request %s' % request_id, exc, True)
             if failure:
                 return None, failure, warnings
+            record = None
+        if record is not None and restart_preflight.intent_expired(record):
+            expired(record)
             record = None
         if record is not None and record['session'] == session:
             return record, None, warnings
@@ -393,6 +406,9 @@ def pending_dispatch(root, host, session, path=None, saving=False):
                 return None, failure, warnings
             continue
         if record['state'] == 'pending' and relevant:
+            if restart_preflight.intent_expired(record):
+                expired(record)
+                continue
             matches.append(record)
     # This session's own intent first, then one for the target checkpoint
     matches.sort(key=lambda r: (r['session'] != session, r['path'] != target, -r['intent_at']))
@@ -400,19 +416,15 @@ def pending_dispatch(root, host, session, path=None, saving=False):
 
 
 def successor_action(root, record, session):
-    """A successor session retrieves, records its receipt, then resumes: three commands, in order."""
-    prepare = _command('prepare', record['path'], '--root', root, '--session', session)
-    successor = 'python3 %s successor' % shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py'))
-    stdin = json.dumps(dict(root=record['root'], request_id=record['request_id'], session=session,
-                            terminal=protocol.terminal_id(), delivery_receipt='<delivery_receipt from prepare>'))
-    resume = _command('resume', record['path'], '--root', root, '--session', session, '--fields', 'path,body')
-    return dict(kind='run', command=prepare, text=(
+    """A successor session runs one atomic adopt: identity, retrieval, receipt, resume."""
+    import restart_preflight
+    command = restart_preflight.adopt_command(record['root'], record['request_id'])
+    return dict(kind='run', command=command, text=(
         'A restart intent (%s) from session %s is pending for this checkpoint; this session is its successor. '
-        'Run this prepare exactly as given and read the full body and required references. Then run %s with stdin %s, '
-        'replacing the receipt placeholder with the delivery_receipt it returned; require state retrieved '
-        '(host_confirmed stays false). Only then run %s and continue with ## Next steps. On any failure, preserve '
-        'state and report; never restart, dispatch another intent or pick another checkpoint.'
-        % (record['request_id'], record['session'], successor, stdin, resume)))
+        'Run this command exactly as given (no pipe or clipping); it verifies identity, retrieves, records the '
+        'receipt and resumes, emitting the body once. Continue with ## Next steps. On blocked, preserve state and '
+        'report the stage; never restart, dispatch another intent or pick another checkpoint.'
+        % (record['request_id'], record['session'])))
 
 
 def delivery_mode(root, session, path, fingerprint, reuse):
@@ -649,6 +661,7 @@ def cli(argv):
         p = argparse.ArgumentParser(prog='handoff_ledger.py dispatch')
         p.add_argument('--input', default='-')
         p.add_argument('--root', default='.')
+        p.add_argument('--pretty', action='store_true', help='Indent JSON output')
         a = p.parse_args(args)
         try:
             raw = sys.stdin.read() if a.input == '-' else open(a.input, encoding='utf-8').read()
@@ -657,13 +670,14 @@ def cli(argv):
             print(json.dumps(blocked({}, 'invalid_request', 'Unreadable request: %s.' % exc)))
             return 1
         out = dispatch(request, a.root)
-        print(json.dumps(out, indent=2))
+        print(json.dumps(out, indent=2 if a.pretty else None))
         return 0 if out['outcome'] != 'blocked' else 1
     if cmd in ('hold', 'release'):
         import argparse
         p = argparse.ArgumentParser(prog='handoff_ledger.py ' + cmd)
         p.add_argument('--scope', required=True, help='project | topic:<topic> | terminal:<id>')
         p.add_argument('--root', default='.')
+        p.add_argument('--pretty', action='store_true', help='Indent JSON output')
         if cmd == 'hold':
             p.add_argument('--reason', required=True)
         a = p.parse_args(args)
@@ -672,7 +686,7 @@ def cli(argv):
             print(json.dumps(dict(outcome='blocked', code='invalid_request', retryable=False,
                                   action='Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.')))
             return 1
-        print(json.dumps(set_hold(ledger.project_root(a.root), a.scope, reason and reason.strip()[:300]), indent=2))
+        print(json.dumps(set_hold(ledger.project_root(a.root), a.scope, reason and reason.strip()[:300]), indent=2 if a.pretty else None))
         return 0
     print('unknown subcommand: %s' % cmd, file=sys.stderr)
     return 1

@@ -354,7 +354,13 @@ does not authorize dispatch. A live request to pause or wait takes precedence.
 
 ### Persist and dispatch once
 
-Run `python3 <hooks>/restart_preflight.py preflight --input <observations.json>`.
+Run `python3 <hooks>/restart_preflight.py restart --root <root> --workers '<JSON list>'
+--host-capable [--hold]` (add `--path` only when this session owns several open
+checkpoints). It reads hook/host identity, derives the request ID below, adds
+durable holds, stores the observations and runs preflight in one call. Omit
+`--workers` when the inventory is unknown: that blocks. The lower-level
+`preflight --input <observations.json>` remains for callers that build the
+object themselves; the rules below apply to both.
 Before creating a request, reconcile existing intents for this terminal in
 `.handoffs/restart/` and any request ID retained in continuity. A legacy intent
 with a different ID remains binding; a new naming convention never overrides it.
@@ -414,28 +420,35 @@ never grants new dispatch permission.
 
 ### Successor delivery
 
-The generated prompt orders these operations. Read current native identity;
-require a different actual session on the same terminal with no host conflict.
-Before any generic hook-provided resume shortcut, prepare the exact checkpoint,
-require `outcome:retrieved` and matching path, and read the body and required
-references in full. If preparation resolves to another checkpoint, stop.
+The restart prompt is one sentence: `Continue the handoff: run exactly python3
+<hooks>/restart_preflight.py adopt '<binding JSON>'`. Run that command bare, with
+no pipe or clipping, and follow its returned action, holds and authorization.
+`adopt` enforces what earlier prompts spelled out: the binding must match the
+recorded intent field for field (stage `binding`); identity must come from the
+hook or host, differ from the predecessor session, sit on the intent's terminal
+(read from the environment, never from input) and not conflict with
+`host_session_id` (stage `identity`). It then prepares the exact checkpoint
+internally, records the delivery receipt (stage `prepare`/`successor`) and resumes,
+emitting the body once. Its `restart` object and `report` line give the observed
+predecessor -> successor identity apart from host acceptance, which stays
+`host_confirmed:false`: receipt confirmation is kit delivery evidence only.
+A rerun by the same successor replays; another successor is refused.
 
-Pass `{root,request_id,session,terminal,delivery_receipt}` to
-`restart_preflight.py successor` using the actual new identity and delivery token.
-Run it on the intent's own terminal: the terminal is checked against the
-environment, never taken from stdin.
-Require `state:retrieved`, then run resume on the same exact checkpoint and follow
-its authorization and hold/verification gates. Receipt confirmation is kit
-delivery evidence only; `host_confirmed:false` is intentional. A failed identity,
-prepare, receipt or resume preserves uncertainty and pending recovery. It never
-authorizes acknowledgement, another checkpoint or another restart. A checkpoint
-already consumed by another path requires reconciliation, not replayed claims.
-In particular, early resume through a generic hook/agent path can close the
-checkpoint before successor confirmation and lose the usable delivery receipt,
-leaving the restart intent pending. This patch does not change core resume/hook
-ownership or reconstruct that proof. The native trial must establish prompt
-ordering before generic resume; otherwise preserve the failure for coordinated
-core/dispatcher repair.
+A pending intent older than 7 days is refused (stage `intent`), also by the
+stepwise `successor` command. Dispatch reports it as a stale warning instead of
+routing a successor, and it no longer blocks a new checkpoint's restart on this
+terminal; save a new checkpoint to restart. A dispatcher
+hold returns `outcome:held` (stage `hold`) after the receipt is recorded and before
+resume: report it and rerun only after an explicit release. A resume that does not
+succeed returns `outcome:blocked` at stage `resume`.
+Any `outcome:blocked` preserves the intent and checkpoint. It never authorizes
+acknowledgement, another checkpoint or another restart; report its `stage`.
+Do not run a generic hook-provided resume before `adopt`: closing the checkpoint
+early loses the delivery receipt and leaves the intent pending for
+reconciliation. The dispatcher hands a pending successor the same command in its
+`--root R --request-id X` form. The stepwise `successor` operation
+(`{root,request_id,session,terminal,delivery_receipt}` after a manual prepare)
+remains for manual recovery and audits.
 
 ### Controlled native proof (requires separate authorization)
 

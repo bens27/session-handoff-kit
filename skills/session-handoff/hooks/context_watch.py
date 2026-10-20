@@ -1419,14 +1419,13 @@ def main():
                                               shlex.quote(session_id), json.dumps(guard)))
     elif auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
         # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
-        procedure = shlex.quote(os.path.join(os.path.dirname(LEDGER), '..', 'reference.md'))
-        message += (" Fully automatic mode in AgentsRoom: after outcome saved and kind agents_restart, "
-                    "read the AgentsRoom restart section of %s for supported host observation and dispatch. "
-                    "Require restart_preflight outcome ready and dispatch true; call agents_restart only "
-                    "as the final tool action with its returned restart_prompt, then end the turn. "
-                    "Unknown identity/inventory/hold state requires manual fresh-session continuation. "
-                    "A pending intent needs reconciliation, not redispatch. Preserve a refused checkpoint "
-                    "and report the refusal." % procedure)
+        command = shlex.quote(os.path.join(os.path.dirname(LEDGER), 'restart_preflight.py'))
+        message += (" Fully automatic mode in AgentsRoom: after outcome saved and kind agents_restart, run "
+                    "%s restart --root <project> with your complete --workers inventory and --host-capable, as "
+                    "transition.action states. Only outcome ready with dispatch true permits agents_restart, as "
+                    "the final tool action with the returned restart_prompt; then end the turn. Blocked means "
+                    "manual fresh-session continuation; pending needs reconciliation, not redispatch."
+                    % ("python3 " + command))
     message += (" Minimal save contract: JSON topic, description, body with ## Objective, ## Current state, "
                 "## Next steps; preserve authorization, unresolved decisions and effects already performed. "
                 "Include decisions and code anchors for planned edits. Require only excerpts needed for the "

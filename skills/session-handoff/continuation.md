@@ -110,11 +110,17 @@ filename, assigns a topic, so an unreadable file may hide a newer successor.
 
 ## Successor retrieval evidence
 
-When a host adapter supplies a pending restart request ID, perform read-only
-`prepare` and pass its opaque `delivery_receipt`, actual new session and stable
-terminal to `restart_preflight.py successor`. It checks the local preparation
-cache and unchanged dependencies without claiming or acknowledging work. Then
-follow the authorized continuation flow; reuse that body/reference receipt only
+A restart prompt names one command, `restart_preflight.py adopt '<binding JSON>'`;
+the dispatcher hands a pending successor the same command as
+`adopt --root R --request-id X`. It checks the binding against the recorded intent
+and hook/host identity, prepares, records the opaque `delivery_receipt` with the
+actual new session and stable terminal, then resumes, emitting the body once.
+Any failure, including a failed resume, returns `outcome: blocked` with its
+`stage` and preserves state; an expired pending intent (over 7 days) is refused at
+stage `intent`. A dispatcher hold returns `outcome: held` after the receipt is
+recorded and before resume. The
+stepwise path (read-only `prepare`, then `restart_preflight.py successor` with
+the receipt) remains for manual recovery; reuse that body/reference receipt only
 while its content remains in context. The receipt proves kit retrieval only,
 with `host_confirmed: false`. Automatic request-ID propagation, host identity
 proof, serialized host dispatch and successor receipt wiring are not provided

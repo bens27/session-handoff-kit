@@ -57,9 +57,10 @@ except as listed here.
   pane, and the `auto` runner launches the agent command you give it. In
   AgentsRoom, save/pressure guidance produces an `agents_restart` candidate with
   `requires_preflight: true`; the Stop path does not type into an inherited tmux
-  pane. A host call requires `restart_preflight` to return `outcome: ready` and
+  pane. A host call requires `restart_preflight.py restart` (or `preflight`) to return `outcome: ready` and
   `dispatch: true` from authoritative current capability, identity, complete
   worker inventory and hold observations. This kit supplies no such host adapter.
+  The successor runs the single `adopt` command named in the returned prompt.
   If preflight cannot be established, keep the published checkpoint, stop and
   start a fresh session manually with `continue the handoff`. The automatic-mode
   default alone never grants dispatch permission.

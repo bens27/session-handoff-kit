@@ -555,7 +555,37 @@ a subagent never receives the parent's handoff notice.
 and JSON CLI. It never invokes restart. Pass an argument object on stdin or
 with `--input file.json`; operations are `preflight`, `status`, `refusal`,
 and `successor`. Callable names are `preflight`, `status`, `record_refusal`,
-and `confirm_successor` respectively.
+and `confirm_successor` respectively. Two argv operations wrap a whole side of a
+native cycle in one command with compact output:
+
+- `restart --root R [--workers '<JSON list>'] [--host-capable] [--hold] [--path P]`
+  (predecessor, callable `restart`) reads hook/host identity, selects this
+  session's single open checkpoint (several block unless `--path` names one),
+  derives the deterministic request ID, unions `--hold` with durable dispatcher
+  holds, runs `preflight` and, only when it creates a ready intent, stores the
+  observations in `.handoffs/restart/<sha256-request-id>.observations` under the
+  intent lock (blocked attempts and reruns never overwrite them). It returns
+  `{outcome, dispatch, request_id, path, call, agent, restart_prompt}`.
+  Omitting `--workers` means unknown inventory and blocks. The request ID is
+  deterministic, so a rerun after a host refusal returns `refused`: a retry
+  needs a new save once the cause is resolved.
+- `adopt '<binding JSON>'` (successor, from the restart prompt) or
+  `adopt --root R --request-id X` (dispatcher), callable `adopt`, first requires
+  a given binding to match the recorded intent exactly (stage `binding`), then
+  checks hook/host identity, the environment terminal and a session different
+  from the predecessor, prepares internally, records the receipt and resumes the exact
+  checkpoint. The body is emitted once, by resume. Output is the resume result
+  plus `restart: {request_id, predecessor_session, successor_session, terminal,
+  state, host_confirmed:false}` and a `report` line that states the observed
+  identity apart from host acceptance (`host_confirmed=false`). A rerun by the same successor replays; any
+  failure, including a failed resume, returns `outcome: blocked` with its `stage`
+  (`identity`, `intent`, `binding`, `prepare`, `successor`, `hold`, `resume`) and
+  preserves state. A pending intent older than 7 days is refused (stage `intent`,
+  `restart-intent-expired`), also by the stepwise `successor`; dispatch reports it
+  as a stale warning rather than routing a successor, and it blocks only its own
+  checkpoint's restart, so a new save can restart. A dispatcher hold applying to the project, topic or
+  terminal yields `outcome: held` (stage `hold`) after the receipt is recorded and
+  before any resume; rerun after an explicit release.
 
 `preflight(root, path, session, terminal, request_id, workers=None,
 host_capable=False, hold=False)` validates authoritative open publication and
@@ -571,9 +601,12 @@ it finished is insufficient. Local report hashes prove bytes, not correctness
 or that a running worker cannot produce further results.
 
 The agent calls the supported host tool only for `dispatch: true`, using the
-returned `restart_prompt`. This self-contained prompt binds the exact root,
-checkpoint, predecessor identity, terminal and request ID; it orders successor
-preparation, delivery receipt recording and resume. Pending/refused/retrieved
+returned `restart_prompt`, one sentence: `Continue the handoff: run exactly
+python3 …/restart_preflight.py adopt '<binding JSON>'`. The compact binding
+(checkpoint_id, path, request_id, root, session, terminal) is the command's only
+argument, so it appears once, and every identity, retrieval and receipt rule is
+enforced by `adopt` rather than stated as prose (about 580 B against 2.3 KB).
+Pending/refused/retrieved
 responses carry no new restart prompt. The exact prompt is persisted for audit;
 new identifiers are bounded ASCII tokens and the final prompt is checked against
 the host limit before intent persistence. A durable registry lock also prevents
@@ -587,7 +620,7 @@ reads `.handoffs/restart/<sha256-request-id>.json`. Reusing an ID with another
 identity or checkpoint blocks. An existing malformed intent also blocks and is
 preserved for inspection; only a missing record permits a new intent.
 
-After read-only `prepare`, the successor calls
+`adopt` composes the following steps. After read-only `prepare`, the successor calls
 `confirm_successor(root, request_id, session, terminal, delivery_receipt)` with
 its new session ID and the returned opaque delivery token. The terminal that
 counts is the environment's: the call is refused when it is unset or differs
@@ -741,7 +774,8 @@ only the `branch` file the result names.
   read-only scan of `.handoffs/restart/` for this session, terminal or target.
   The requesting session is blocked (`dispatch_pending`); its successor on the
   intent's terminal, as the environment reports it, gets `restart_successor`:
-  prepare, record the successor receipt, then resume. Another terminal naming
+  one `restart_preflight.py adopt` command that prepares, records the successor
+  receipt and resumes. Another terminal naming
   the checkpoint gets `dispatch_pending`. Only relevant invalid intents block,
   and only resume and retrieve; save and pressure never block, and foreign,
   unattributable or stale (moved-project) records come back as `warnings`.

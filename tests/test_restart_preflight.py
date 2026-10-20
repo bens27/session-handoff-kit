@@ -67,9 +67,9 @@ class RestartTests(unittest.TestCase):
                          ready['restart_prompt'])
         self.assertNotIn('restart_prompt', self.preflight())
 
-    def test_host_prompt_limit_rejection_leaves_no_intent(self):
+    def test_deepest_quoted_path_still_yields_bounded_ready_prompt(self):
+        """The pointer prompt cannot reach the 20 KB host limit below PATH_MAX."""
         deep = Path(self.root)
-        # Shell quoting expands these valid paths while staying below macOS PATH_MAX.
         for _ in range(8):
             deep /= "'" * 95
         (deep / '.handoffs').mkdir(parents=True)
@@ -78,8 +78,8 @@ class RestartTests(unittest.TestCase):
             'body': '## Objective\nFix\n## Current state\nSaved\n## Next steps\nTest\n'})
         result = restart.preflight(str(deep), saved['path'], 'old', 'term',
                                    'long-path-intent', workers=[], host_capable=True)
-        self.assertEqual(result['reason'], 'restart-prompt-too-large')
-        self.assertIsNone(restart.status(str(deep), 'long-path-intent'))
+        self.assertEqual(result['outcome'], 'ready', result)
+        self.assertLessEqual(len(result['restart_prompt']), 20000)
 
     def test_safe_identifier_boundaries_fit_actual_native_and_request_ids(self):
         terminal = 'a' * 120
@@ -92,7 +92,8 @@ class RestartTests(unittest.TestCase):
                                   'r' * 128, workers=[], host_capable=True)
         self.assertEqual(ready['outcome'], 'ready', ready)
         self.assertLessEqual(len(ready['restart_prompt']), 20000)
-        self.assertIn('identity_source exactly hook or host', ready['restart_prompt'])
+        self.assertIn(' adopt ', ready['restart_prompt'])
+        self.assertIn('"request_id":"%s"' % ('r' * 128), ready['restart_prompt'])
 
     def test_other_pending_or_invalid_legacy_intent_blocks_new_checkpoint(self):
         import hashlib
@@ -183,6 +184,23 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertEqual(self.preflight(request_id='modern-id')['reason'],
                          'conflicting-restart-intent')
 
+    def test_expired_intent_on_this_terminal_does_not_block_a_new_checkpoint(self):
+        """F1c: an intent past INTENT_MAX_AGE can never be adopted, so it must not jam the
+        terminal; it still blocks its own checkpoint and stays preserved."""
+        import json, time
+        self.assertEqual(self.preflight()['outcome'], 'ready')
+        location = restart._location(self.root, 'restart-1')
+        record = json.loads(Path(location).read_text())
+        record['intent_at'] = time.time() - 30 * 86400
+        protocol.write_json(location, record)
+        self.assertEqual(self.preflight(request_id='restart-2')['reason'], 'conflicting-restart-intent')
+        fresh = protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'other', 'description': 'Continue other',
+            'body': '## Objective\nOther\n## Current state\nSaved\n## Next steps\nGo\n'})['path']
+        ready = self.preflight(path=fresh, request_id='restart-2')
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        self.assertEqual(restart.status(self.root, 'restart-1')['state'], 'pending')
+
     def test_failure_keeps_checkpoint_and_refuses_duplicate_dispatch(self):
         self.preflight()
         restart.record_refusal(self.root, 'restart-1', 'host unavailable')
@@ -195,6 +213,11 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertEqual(state['state'], 'pending')
         self.assertFalse(state['host_confirmed'])
         self.assertFalse(self.preflight()['dispatch'])
+
+    def test_prompt_over_host_limit_blocks_without_persisting_intent(self):
+        with patch.object(restart, 'binding_command', return_value='x' * 20001):
+            self.assertEqual(self.preflight()['reason'], 'restart-prompt-too-large')
+        self.assertIsNone(restart.status(self.root, 'restart-1'))
 
     def test_active_worker_without_durable_report_blocks(self):
         self.assertEqual(self.preflight(workers=[{'id': 'worker', 'active': True}])['reason'],
@@ -272,9 +295,8 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         result = json.loads(ready.stdout)
         self.assertTrue(result['dispatch'])
         prompt = result['restart_prompt']
-        for required in (self.path, self.root, result['checkpoint_id'], 'cli-prompt', 'old', 'term',
-                         'prepare', 'delivery_receipt', 'successor', 'resume',
-                         'host_confirmed', 'Do not restart'):
+        for required in (self.path, self.root, result['checkpoint_id'], '"cli-prompt"', '"old"', '"term"',
+                         ' adopt \'{'):
             self.assertIn(required, prompt)
         pending = subprocess.run(command, input=json.dumps(args), text=True, capture_output=True)
         repeat = json.loads(pending.stdout)
@@ -401,3 +423,272 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         path.write_text(json.dumps(receipt))
         with self.assertRaises(ValueError):
             restart.confirm_successor(self.root, 'restart-1', 'new', 'term', delivery)
+
+
+class AdoptTests(unittest.TestCase):
+    """Item 1+2: one successor command retrieves, records receipt and resumes."""
+    BODY = '## Objective\nFix it\n## Current state\nSaved UNIQUE-BODY-MARKER\n## Next steps\nTest it\n'
+
+    def setUp(self):
+        import json
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = str(Path(self.tmp.name).resolve())
+        (Path(self.root) / '.handoffs').mkdir()
+        self.env = dict(os.environ, HOME=self.root, USERPROFILE=self.root, TMPDIR=self.root,
+                        HANDOFF_TERMINAL_ID='term', AGENTSROOM_AGENT_ID='', CODEX_THREAD_ID='',
+                        HANDOFF_SESSION_ID='')
+        env = patch.dict(os.environ, self.env)
+        env.start()
+        self.addCleanup(env.stop)
+        tempfile.tempdir = None
+        self.addCleanup(setattr, tempfile, 'tempdir', None)
+        self.path = protocol.save(self.root, 'old', 'save-1', {
+            'topic': 'work', 'description': 'Continue work', 'body': self.BODY})['path']
+        ready = restart.preflight(self.root, self.path, 'old', 'term', 'req-1',
+                                  workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        self.prompt = ready['restart_prompt']
+        self.json = json
+
+    def pointer(self, session, terminal='term'):
+        import hashlib, time
+        key = self.root + '\0' + terminal
+        name = 'context-watch-terminal-%s.json' % hashlib.sha1(key.encode()).hexdigest()[:20]
+        (Path(self.root) / name).write_text(self.json.dumps(dict(session_id=session, ts=time.time())))
+
+    def adopt(self, request_id='req-1', **env):
+        import subprocess
+        run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt',
+                              '--root', self.root, '--request-id', request_id],
+                             env=dict(self.env, **env), text=True, capture_output=True)
+        return run.returncode, run.stdout, self.json.loads(run.stdout)
+
+    def test_adopt_delivers_body_once_and_records_retrieval_without_prompt_echo(self):
+        self.pointer('new')
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+        self.assertEqual(raw.count('UNIQUE-BODY-MARKER'), 1)
+        self.assertNotIn(self.prompt, raw)
+        self.assertNotIn('restart_prompt', out['restart'])
+        self.assertEqual(out['restart'], dict(
+            request_id='req-1', predecessor_session='old', successor_session='new',
+            terminal='term', state='retrieved', host_confirmed=False))
+        self.assertEqual(restart.status(self.root, 'req-1')['successor_session'], 'new')
+
+    def test_adopt_refuses_unrecorded_foreign_or_predecessor_identity_and_preserves_state(self):
+        cases = [
+            ('environment-only session', None, dict(HANDOFF_SESSION_ID='new')),
+            ('predecessor session', 'old', {}),
+            ('other terminal', 'new', dict(HANDOFF_TERMINAL_ID='elsewhere')),
+        ]
+        for label, session, env in cases:
+            with self.subTest(label):
+                for leftover in Path(self.root).glob('context-watch-terminal-*.json'):
+                    leftover.unlink()
+                if session:
+                    self.pointer(session, env.get('HANDOFF_TERMINAL_ID', 'term'))
+                code, raw, out = self.adopt(**env)
+                self.assertEqual((code, out['outcome']), (1, 'blocked'), out)
+                self.assertNotIn('UNIQUE-BODY-MARKER', raw)
+                self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+                self.assertNotIn('claim_owner', Path(self.path).read_text())
+
+    def test_adopt_rerun_by_same_successor_is_idempotent_but_another_successor_is_refused(self):
+        self.pointer('new')
+        self.assertEqual(self.adopt()[2]['outcome'], 'resumed')
+        code, raw, again = self.adopt()
+        self.assertEqual((code, again['outcome'], again['restart']['state']), (0, 'resumed', 'retrieved'), again)
+        self.assertEqual(raw.count('UNIQUE-BODY-MARKER'), 1)
+        self.pointer('third')
+        code, raw, other = self.adopt()
+        self.assertEqual((code, other['outcome'], other['stage']), (1, 'blocked', 'successor'), other)
+        self.assertNotIn('UNIQUE-BODY-MARKER', raw)
+        self.assertEqual(restart.status(self.root, 'req-1')['successor_session'], 'new')
+
+    def test_adopt_reports_resume_failure_as_blocked_with_stage_and_restart(self):
+        self.pointer('new')
+        self.assertEqual(self.adopt()[2]['outcome'], 'resumed')
+        moved = Path(self.root) / 'moved.md'
+        Path(self.path).rename(moved)
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome'], out['stage']), (1, 'blocked', 'resume'), out)
+        self.assertEqual(out['restart']['successor_session'], 'new')
+        self.assertFalse(out['host_confirmed'])
+
+    def test_adopt_honours_dispatcher_hold_after_recording_retrieval(self):
+        import handoff_dispatch as dispatch
+        dispatch.set_hold(self.root, 'project', 'Ben asked to wait')
+        self.pointer('new')
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome'], out['stage']), (1, 'held', 'hold'), out)
+        self.assertNotIn('UNIQUE-BODY-MARKER', raw)
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'retrieved')
+        self.assertNotIn('claim_owner', Path(self.path).read_text())
+        dispatch.set_hold(self.root, 'project')
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+
+    def test_adopt_refuses_expired_pending_intent_and_preserves_it(self):
+        import time
+        location = restart._location(self.root, 'req-1')
+        record = self.json.loads(Path(location).read_text())
+        record['intent_at'] = time.time() - restart.INTENT_MAX_AGE - 60
+        protocol.write_json(location, record)
+        self.pointer('new')
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome'], out['stage'], out['reason']),
+                         (1, 'blocked', 'intent', 'restart-intent-expired'), out)
+        self.assertNotIn('UNIQUE-BODY-MARKER', raw)
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+
+    def test_stepwise_successor_refuses_expired_pending_intent_like_adopt(self):
+        """F1: the stepwise prepare -> successor path honours the same intent age as adopt."""
+        import time
+        location = restart._location(self.root, 'req-1')
+        record = self.json.loads(Path(location).read_text())
+        record['intent_at'] = time.time() - 30 * 86400
+        protocol.write_json(location, record)
+        prepared = protocol.prepare(self.path, self.root, 'new')
+        self.assertEqual(prepared['outcome'], 'retrieved', prepared)
+        with self.assertRaisesRegex(ValueError, 'expired'):
+            restart.confirm_successor(self.root, 'req-1', 'new', 'term', prepared['delivery_receipt'])
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+        self.pointer('new')
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome'], out['stage'], out['reason']),
+                         (1, 'blocked', 'intent', 'restart-intent-expired'), out)
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+
+    def test_restart_prompt_is_one_sentence_whose_command_carries_the_binding(self):
+        import shlex
+        record = restart.status(self.root, 'req-1')
+        binding = {k: record[k] for k in ('checkpoint_id', 'path', 'request_id', 'root', 'session', 'terminal')}
+        compact = self.json.dumps(binding, sort_keys=True, separators=(',', ':'))
+        command = 'python3 %s adopt %s' % (
+            shlex.quote(os.path.realpath(HOOKS / 'restart_preflight.py')), shlex.quote(compact))
+        self.assertEqual(self.prompt, 'Continue the handoff: run exactly ' + command)
+        self.assertEqual(self.prompt.count(self.path), 1)
+        self.assertEqual(self.prompt.count('python3 '), 1)
+
+    def test_adopt_by_binding_resumes_and_reports_identity_apart_from_host_acceptance(self):
+        import shlex, subprocess
+        self.pointer('new')
+        argv = shlex.split(self.prompt[len('Continue the handoff: run exactly '):])
+        argv[0] = sys.executable
+        run = subprocess.run(argv, env=self.env, text=True, capture_output=True)
+        out = self.json.loads(run.stdout)
+        self.assertEqual((run.returncode, out['outcome']), (0, 'resumed'), out)
+        self.assertEqual(run.stdout.count('UNIQUE-BODY-MARKER'), 1)
+        self.assertIn('old -> new', out['report'])
+        self.assertIn('host_confirmed=false', out['report'])
+
+    def test_adopt_refuses_binding_that_differs_from_recorded_intent(self):
+        import subprocess
+        self.pointer('new')
+        record = restart.status(self.root, 'req-1')
+        binding = {k: record[k] for k in ('checkpoint_id', 'path', 'request_id', 'root', 'session', 'terminal')}
+        for field, value in (('checkpoint_id', 'f' * 64), ('path', self.path + '.other'),
+                             ('session', 'someone'), ('terminal', 'elsewhere')):
+            with self.subTest(field):
+                bad = dict(binding, **{field: value})
+                run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt',
+                                      self.json.dumps(bad)], env=self.env, text=True, capture_output=True)
+                out = self.json.loads(run.stdout)
+                self.assertEqual((run.returncode, out['outcome'], out['stage']), (1, 'blocked', 'binding'), out)
+                self.assertNotIn('UNIQUE-BODY-MARKER', run.stdout)
+                self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+
+
+class RestartCommandTests(unittest.TestCase):
+    """Item 5: one predecessor command observes, persists intent and returns the prompt."""
+
+    def setUp(self):
+        import json
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = str(Path(self.tmp.name).resolve())
+        (Path(self.root) / '.handoffs').mkdir()
+        self.env = dict(os.environ, HOME=self.root, USERPROFILE=self.root, TMPDIR=self.root,
+                        HANDOFF_TERMINAL_ID='term', AGENTSROOM_AGENT_ID='', CODEX_THREAD_ID='',
+                        HANDOFF_SESSION_ID='')
+        env = patch.dict(os.environ, self.env)
+        env.start()
+        self.addCleanup(env.stop)
+        self.json = json
+        self.path = protocol.save(self.root, 'old', 'save-1', {
+            'topic': 'work', 'description': 'Continue work', 'body': self.BODY})['path']
+        self.pointer('old')
+
+    BODY = AdoptTests.BODY
+    pointer = AdoptTests.pointer
+
+    def restart_cli(self, *args, **env):
+        import subprocess
+        run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'restart',
+                              '--root', self.root] + list(args),
+                             env=dict(self.env, **env), text=True, capture_output=True)
+        return run.returncode, self.json.loads(run.stdout)
+
+    def test_restart_persists_observations_and_returns_prompt_once(self):
+        import hashlib
+        checkpoint = protocol.ledger._read_fm(self.path)['checkpoint_id']
+        expected_id = 'agentsroom:' + hashlib.sha256(('term\0' + checkpoint).encode()).hexdigest()
+        code, out = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, out['outcome'], out['dispatch']), (0, 'ready', True), out)
+        self.assertEqual((out['request_id'], out['call'], out['agent']), (expected_id, 'agents_restart', 'term'))
+        self.assertIn('"request_id":"%s"' % expected_id, out['restart_prompt'])
+        self.assertIn(' adopt ', out['restart_prompt'])
+        observations = list(Path(self.root).glob('.handoffs/restart/*.observations'))
+        self.assertEqual(len(observations), 1)
+        saved = self.json.loads(observations[0].read_text())
+        self.assertEqual((saved['session'], saved['identity_source'], saved['workers']), ('old', 'hook', []))
+        code, again = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'pending', False), again)
+        self.assertNotIn('restart_prompt', again)
+
+    def test_observations_are_written_only_with_a_new_ready_intent(self):
+        import hashlib
+        report = Path(self.root) / 'w2.txt'
+        report.write_text('w2 result')
+        w2 = self.json.dumps([{'id': 'w2', 'report': {'path': str(report),
+                                'sha256': hashlib.sha256(report.read_bytes()).hexdigest()}}])
+        observations = lambda: list(Path(self.root).glob('.handoffs/restart/*.observations'))
+        self.assertEqual(self.restart_cli('--workers', '[]')[1]['reason'], 'host-capability-absent')
+        self.assertEqual(observations(), [])
+        self.assertEqual(self.restart_cli('--workers', '[]', '--host-capable')[1]['outcome'], 'ready')
+        self.assertEqual(self.restart_cli('--workers', w2, '--host-capable')[1]['outcome'], 'pending')
+        self.assertEqual(self.json.loads(observations()[0].read_text())['workers'], [])
+
+    def test_rerun_after_host_refusal_says_a_retry_needs_a_new_save(self):
+        code, out = self.restart_cli('--workers', '[]', '--host-capable')
+        restart.record_refusal(self.root, out['request_id'], 'Host refused; no restart scheduled')
+        code, again = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'refused', False), again)
+        self.assertIn('new save', again['action'])
+
+    def test_restart_blocks_without_intent_on_unknown_inventory_hold_ambiguity_or_weak_identity(self):
+        import handoff_dispatch as dispatch
+        intents = lambda: list(Path(self.root).glob('.handoffs/restart/*.json'))
+        code, out = self.restart_cli('--host-capable')
+        self.assertEqual((code, out['reason']), (1, 'worker-inventory-unknown'), out)
+        code, out = self.restart_cli('--workers', 'not json', '--host-capable')
+        self.assertEqual((code, out['outcome']), (1, 'blocked'), out)
+        code, out = self.restart_cli('--workers', '[]')
+        self.assertEqual(out['reason'], 'host-capability-absent', out)
+        dispatch.set_hold(self.root, 'project', 'Ben asked to wait')
+        code, out = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual(out['reason'], 'human-hold', out)
+        dispatch.set_hold(self.root, 'project')
+        for leftover in Path(self.root).glob('context-watch-terminal-*.json'):
+            leftover.unlink()
+        code, out = self.restart_cli('--workers', '[]', '--host-capable', HANDOFF_SESSION_ID='old')
+        self.assertEqual(out['reason'], 'identity-not-recorded-by-hook-or-host', out)
+        self.pointer('old')
+        protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'second', 'description': 'Second open work', 'body': self.BODY})
+        code, out = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual(out['reason'], 'ambiguous-checkpoint', out)
+        self.assertEqual(intents(), [])
+        code, out = self.restart_cli('--workers', '[]', '--host-capable', '--path', self.path)
+        self.assertEqual(out['outcome'], 'ready', out)

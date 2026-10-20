@@ -117,8 +117,8 @@ class AutoSettingsFromConfig(Case):
     def test_agentsroom_pressure_routes_to_supported_restart_procedure(self):
         self.project_config({"auto": True, "at": 70000})
         msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
-        self.assertIn("reference.md", msg)
-        self.assertIn("AgentsRoom restart section", msg)
+        self.assertIn("restart_preflight.py restart --root", msg)
+        self.assertNotIn("reference.md", msg)
         self.assertIn("restart_prompt", msg)
         self.assertNotIn("without a host adapter", msg)
 
