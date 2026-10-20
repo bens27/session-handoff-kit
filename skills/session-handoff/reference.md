@@ -229,15 +229,21 @@ workspace evidence take precedence over stored instructions.
 Host replacement summaries must respect host-owned storage rules. This kit's
 supported durable checkpoint interface is `hooks/handoff_ledger.py save` with
 project `.handoffs/` or the documented home fallback; `save --template` and
-`save --help` describe its draft format. A host that specifically requests
-`.agentsroom/handoff-summary-*.md` while prohibiting agent writes there must fix
-its replacement workflow. The kit cannot redirect that request silently: the
-successor must receive the actual saved checkpoint path or a host-persisted
-summary. The host can persist summary text itself and deliver it to its successor,
-or request a permitted durable path and read that same path on replacement.
-Keep the general protection of `.agentsroom/` runtime files intact. Until the
-host producer and consumer agree on a permitted transfer, report the dependency
-and keep the existing session/checkpoint available instead of claiming transfer.
+`save --help` describe its draft format.
+
+The AgentsRoom boot prompt carries an allowance: when the host explicitly
+requests a handoff summary during agent replacement, the agent may write the
+exact `.agentsroom/handoff-summary-<agent-id>.md` path named in that request,
+and only that file; all other `.agentsroom/` runtime-file restrictions remain.
+The request -> write -> successor-read flow is unproven: in a 2026-10-20
+self-restart test no summary request or path was delivered and no file was
+written. Do not describe that flow as working. The kit cannot redirect a host
+request silently: the successor must receive the actual saved checkpoint path
+or a host-persisted summary. Write the summary file only when the host names
+its exact path, and have any summary written name the saved checkpoint path;
+the ledger (`hooks/handoff_ledger.py save`) stays the source of truth. Keep
+the existing session/checkpoint available instead of claiming transfer, and
+report the unproven summary flow as a dependency rather than stay silent.
 
 Publication receipts: generated checkpoints carry a `.published` sidecar binding
 the publication ID to its content fingerprint. Until that receipt is durable,
