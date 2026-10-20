@@ -490,10 +490,33 @@ draft still defines retry identity. These records preserve declared obligations,
 not unrecorded transcript meaning or new authorization.
 
 
-Automatic transition guards operate on trusted terminal-scoped records:
-context pressure within 600 seconds of resume, a third pressure save of one
-topic within 1800 seconds, five prior AgentsRoom restart intents within 3600
-seconds, or a different session's intent within 120 seconds returns `paused`.
+Automatic transition guards operate on trusted terminal-scoped records.
+Pressure within 600 seconds of resume (`rapid-resume`) or a third pressure save
+of one topic within 1800 seconds (`repeated-topic`) pauses only without progress.
+`save_progress` defines progress once: the draft `content_hash` changed AND at
+least one of these changed since the trusted same-topic pressure predecessor:
+the effective continuity register (ignoring item order), a strictly newer Git
+commit descending from its recorded commit, or observed Git working-file evidence.
+Working-file evidence hashes modified/deleted/untracked nonignored file names
+and contents (symlinks use their link text), excluding top-level `.handoffs`,
+`.agentsroom` and `.git` paths only. Git directory entries ending in `/` (such as
+untracked nested repositories or linked worktrees) are skipped; their contents
+are not evidence of progress in the parent repository. Hashing is bounded to
+2 MB of content and 200 KB of paths. Git failures,
+missing legacy hashes, or exceeded bounds are unknown and do not prove progress.
+Body/description changes alone do not establish progress. An absent or untrusted
+same-topic pressure predecessor cannot prove progress. Only a newer commit
+descending from the recorded commit counts; a branch name change alone does not.
+Changing branches to a descendant commit does count; unrelated Git history does not.
+
+With progress, rapid/repeated reasons remain advisory: restart proceeds subject
+to other gates. Transition diagnostics and JSON `thrash_warning` front matter
+retain reasons, progress evidence, topic count, elapsed resume time and available
+startup/observed/resume token figures. The pressure hook emits one warning line;
+before the draft exists, soft reasons warn and save makes the progress decision.
+Five prior AgentsRoom restart intents within 3600 seconds (`restart-budget`) or
+a different session's intent within 120 seconds (`restart-cooldown`) always
+returns `paused`, regardless of progress. These hard limits are unchanged.
 Intent counts cannot observe restarts outside the kit; the host remains the
 authority for its limits. Durable resume timestamps back up ephemeral notes.
 A paused checkpoint is fully published and remains open. SessionStart, tmux

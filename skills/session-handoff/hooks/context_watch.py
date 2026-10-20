@@ -1413,11 +1413,11 @@ def main():
                 "Configure HANDOFF_AT or per-model ~/.context-watch/thresholds.json."
                 % (format(window, ','), window_source, format(startup, ',') if type(startup) is int else 'unknown',
                    format(limit - startup, ',') if type(startup) is int else 'unknown'))
-    if guard and guard['reasons']:
+    if guard and guard['pause_reasons']:
         message = ("[context-watch] Context pressure; automatic handoff paused (%s). Finish the atomic action, "
                    "publish the checkpoint with python3 %s save --session %s --input <draft.json>, "
                    "then follow transition.action and stop. The checkpoint stays open for explicit continuation. "
-                   "Growth diagnostics: %s." % (', '.join(guard['reasons']), shlex.quote(LEDGER),
+                   "Growth diagnostics: %s." % (', '.join(guard['pause_reasons']), shlex.quote(LEDGER),
                                               shlex.quote(session_id), json.dumps(guard)))
     elif auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
         # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
@@ -1428,6 +1428,8 @@ def main():
                     "the final tool action with the returned restart_prompt; then end the turn. Blocked means "
                     "manual fresh-session continuation; pending needs reconciliation, not redispatch."
                     % ("python3 " + command))
+    if guard and guard['reasons'] and not guard['pause_reasons']:
+        message += ' Thrash warning: %s; save checks predecessor progress before deciding to pause.' % ', '.join(guard['reasons'])
     message += (" Minimal save contract: JSON topic, description, body with ## Objective, ## Current state, "
                 "## Next steps; preserve authorization, unresolved decisions and effects already performed. "
                 "Include decisions and code anchors for planned edits. Require only excerpts needed for the "

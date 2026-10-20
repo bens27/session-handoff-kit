@@ -139,15 +139,25 @@ Workflow sizes account for instructions, not a workflow
 text field emitted by resume. Read continuation instructions for staged recovery
 or custom catalogs, rather than loading them on every successful one-shot resume.
 
-Save returns a `paused` transition when automatic handoffs would thrash: pressure
-within ten minutes of resume, a third pressure checkpoint of one topic within
-30 minutes, five previous AgentsRoom restart intents within an hour, or another
-session's restart intent within two minutes. The hourly budget deliberately
-stops before AgentsRoom's advertised six/hour limit. Intent counts are local to
-the terminal and cannot observe restarts outside this kit. Resume timestamps
-remain in the durable ledger even if temporary hook notes disappear.
-An identical retry preserves a pause; a retry of a transferred/closed checkpoint
-returns transition `none` so it cannot request a fresh restart of completed work.
+Save pauses for rapid/repeated context-pressure saves only when the current
+checkpoint shows no progress against its trusted same-topic pressure predecessor.
+Progress is a changed draft content hash AND a changed effective continuity
+register, forward Git commits, or changed observed working-file hashes. Body-only
+rewrites do not count. Unknown/legacy evidence does not count. File hashing skips
+Git directory entries and excludes only top-level `.handoffs`, `.agentsroom` and
+`.git` paths. A branch name change alone does not count; a newer descendant
+commit does, even on another branch. The exact bounds,
+exclusions and evidence rules are defined in [SPEC](../../SPEC.md#72-deterministic-checkpoint-protocol)
+under automatic transition guards (`save_progress` is the implementation source).
+A save within ten minutes of resume or the third same-topic pressure save within
+30 minutes still reports diagnostics and `thrash_warning` front matter; with
+progress these are advisory and automatic continuation proceeds. The hook warns
+before saving; the save result decides whether progress warrants continuation.
+Five previous AgentsRoom restart intents within an hour or another session's
+intent within two minutes remain hard stops, even with progress. Intent counts
+are terminal-local and cannot observe restarts outside this kit. Durable resume
+timestamps back up temporary notes. An identical retry preserves a recorded pause;
+a transferred/closed checkpoint returns transition `none` and cannot restart work.
 AgentsRoom transition candidates carry `requires_preflight: true`; host dispatch
 requires authoritative current identity/capability/inventory/hold observations
 and a ready/dispatch result. Unknown observations require manual continuation.

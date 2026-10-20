@@ -79,7 +79,8 @@ with patch('time.time', return_value=stamp):
         self.assertIn('rapid-resume', second['transition']['diagnostics']['reasons'])
         self.assertIn('open', second['transition']['action'])
         self.assertNotIn('make your last action a call', notice)
-        self.assertIn('paused', notice)
+        # The independent cooldown is a hard stop even before the draft exists.
+        self.assertIn('automatic handoff paused (restart-cooldown)', notice)
         startup = self.hook(31000, session='s3', event='SessionStart')
         self.assertEqual(startup, '')
         self.assertNotIn('Fully automatic:', startup)
@@ -152,16 +153,151 @@ with patch('time.time', return_value=stamp):
         self.assertNotIn('rm -rf', reasons)
         self.assertLessEqual(len(reasons.encode()), 120)
 
-    def test_third_topic_save_pauses_without_any_resume(self):
+    def test_progressing_pressure_chain_warns_without_pausing(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        for step in range(3):
+            out = self.save(body=BODY + 'Completed phase %d.\n' % step,
+                            continuity=[dict(id='phase', text='Phase %d' % step, status='open')])
+            self.assertEqual(out['transition']['kind'], 'agents_restart')
+            self.clock += 200
+        guard = out['transition']['diagnostics']
+        self.assertIn('repeated-topic', guard['reasons'])
+        self.assertTrue(guard['progress']['present'])
+        fm = Path(out['path']).read_text().split('\n---\n')[0]
+        self.assertNotIn('automatic_paused:', fm)
+        self.assertIn('thrash_warning:', fm)
+        warning = json.loads(next(line.split(': ', 1)[1] for line in fm.splitlines()
+                                  if line.startswith('thrash_warning:')))
+        self.assertEqual(warning['topic_saves_30m'], 2)
+        self.assertIn('observed_input_tokens', warning)
+        retry = self.save(body=BODY + 'Completed phase 2.\n',
+                          continuity=[dict(id='phase', text='Phase 2', status='open')])
+        self.assertEqual(retry['path'], out['path'])
+        self.assertEqual(retry['transition']['kind'], 'agents_restart')
+        self.hook(31000, session='s2', event='SessionStart')
+        notice = self.hook(140000, session='s2')
+        self.assertIn('Thrash warning:', notice)
+        self.assertNotIn('automatic handoff paused (', notice)
+
+    def test_body_only_changes_do_not_establish_progress(self):
         self.hook(140000)
         self.save(body=BODY + 'first\n')
         second = self.save(body=BODY + 'second\n')
         self.assertEqual(second['transition']['kind'], 'agents_restart')
         third = self.save(body=BODY + 'third\n')
         self.assertIn('repeated-topic', third['transition']['diagnostics']['reasons'])
+        self.assertEqual(third['transition']['kind'], 'paused')
+        self.assertFalse(third['transition']['diagnostics']['progress']['present'])
         retry = self.save(body=BODY + 'third\n')
         self.assertEqual(retry['path'], third['path'])
         self.assertEqual(retry['transition']['kind'], 'paused')
+
+    def test_progress_after_rapid_resume_is_advisory_after_cooldown(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save(continuity=[dict(id='work', text='Phase one', status='open')])
+        self.hook(31000, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 121  # Progress cannot bypass the independent 120-second cooldown.
+        notice = self.hook(140000, session='s2')
+        self.assertIn('Thrash warning:', notice)
+        out = self.save(session='s2', body=BODY + 'Phase one complete.\n',
+                        continuity=[dict(id='work', text='Phase two', status='open')])
+        self.assertEqual(out['transition']['kind'], 'agents_restart')
+        self.assertIn('rapid-resume', out['transition']['diagnostics']['reasons'])
+        self.assertTrue(out['transition']['diagnostics']['progress']['present'])
+
+    def git(self, *args):
+        p = subprocess.run(['git', '-C', str(self.root), *args], env=self.env,
+                           capture_output=True, text=True, timeout=10)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout.strip()
+
+    def init_work(self):
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'Recovery fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        (self.root / '.gitignore').write_text('.handoffs/\n*.jsonl\n')
+        (self.root / 'work.txt').write_text('initial\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'fixture baseline')
+
+    def test_file_and_commit_progress_use_observed_evidence(self):
+        for mode in ('dirty-file', 'untracked-file', 'new-commit'):
+            with self.subTest(mode=mode):
+                # Each subcase uses an independent topic/lineage, not request metadata.
+                if mode == 'dirty-file':
+                    self.init_work()
+                    self.clock = float(int(time.time()))
+                    self.hook(140000)
+                for step in range(3):
+                    file = self.root / ('new.txt' if mode == 'untracked-file' else 'work.txt')
+                    file.write_text('%s phase %d\n' % (mode, step))
+                    if mode == 'new-commit':
+                        self.git('add', '.')
+                        self.git('commit', '-qm', 'phase %d' % step)
+                    out = self.save(topic=mode, body=BODY + 'Phase %d\n' % step)
+                    self.assertEqual(out['transition']['kind'], 'agents_restart')
+                    self.clock += 200
+                info = out['transition']['diagnostics']
+                self.assertTrue(info['progress']['present'])
+                self.assertTrue(info['progress']['new_commits' if mode == 'new-commit' else 'files_changed'])
+                self.clock += 3601
+
+    def test_nested_repository_does_not_hide_working_file_progress(self):
+        self.init_work()
+        nested = self.root / 'nested'
+        nested.mkdir()
+        self.git('-C', str(nested), 'init', '-q')
+        (nested / 'nested.txt').write_text('Nested work stays separate.\n')
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        for step in range(3):
+            (self.root / 'work.txt').write_text('Phase %d\n' % step)
+            out = self.save(body=BODY + 'Completed phase %d.\n' % step)
+            self.clock += 200
+        self.assertEqual(out['transition']['kind'], 'agents_restart')
+        self.assertTrue(out['transition']['diagnostics']['progress']['files_changed'])
+
+    def test_progress_cannot_bypass_budget_or_cooldown(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save(continuity=[dict(id='phase', text='Start', status='open')])
+        self.hook(31000, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.hook(140000, session='s2')
+        blocked = self.save(session='s2', body=BODY + 'Progress.\n',
+                            continuity=[dict(id='phase', text='Next', status='open')])
+        self.assertTrue(blocked['transition']['diagnostics']['progress']['present'])
+        self.assertEqual(blocked['transition']['diagnostics']['pause_reasons'], ['restart-cooldown'])
+        self.assertEqual(blocked['transition']['kind'], 'paused')
+        self.clock += 3601
+        for step in range(6):
+            out = self.save(session='s2', topic='budget-chain', body=BODY + 'Phase %d\n' % step,
+                            continuity=[dict(id='phase', text='Phase %d' % step, status='open')])
+            self.assertEqual(out['transition']['kind'], 'agents_restart' if step < 5 else 'paused')
+            self.clock += 200
+        self.assertTrue(out['transition']['diagnostics']['progress']['present'])
+        self.assertIn('restart-budget', out['transition']['diagnostics']['pause_reasons'])
+        self.assertEqual(out['transition']['diagnostics']['restart_intents_1h'], 5)
+
+    def test_new_commit_without_changed_draft_does_not_establish_progress(self):
+        self.init_work()
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        for step in range(3):
+            (self.root / 'work.txt').write_text('phase %d\n' % step)
+            self.git('add', '.')
+            self.git('commit', '-qm', 'phase %d' % step)
+            out = self.cli('save', '--request-id', 'attempt-%d' % step,
+                           doc=dict(topic='same-draft', description='Same draft', body=BODY))
+            self.clock += 200
+        self.assertEqual(out['transition']['kind'], 'paused')
+        progress = out['transition']['diagnostics']['progress']
+        self.assertTrue(progress['new_commits'])
+        self.assertFalse(progress['content_changed'])
+        self.assertFalse(progress['present'])
 
     def test_host_budget_counts_restart_intents_and_is_terminal_scoped(self):
         self.hook(140000)

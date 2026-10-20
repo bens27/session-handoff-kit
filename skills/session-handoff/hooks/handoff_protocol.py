@@ -232,7 +232,78 @@ def project_setting(root, key, kind, user_only=False):
     return value
 
 
-def restart_guard(root, session, topic=None, records=None, pressure=True):
+def workspace_changes_hash(root):
+    """Bounded Git working-file evidence; unknown evidence never proves progress."""
+    import subprocess
+    try:
+        listed = subprocess.run(['git', '-C', root, 'ls-files', '--modified', '--deleted',
+                                 '--others', '--exclude-standard', '-z'],
+                                capture_output=True, timeout=5, check=True).stdout
+        if len(listed) > 200_000:
+            return ''
+        digest = hashlib.sha256()
+        total = 0
+        for raw in sorted(set(listed.split(b'\0')) - {b''}):
+            name = os.fsdecode(raw)
+            if name.endswith('/') or name.split('/')[0] in ('.handoffs', '.agentsroom', '.git'):
+                continue
+            path = os.path.join(root, name)
+            if os.path.islink(path):
+                data = os.fsencode(os.readlink(path))
+            elif not os.path.exists(path):
+                data = b'<deleted>'
+            else:
+                with open(path, 'rb') as f:
+                    data = f.read(2_000_001)
+            total += len(data)
+            if total > 2_000_000:
+                return ''
+            digest.update(raw + b'\0' + hashlib.sha256(data).digest())
+        return digest.hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def save_progress(root, current, continuity, previous):
+    """Changed draft hash AND (changed register, forward commits, or working files).
+
+    Only a trusted same-topic pressure predecessor is supplied by the caller.
+    Missing legacy evidence is unknown, not progress. Register ordering is immaterial.
+    """
+    eligible = (bool(previous) and previous.get('topic') == current.get('topic')
+                and previous.get('reason') == current.get('reason') == 'context-pressure')
+    changed = eligible and bool(previous.get('content_hash')) and previous['content_hash'] != current['content_hash']
+    try:
+        register_changed = eligible and sorted(continuity_items(continuity), key=lambda x: x['id']) != sorted(
+            continuity_items(json.loads(previous.get('continuity', '[]'))), key=lambda x: x['id'])
+    except (ValueError, TypeError, RecursionError):
+        register_changed = False  # Malformed evidence is unknown, never progress.
+    before, after = previous.get('workspace_changes_hash'), current.get('workspace_changes_hash')
+    files_changed = eligible and bool(before) and bool(after) and before != after
+    commits = False
+    if eligible:
+        import subprocess
+        old = previous.get('git', '').rsplit('@', 1)[-1]
+        new = current.get('git', '').rsplit('@', 1)[-1]
+        if old != new and re.fullmatch(r'[0-9a-f]{7,64}', old) and re.fullmatch(r'[0-9a-f]{7,64}', new):
+            try:
+                commits = subprocess.run(['git', '-C', root, 'merge-base', '--is-ancestor', old, new],
+                                         capture_output=True, timeout=5).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return dict(present=bool(changed and (register_changed or commits or files_changed)),
+                predecessor_known=bool(eligible), content_changed=bool(changed),
+                continuity_changed=bool(register_changed), new_commits=commits,
+                files_changed=bool(files_changed))
+
+
+def predecessor_progress(root, fields, continuity):
+    predecessor = fields.get('predecessor')
+    previous = ledger._read_fm(predecessor) if predecessor and ledger.trusted(predecessor) else {}
+    return save_progress(root, fields, continuity, previous)
+
+
+def restart_guard(root, session, topic=None, records=None, pressure=True, progress=None):
     """Conservative restart-intent budget, isolated to the current terminal.
 
     Saved intents are observable; the host's actual restart counter is not.
@@ -258,7 +329,10 @@ def restart_guard(root, session, topic=None, records=None, pressure=True):
     transfers = [r for r in rows if r['fm'].get('resumed_by') == session
                  and ledger.trusted(r['path'], r['text'], r['fm'])]
     last_transfer = min(transfers, key=lambda r: age(r['fm'].get('resumed')), default=None)
-    topic = topic or note.get('resumed_topic') or (last_transfer['topic'] if last_transfer else None)
+    latest_pressure = min((r for r in recent if r['fm'].get('reason') == 'context-pressure'),
+                          key=lambda r: age(r['fm'].get('created')), default=None)
+    topic = (topic or note.get('resumed_topic') or (last_transfer['topic'] if last_transfer else None)
+             or (latest_pressure['topic'] if latest_pressure else None))
     same = [r for r in recent if r['fm'].get('reason') == 'context-pressure' and topic and r['fm'].get('topic') == topic
             and age(r['fm'].get('created')) < 1800]
     resumed_at = note.get('resumed_at')
@@ -275,14 +349,16 @@ def restart_guard(root, session, topic=None, records=None, pressure=True):
     if os.environ.get('AGENTSROOM_AGENT_ID') and any(
             r['fm'].get('session_id') != session and age(r['fm'].get('created')) < 120 for r in intents):
         reasons.append('restart-cooldown')
-    return dict(reasons=reasons, seconds_since_resume=round(elapsed) if elapsed is not None else None,
+    pause_reasons = [r for r in reasons if r in ('restart-budget', 'restart-cooldown')
+                     or (progress is not None and not progress['present'])]
+    return dict(reasons=reasons, pause_reasons=pause_reasons, progress=progress, seconds_since_resume=round(elapsed) if elapsed is not None else None,
                 topic_saves_30m=len(same), restart_intents_1h=len(intents),
                 startup_input_tokens=note.get('startup_input_tokens'),
                 observed_input_tokens=note.get('observed_input_tokens'),
                 resume_delivery_tokens=note.get('resume_delivery_tokens'))
 
 
-def transition(root, guard=None):
+def _transition(root, guard=None):
     """What ends this session after a save, deduced from the environment and config."""
     if (os.environ.get('HANDOFF_AUTO') or '').strip():
         auto = _truthy(os.environ.get('HANDOFF_AUTO'))
@@ -291,14 +367,14 @@ def transition(root, guard=None):
         # the app), off elsewhere; an explicit "auto": false always wins.
         setting = project_setting(root, 'auto', bool)
         auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
-    if auto and guard and guard['reasons']:
+    if auto and guard and guard['pause_reasons']:
         return dict(kind='paused', diagnostics=guard, action=(
             'Automatic handoff paused: %s. The saved checkpoint remains open. '
             'Stop and report session thrashing with these diagnostics. After reducing re-entry context '
             'or waiting for the restart budget, start a fresh session and explicitly ask to '
             'continue the handoff. If a host restart is refused, keep this checkpoint open; '
             'report the refusal and use the same manual continuation, without retrying the restart.'
-            % ', '.join(guard['reasons'])))
+            % ', '.join(guard['pause_reasons'])))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
         return dict(kind='agents_restart', requires_preflight=True, action=(
             'Settle and inventory every worker you delegated (agents_spawned_list includeClosed:true, mailbox '
@@ -320,6 +396,16 @@ def transition(root, guard=None):
     if auto or _truthy(os.environ.get('AUTORESUME')) or _truthy(os.environ.get('CONTEXT_WATCH_AUTORESUME')):
         return dict(kind='clear', action='Tell the user to type /clear; the cleared session resumes this handoff.' + off)
     return dict(kind='new-session', action='Tell the user to start a new session in this project and ask it to resume.' + off)
+
+
+def transition(root, guard=None):
+    result = _transition(root, guard)
+    if guard and guard['reasons']:
+        result['diagnostics'] = guard
+        if not guard['pause_reasons']:
+            result['warning'] = 'Thrash warning: %s; checkpoint progress permits automatic continuation.' % ', '.join(guard['reasons'])
+            result['action'] = result['warning'] + ' ' + result['action']
+    return result
 
 
 def predecessor_project(predecessor):
@@ -469,9 +555,11 @@ def save(root, session, request_id, document):
                     return dict(outcome='conflict', path=record['path'], action='Saved front matter differs from the submitted checkpoint; it was not sealed. Inspect it, then use a new request ID.')
                 write_json(record['path'] + '.published', ledger.seal(identity, snapshot(record['path'])))
                 guard = restart_guard(root, session, topic, [r for r in records if r['path'] != record['path']],
-                                      pressure=record['fm'].get('reason') == 'context-pressure')
+                                      pressure=record['fm'].get('reason') == 'context-pressure',
+                                      progress=predecessor_progress(root, record['fm'], json.loads(record['fm'].get('continuity', '[]'))))
                 if record['fm'].get('automatic_paused'):
-                    guard['reasons'] = ledger._split_csv(record['fm']['automatic_paused'])
+                    guard['pause_reasons'] = ledger._split_csv(record['fm']['automatic_paused'])
+                    guard['reasons'] = list(dict.fromkeys(guard['reasons'] + guard['pause_reasons']))
                 next_transition = (dict(kind='none', action='Checkpoint is already transferred or closed; continue current work without restarting.')
                                    if record['fm'].get('status') != 'open' else transition(root, guard))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
@@ -549,11 +637,17 @@ def save(root, session, request_id, document):
                       reason='context-pressure' if note.get('fired') else 'user-parked')
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
-        guard = restart_guard(root, session, topic, records, pressure=fields['reason'] == 'context-pressure')
+        fields['workspace_changes_hash'] = workspace_changes_hash(root)
+        if predecessor:
+            fields['predecessor'] = predecessor
+        progress = save_progress(root, fields, document['continuity'], prior)
+        guard = restart_guard(root, session, topic, records, pressure=fields['reason'] == 'context-pressure', progress=progress)
         next_transition = transition(root, guard)
         fields['restart_intent'] = next_transition['kind']
         if next_transition['kind'] == 'paused':
-            fields['automatic_paused'] = ', '.join(guard['reasons'])
+            fields['automatic_paused'] = ', '.join(guard['pause_reasons'])
+        if guard['reasons']:
+            fields['thrash_warning'] = json.dumps(guard, sort_keys=True)
         for key in ('skills', 'references', 'optional_references', 'verify', 'verify_baseline'):
             value = document.get(key, '')
             if isinstance(value, list):
