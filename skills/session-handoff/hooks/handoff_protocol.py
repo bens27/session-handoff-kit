@@ -35,6 +35,15 @@ def load_state_json(path, limit=None):
         return decode_state_json(stream.read() if limit is None else stream.read(limit))
 
 
+def hooks_dir():
+    """The one hooks directory every emitted command names: the installed
+    ~/.agents/skills path when it resolves to these hooks, else their real path
+    (same rule as context_watch.canonical_ledger)."""
+    here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    installed = os.path.join(os.path.expanduser('~'), '.agents', 'skills', 'session-handoff', 'hooks')
+    return installed if os.path.isdir(installed) and os.path.realpath(installed) == here else here
+
+
 def terminal_id():
     """Wrapper identity that survives /clear: one terminal, one current handoff.
 
@@ -138,10 +147,10 @@ def hook_opening_note(event):
             return ('handoff-status: Incomplete checkpoint %s has no durable publication intent; retry the original save request: '
                     'python3 %s save --session %s --request-id <original-request-id> --input <original-draft.json>. '
                     'Keep the session; do not clear.'
-                    % (json.dumps(path), shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+                    % (json.dumps(path), shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
                        shlex.quote(fm.get('session_id') or session)))
         return ('handoff-status: Incomplete checkpoint %s; run python3 %s repair %s. Do not clear.'
-                % (json.dumps(path), shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+                % (json.dumps(path), shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
                    shlex.quote(path)))
     if event.get('hook_event_name') == 'SessionStart':
         return ''
@@ -157,7 +166,7 @@ def hook_opening_note(event):
             or authoritative != path or not ledger.trusted(path, record['text'], fm)):
         return pointer
     command = 'python3 %s resume %s --session %s --fields path,body' % (
-        shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+        shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
         shlex.quote(path), shlex.quote(session))
     if not session:
         return pointer
@@ -384,12 +393,13 @@ def _transition(root, guard=None):
         return dict(kind='agents_restart', requires_preflight=True, action=(
             'Settle and inventory every worker you delegated (agents_spawned_list includeClosed:true, mailbox '
             'and continuity delegations; each as {id, report:{path,sha256}}), check live holds/needsInput, then run '
-            'python3 %s restart --root %s --workers \'<JSON list>\' --host-capable [--hold]. Omit --workers '
-            'when inventory is unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
+            'python3 %s restart --root %s --workers \'<JSON list>\' --host-capable [--hold]. Pass '
+            '--workers \'[]\' when nothing is outstanding; a settled worker with no report file is '
+            '{id, settled: true, report: null}. Omitting --workers blocks with worker-inventory-unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
             'agents_restart for agent %s as the final tool action with the returned restart_prompt, never bare '
             '"%s"; then end the turn. Blocked means manual fresh-session continuation; pending intent requires '
             'reconciliation, never redispatch. Preserve human holds and worker results.')
-            % (shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')),
+            % (shlex.quote(os.path.join(hooks_dir(), 'restart_preflight.py')),
                shlex.quote(os.path.realpath(ledger.project_root(root))),
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
@@ -570,8 +580,15 @@ def save(root, session, request_id, document):
     document = inbox_document(root, document)
     continuity_items(document.get('continuity', []))
     topic = document.get('topic', '')
+    slug_warning = []
+    if isinstance(topic, str) and topic and not (len(topic) <= 80 and ledger.TOPIC_RE.fullmatch(topic)):
+        slug = ledger.slugify_topic(topic)
+        if slug:
+            slug_warning = ['Topic %r is not kebab-case; saved as slug %r.' % (topic[:80], slug)]
+            topic = slug
+            document = dict(document, topic=slug)
     if not isinstance(topic, str) or len(topic) > 80 or not ledger.TOPIC_RE.fullmatch(topic):
-        return dict(outcome='invalid', action='Supply a short kebab-case topic.')
+        return dict(outcome='invalid', action='Supply a short kebab-case topic (lowercase letters, digits and hyphens, for example fix-login-bug).')
     body = document.get('body', '')
     if not isinstance(body, str):
         return dict(outcome='invalid', action='Supply a Markdown body.')
@@ -622,7 +639,7 @@ def save(root, session, request_id, document):
             # A successor of unpublished work would be untrusted lineage that drops its
             # dependencies and register; the interrupted save must finish first.
             saved = ledger._read_fm(unfinished).get('session_id') or session
-            ledger_cli = shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py'))
+            ledger_cli = shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
             return dict(outcome='incomplete', path=unfinished,
                         action='The newest checkpoint for this lineage was never fully published. Keep this draft and finish that save first: '
                                'python3 %s repair %s when a durable intent exists, else python3 %s save --session %s --request-id <original-request-id> --input <original-draft.json>. '
@@ -650,7 +667,7 @@ def save(root, session, request_id, document):
             held = ledger._read_fm(predecessor)
             if held.get('status') == 'resumed' and not owns_transfer(root, predecessor, held, session):
                 holder = resumed_holder(root, predecessor, held)
-                ledger_cli = shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py'))
+                ledger_cli = shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
                 untraceable = not holder.get('terminal') and not holder.get('runner_id')
                 recovery = (dict(command='python3 %s recover-transfer %s --previous-session %s --resumed-at %s --fingerprint %s' % (
                     ledger_cli, shlex.quote(predecessor), shlex.quote(held.get('resumed_by', '')),
@@ -742,7 +759,7 @@ def save(root, session, request_id, document):
                 write_json(path + '.published', ledger.seal(identity, ledger.content_fingerprint(text)))
                 # The successor's predecessor field is the committed lineage record.
                 # Old-file cleanup is optional and never makes a saved successor vanish.
-                warnings = intent_warning + lineage_warning
+                warnings = intent_warning + lineage_warning + slug_warning
                 if len(body.split()) > ledger.RECOMMENDED_WORDS or len(text.encode()) > RECOMMENDED_DOCUMENT_BYTES:
                     warnings.append('Checkpoint exceeds the recommended 1500 words / 24000 bytes; keep essential context and consider optional background references.')
                 if re.search(r'\b(?:re[- ]?read|read\s+the\s+(?:whole|entire)|load\s+(?:the\s+)?skill)\b', body, re.I):
@@ -1528,7 +1545,7 @@ def opening_action(prompt, result, session, auto=False, newest=False):
         return 'An open handoff is available. Supply a unique session identity to prepare; never borrow another session identity.'
     execute = resume or (auto and not retrieve)
     # With --session, `resume` is the one-shot command that claims, verifies and acknowledges.
-    command = 'python3 %s %s %s --session %s' % (shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')),
+    command = 'python3 %s %s %s --session %s' % (shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
                                                  'resume' if execute else 'prepare', shlex.quote(selected['path']), shlex.quote(session))
     suffix = ' It claims, verifies and acknowledges in one call; then continue with ## Next steps in its body.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
     return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
@@ -1692,6 +1709,39 @@ def save_draft(a):
     return draft
 
 
+def _temp_bases():
+    return {os.path.realpath(p) for p in (tempfile.gettempdir(), '/tmp', '/var/tmp') if p}
+
+
+def redirect_save_root(a):
+    """Settle the project a save files under when the root was not named explicitly.
+
+    A shell sitting in a scratch directory (for example where the draft lives) must
+    not file the checkpoint under that directory or its temp base. Prefer the project
+    this session's hooks recorded; refuse when the root would be a temp base itself."""
+    if a.root != '.':
+        return None  # explicit --root or predecessor project wins
+    bases = _temp_bases()
+    start = os.path.realpath('.')
+    root = os.path.realpath(ledger.project_root('.'))
+    inside = any(start == b or start.startswith(b + os.sep) for b in bases)
+    recorded = ledger.read_project_pointer(getattr(a, 'session', None))
+    if recorded:
+        recorded = os.path.realpath(recorded)
+        if inside and root != recorded and not (start == recorded or start.startswith(recorded + os.sep)):
+            print('Saving under project %s recorded by this session\'s hooks, not the current directory %s.'
+                  % (recorded, start), file=sys.stderr)
+            a.root = recorded
+            return None
+    # A temp base already holding .handoffs/ or .git was made a project on purpose.
+    established = any(os.path.exists(os.path.join(root, marker)) for marker in ('.handoffs', '.git'))
+    if root in bases and not established:
+        return dict(outcome='invalid', project=root, action=(
+            'The current directory resolves to the temporary folder %s, not a project. Run save from the project '
+            'directory, or pass --root <project>, so the checkpoint is not filed under a temp dir.' % root))
+    return None
+
+
 def cli(argv):
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
@@ -1819,6 +1869,11 @@ def cli(argv):
         a.session = chosen
         if not a.session and a.command != 'lookup':
             print(json.dumps(NO_SESSION))
+            return 1
+    if a.command == 'save':
+        refused = redirect_save_root(a)
+        if refused:
+            print(json.dumps(refused))
             return 1
     try:
         if a.command == 'history':

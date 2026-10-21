@@ -250,6 +250,12 @@ def write_session_note(cwd, evt, fired, context=None):
             json.dump(note, f)
         os.replace(tmp, path)
         write_terminal_pointer(cwd, sid)
+        pointer = _ledger().project_pointer_path(sid)
+        ptmp = "%s.%d" % (pointer, os.getpid())
+        with open_private(ptmp, temp=True) as f:
+            json.dump({"session_id": sid, "project": os.path.realpath(_ledger().project_root(cwd)),
+                       "ts": time.time()}, f)
+        os.replace(ptmp, pointer)
     except Exception:
         pass
 
@@ -1430,7 +1436,7 @@ def main():
                     % ("python3 " + command))
     if guard and guard['reasons'] and not guard['pause_reasons']:
         message += ' Thrash warning: %s; save checks predecessor progress before deciding to pause.' % ', '.join(guard['reasons'])
-    message += (" Minimal save contract: JSON topic, description, body with ## Objective, ## Current state, "
+    message += (" Minimal save contract: JSON topic (short kebab-case, e.g. fix-login-bug), description, body with ## Objective, ## Current state, "
                 "## Next steps; preserve authorization, unresolved decisions and effects already performed. "
                 "Include decisions and code anchors for planned edits. Require only excerpts needed for the "
                 "immediate action; defer other docs/skills until needed. Save supplies metadata and lineage. "

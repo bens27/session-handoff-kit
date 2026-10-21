@@ -447,7 +447,11 @@ or hold state requires manual continuation. The predecessor runs one command,
 which reads hook/host identity, selects its single open checkpoint, derives the
 deterministic request ID, adds durable holds and preflights; observations are
 stored under the intent lock only with a new ready intent. A rerun after a host
-refusal returns `refused` (a retry needs a new save).
+refusal returns `refused` (a retry needs a new save). Inventory shapes: `[]` is a
+known empty inventory; an entry is `{id, report: {path, sha256}}` or, for a worker
+that finished without a report file, `{id, settled: true, report: null}`; an entry
+with no report and no `settled: true` blocks (`worker-report-not-durable`); an
+omitted `--workers` is unknown and blocks (`worker-inventory-unknown`).
 New ready intents return `restart_prompt`: one sentence naming one successor
 command, `restart_preflight.py adopt h-<24 hex>`. The handle is a prefix of the
 SHA256 of the canonical six-field binding (checkpoint_id, path, request_id, root,
@@ -655,6 +659,18 @@ Only ambiguous prose may use the Jev classifier with explicit
 project/session, including failed calls; reservation failure stays local. Classification can
 select context but does not grant execution authorization. Both hook branches
 use the same opening-action policy.
+
+Topics: `save` slugifies a non-kebab-case topic (lowercase, non-alphanumerics to
+single hyphens, 80 characters) and reports the slug in `warnings`; a topic with no
+usable characters is `invalid`, and the pressure contract text states the kebab-case
+rule. Save root: when no `--root` or predecessor names the project and the current
+directory lies inside a temp base, the project recorded for the session by the hooks
+(a root-independent pointer in the temp directory, keyed by session id) is used
+instead; a root that would be a temp base itself is refused with an action unless it
+already holds `.handoffs/` or `.git` (an intentional project, such as an isolated test
+root). Emitted
+commands name one hooks directory: the installed `~/.agents/skills/session-handoff/hooks`
+when it resolves to these hooks, else their real path.
 
 Session notes are keyed by canonical project plus session identity. A trigger
 is satisfied only by a validated publication with matching session/trigger IDs;

@@ -407,8 +407,12 @@ does not authorize dispatch. A live request to pause or wait takes precedence.
 Run `python3 <hooks>/restart_preflight.py restart --root <root> --workers '<JSON list>'
 --host-capable [--hold]` (add `--path` only when this session owns several open
 checkpoints). It reads hook/host identity, derives the request ID below, adds
-durable holds, stores the observations and runs preflight in one call. Omit
-`--workers` when the inventory is unknown: that blocks. The lower-level
+durable holds, stores the observations and runs preflight in one call. Pass
+`--workers '[]'` when the inventory is known and nothing is outstanding; a worker
+that finished with no report file is `{"id": "...", "settled": true, "report": null}`
+(without `settled: true` a worker lacking a report blocks as `worker-report-not-durable`).
+Omitting `--workers` means the inventory is unknown and blocks with
+`worker-inventory-unknown`. The lower-level
 `preflight --input <observations.json>` remains for callers that build the
 object themselves; the rules below apply to both.
 Before creating a request, reconcile existing intents for this terminal in

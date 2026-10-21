@@ -570,7 +570,9 @@ native cycle in one command with compact output:
   observations in `.handoffs/restart/<sha256-request-id>.observations` under the
   intent lock (blocked attempts and reruns never overwrite them). It returns
   `{outcome, dispatch, request_id, path, call, agent, restart_prompt}`.
-  Omitting `--workers` means unknown inventory and blocks. The request ID is
+  `--workers '[]'` means known, nothing outstanding; a settled worker without a
+  report file is `{id, settled: true, report: null}`. Omitting `--workers` means
+  unknown inventory and blocks (`worker-inventory-unknown`). The request ID is
   deterministic, so a rerun after a host refusal returns `refused`: a retry
   needs a new save once the cause is resolved.
 - `adopt '<binding JSON>'` (successor, from the restart prompt) or

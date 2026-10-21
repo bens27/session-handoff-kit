@@ -441,6 +441,11 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             report = worker.get('report') or {}
             if not isinstance(report, dict):
                 return blocked('worker-report-not-durable')
+            if not report:
+                # No report file: acceptable only when the worker declares itself settled.
+                if worker.get('settled') is not True:
+                    return blocked('worker-report-not-durable')
+                continue
             if report and (not isinstance(report.get('path'), str)
                            or not isinstance(report.get('sha256'), str)):
                 return blocked('worker-report-not-durable')

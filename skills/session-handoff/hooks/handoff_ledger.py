@@ -62,6 +62,14 @@ KNOWN_STATUSES = ("open", "resumed", "superseded", "abandoned")
 REQUIRED_SECTIONS = ("Objective", "Current state", "Next steps")
 RECOMMENDED_WORDS = 1500
 TOPIC_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+def slugify_topic(value):
+    """Kebab-case form of a free-text topic, or '' when nothing usable remains."""
+    if not isinstance(value, str):
+        return ''
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:80].strip("-")
 CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished")
 
 
@@ -537,6 +545,31 @@ def session_note_path(root, session=None):
     import tempfile
     key = hashlib.sha1((os.path.realpath(project_root(root)) + "\0" + (session or "unidentified")).encode("utf-8", "replace")).hexdigest()[:20]
     return os.path.join(tempfile.gettempdir(), "context-watch-session-%s.json" % key)
+
+
+def project_pointer_path(session):
+    """Root-independent record of the project a session's hooks ran in: a save run
+    from another cwd (for example a scratch dir holding the draft) cannot find the
+    cwd-keyed session note, but it can find this."""
+    import hashlib
+    import tempfile
+    return os.path.join(tempfile.gettempdir(),
+                        "context-watch-project-%s.json" % hashlib.sha1(str(session).encode("utf-8", "replace")).hexdigest()[:20])
+
+
+def read_project_pointer(session, max_age_s=86400):
+    if not session:
+        return ""
+    try:
+        with open(project_pointer_path(session), encoding="utf-8") as f:
+            note = json.load(f)
+        project = note.get("project")
+        if (note.get("session_id") == session and isinstance(project, str) and os.path.isdir(project)
+                and time.time() - float(note.get("ts") or 0) <= max_age_s):
+            return project
+    except Exception:
+        pass
+    return ""
 
 
 def read_session_note(root, max_age_s=86400, session=None):
