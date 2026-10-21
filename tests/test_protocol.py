@@ -58,6 +58,42 @@ class ProtocolTests(unittest.TestCase):
         return self.cli('save', '--session', 'one', '--request-id', request,
                         input=json.dumps(doc))
 
+    def test_agentsroom_resume_reads_inbox_before_saved_work(self):
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        saved = json.loads(self.save().stdout)
+        delivered = json.loads(self.cli('resume', saved['path'], '--session', 'two').stdout)
+        next_steps = delivered['body'].split('## Next steps', 1)[1].strip()
+        self.assertTrue(next_steps.startswith('Read your AgentsRoom inbox with agents_read_inbox'))
+        self.assertTrue(any(item['id'] == 'agentsroom-inbox' for item in delivered['continuity']))
+        self.assertEqual(self.save().returncode, 0)  # same save remains retryable
+
+    def test_agentsroom_session_file_also_preserves_inbox_obligation(self):
+        self.env['HANDOFF_TERMINAL_ID'] = 'known-terminal'
+        sessions = self.root / '.agentsroom/sessions'
+        sessions.mkdir(parents=True)
+        (sessions / 'known-terminal.json').write_text('{}')
+        saved = json.loads(self.save().stdout)
+        delivered = json.loads(self.cli('resume', saved['path'], '--session', 'two').stdout)
+        self.assertIn('agents_read_inbox', delivered['body'])
+        self.assertEqual(sum(item['id'] == 'agentsroom-inbox' for item in delivered['continuity']), 1)
+
+    def test_inbox_preserves_heading_suffix_and_ignores_inline_heading_mention(self):
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        body = ('## Objective\nDiscuss ## Next steps inline.\n## Current state\nReady.\n'
+                '## Next steps (ordered)\nRun checks.\n')
+        saved = json.loads(self.save(body=body).stdout)
+        delivered = json.loads(self.cli('resume', saved['path'], '--session', 'two').stdout)
+        expected = body.replace('## Next steps (ordered)\n',
+            '## Next steps (ordered)\nRead your AgentsRoom inbox with agents_read_inbox '
+            'and handle relevant pending mail before continuing the saved work.\n')
+        self.assertEqual(delivered['body'], expected)
+
+    def test_plain_cli_does_not_invent_agentsroom_mail(self):
+        saved = json.loads(self.save().stdout)
+        delivered = json.loads(self.cli('resume', saved['path'], '--session', 'two').stdout)
+        self.assertNotIn('agents_read_inbox', delivered['body'])
+        self.assertFalse(any(item['id'] == 'agentsroom-inbox' for item in delivered.get('continuity', [])))
+
     def test_lean_resume_preserves_required_context_and_workspace(self):
         (self.root / 'required.txt').write_text('Required operational facts.')
         skill = Path(self.tmp.name) / 'writer.md'
@@ -797,7 +833,8 @@ with patch('time.time', return_value=float(sys.argv[2])):
         second = json.loads(self.save(request='checkpoint-2', predecessor=first['path'],
             body='## Objective\nCheck inbox.\n## Current state\nReview complete.\n## Next steps\nStatus check only.\n').stdout)
         delivered = json.loads(self.cli('resume', second['path'], '--fields', 'path,body').stdout)
-        self.assertEqual(delivered.get('continuity'), continuity)
+        self.assertEqual([item for item in delivered.get('continuity', [])
+                          if item['id'] != 'agentsroom-inbox'], continuity)
         self.assertEqual(delivered.get('predecessor'), first['path'])
         self.assertEqual(json.loads(self.save(request='checkpoint-2', predecessor=first['path'],
             body='## Objective\nCheck inbox.\n## Current state\nReview complete.\n## Next steps\nStatus check only.\n').stdout)['path'], second['path'])

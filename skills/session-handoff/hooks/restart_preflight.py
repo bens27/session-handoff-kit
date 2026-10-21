@@ -612,6 +612,10 @@ def adopt(root, request_id, binding=None):
         result = dict(outcome='blocked', action=str(exc))
     if result.get('outcome') not in ('resumed', 'needs-confirmation'):
         return dict(blocked('resume', result.get('action') or result.get('outcome')), restart=identity, report=report)
+    delivered = protocol.inbox_document(root, result)
+    if delivered is not result:
+        result = delivered
+        result['action'] = protocol.INBOX_FIRST + ' ' + result.get('action', '')
     result['restart'], result['report'] = identity, report
     return result
 

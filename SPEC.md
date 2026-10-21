@@ -472,6 +472,11 @@ blocks. Legacy checkpoints without a baseline retain existing behavior. This
 comparison detects drift, not host approval; the host should preserve approval
 across replacements of the same terminal.
 
+AgentsRoom saves (environment agent ID or terminal session file) prepend
+`agents_read_inbox` to Next steps and persist an open `agentsroom-inbox`
+continuity item. Unknown mail status is explicit; no unread count is fabricated.
+Plain CLI checkpoints gain no mail obligation. Save retries remain idempotent.
+
 Successor confirmation automatically imports a Codex completed MCP event or
 Claude tool-use/result pair from the predecessor native transcript, matching the exact saved prompt, predecessor thread, terminal,
 post-intent completion time and `ok:true,scheduled:true` AgentsRoom response.

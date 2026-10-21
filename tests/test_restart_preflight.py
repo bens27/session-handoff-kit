@@ -692,6 +692,12 @@ class AdoptTests(unittest.TestCase):
 
 
 
+    def test_agentsroom_adopt_leads_with_inbox_even_for_older_checkpoint(self):
+        self.pointer('new')
+        _, _, result = self.adopt(AGENTSROOM_AGENT_ID='term')
+        self.assertEqual(result['outcome'], 'resumed')
+        self.assertTrue(result['action'].startswith('Read your AgentsRoom inbox with agents_read_inbox'))
+        self.assertIn('agents_read_inbox', result['body'].split('## Next steps', 1)[1])
 
     def test_adopt_cli_automatically_imports_native_acceptance(self):
         import subprocess, time

@@ -9,6 +9,8 @@ import time
 import unittest
 
 HOOKS = Path(__file__).resolve().parents[1] / 'skills/session-handoff/hooks'
+INBOX = ('Read your AgentsRoom inbox with agents_read_inbox and handle relevant pending mail '
+         'before continuing the saved work.')
 BODY = '## Objective\nFinish work.\n## Current state\nReady.\n## Next steps\nRun checks.\n'
 
 
@@ -380,7 +382,7 @@ with patch('time.time', return_value=stamp):
         body = BODY.replace('Run checks.', steps)
         saved = self.save(body=body)
         out = self.cli('resume', saved['path'], session='s2')
-        self.assertEqual(out['body'], body)
+        self.assertEqual(out['body'], body.replace('## Next steps\n', '## Next steps\n' + INBOX + '\n'))
         # H3: only a bounded lead copy is repeated; that is the price of clip safety
         self.assertLessEqual(len(json.dumps(out['next_step'], ensure_ascii=False).encode()), 3000)
         self.assertIn('continues in the body', out['next_step'])
@@ -526,7 +528,7 @@ cli('save', '--session', 'second', doc=dict(topic='work', description='next', bo
                 got = self.cli('prepare', path, session='s2')
                 receipt = got['delivery_receipt'] if token == 'valid' else token
                 out = self.cli('resume', path, '--reuse-receipt', receipt, session=session)
-                self.assertEqual(out['body'], BODY)
+                self.assertEqual(out['body'], BODY.replace('## Next steps\n', '## Next steps\n' + INBOX + '\n'))
                 self.assertEqual(out['references'][0]['text'], ref.read_text())
                 self.assertEqual(out['metrics']['reused_bytes'], 0)
 
@@ -534,7 +536,7 @@ cli('save', '--session', 'second', doc=dict(topic='work', description='next', bo
         path = self.save()['path']
         out = self.cli('resume', path, '--fields', 'metrics', session='s2')
         self.assertEqual(out['outcome'], 'resumed')
-        self.assertEqual(out['body'], BODY)
+        self.assertEqual(out['body'], BODY.replace('## Next steps\n', '## Next steps\n' + INBOX + '\n'))
         self.assertEqual(out['path'], path)
         self.assertNotIn('project', out)
         self.assertEqual(out['metrics']['delivery_bytes'], len(json.dumps(out, ensure_ascii=False).encode()))

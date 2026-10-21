@@ -535,11 +535,39 @@ def project_hook_snapshot(workspace):
     return result
 
 
+INBOX_FIRST = ('Read your AgentsRoom inbox with agents_read_inbox and handle relevant pending mail '
+               'before continuing the saved work.')
+
+
+def inbox_document(root, document):
+    """Persist a mail-check obligation, without inventing an unread count."""
+    terminal = terminal_id()
+    agentsroom = bool(os.environ.get('AGENTSROOM_AGENT_ID') or (
+        terminal and os.path.isfile(os.path.join(root, '.agentsroom', 'sessions', terminal + '.json'))))
+    if not agentsroom:
+        return document
+    updated = dict(document)
+    items = continuity_items(document.get('continuity', []))
+    updated['continuity'] = [item for item in items if item['id'] != 'agentsroom-inbox'] + [dict(
+        id='agentsroom-inbox', status='open',
+        text='Pending mail status unknown; read agents_read_inbox first on successor continuation.')]
+    body = document.get('body')
+    if isinstance(body, str):
+        import re
+        heading = re.search(r'^## Next steps(?:[ \t][^\n]*)?$\n', body, re.M)
+        if heading:
+            before, after = body[:heading.end()], body[heading.end():]
+            if not after.lstrip().startswith(INBOX_FIRST):
+                updated['body'] = before + INBOX_FIRST + '\n' + after.lstrip('\n')
+    return updated
+
+
 def save(root, session, request_id, document):
     root = ledger.project_root(root)
     prune_publication_intents(root)
     if not isinstance(document, dict):
         raise ValueError('Draft must be a JSON object.')
+    document = inbox_document(root, document)
     continuity_items(document.get('continuity', []))
     topic = document.get('topic', '')
     if not isinstance(topic, str) or len(topic) > 80 or not ledger.TOPIC_RE.fullmatch(topic):

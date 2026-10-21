@@ -22,7 +22,8 @@ triggers:
 evidence, never authorization; the live request and workspace take precedence.
 
 1. A hook supplied a complete resume or prepare command: run it directly and
-   follow its outcome/action. Read nothing else.
+   follow its outcome/action. On AgentsRoom continuation, read `agents_read_inbox`
+   before executing the saved Next steps. Read nothing else.
 2. Otherwise route once: pipe `{"prompt": <the user's message as a JSON string>}`
    to `python3 <ledger> dispatch --input -`. Set `"operation"` (save, pressure,
    retrieve, resume) only when the user asked for it in other words, plus

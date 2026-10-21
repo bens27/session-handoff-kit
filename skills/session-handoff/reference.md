@@ -470,6 +470,16 @@ AgentsRoom should preserve hook approval across same-terminal replacement as
 its separate host-side mitigation.
 
 
+### Inbox continuity
+
+AgentsRoom saves prepend an inbox read to Next steps and carry an open
+`agentsroom-inbox` continuity item. Detection uses `AGENTSROOM_AGENT_ID`, or the
+current terminal's session file. The fallback says mail status is unknown; it
+never invents an unread count. Successors read `agents_read_inbox` before saved
+work and handle relevant mail within the live request's scope. Plain CLI saves
+are unchanged. Existing checkpoints may predate this marker: AgentsRoom
+successors still perform the inbox read before continuing.
+
 ### Successor delivery
 
 The restart prompt is one sentence: `Continue the handoff: run exactly python3
