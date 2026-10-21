@@ -177,7 +177,8 @@ class PointerTests(unittest.TestCase):
     def test_planted_pointer_without_locator_or_intent(self):
         self.authorize()
         directory = Path(pointers.pointer_dir(self.root))
-        directory.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
         digest = 'a' * 64
         protocol.write_json(str(directory / (digest + '.json')), dict(
             version=1, checkpoint_id='b' * 64, checkpoint_path=self.path, root=self.root,
@@ -243,6 +244,77 @@ class PointerTests(unittest.TestCase):
         record = restart.status(self.root, 'restart-1')
         protocol.write_json(str(self.intent_file()), dict(record, intent_at=time.time() - 8 * 86400))
         self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'intent-expired')
+
+    # -- review round 1 (Lane E B1/B2, N1/N2/N4) ------------------------------
+    def test_planted_pointer_cannot_grant_reentry_to_legacy_intent(self):
+        ready = self.preflight()
+        record = restart.status(self.root, 'restart-1')
+        for key in ('dispatch_started_at', 'pointer_version'):
+            record.pop(key, None)
+        protocol.write_json(str(self.intent_file()), record)  # legacy shape
+        self.assertTrue(self.pointer_file(ready).exists())
+        again = self.preflight()
+        self.assertFalse(again['dispatch'], again)
+
+    def test_new_intents_record_pointer_version(self):
+        self.preflight()
+        self.assertEqual(restart.status(self.root, 'restart-1')['pointer_version'], 1)
+
+    def rewrite_pointer(self, ready, **fields):
+        location = self.pointer_file(ready)
+        data = json.loads(location.read_text())
+        location.unlink()
+        protocol.write_json(str(location), dict(data, **fields))
+        location.chmod(0o600)
+
+    def test_pointer_task_and_workspace_must_match_sealed_checkpoint(self):
+        ready = self.preflight()
+        self.authorize()
+        self.rewrite_pointer(ready, task_id='attacker-task')
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+        data = json.loads(self.pointer_file(ready).read_text())
+        del data['task_id']
+        self.pointer_file(ready).unlink()
+        protocol.write_json(str(self.pointer_file(ready)), dict(data, workspace='/nonexistent/ws'))
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+
+    def test_missing_workspace_is_ineligible(self):
+        ready = self.preflight()
+        self.authorize()
+        with patch.object(pointers, '_workspace_exists', return_value=False):
+            self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'workspace-missing')
+
+    def test_world_readable_pointer_is_invalid(self):
+        ready = self.preflight()
+        self.authorize()
+        self.pointer_file(ready).chmod(0o644)
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'invalid-pointer')
+
+    def test_environment_authorizes_continuation(self):
+        self.preflight()
+        for name in ('AUTORESUME', 'CONTEXT_WATCH_AUTORESUME'):
+            with self.subTest(name=name), patch.dict(os.environ, {name: '1'}):
+                self.assertEqual(len(pointers.scan(self.root)['candidates']), 1)
+
+    def test_unrecognised_git_stderr_fails_closed(self):
+        self.preflight()
+        self.authorize()
+        dubious = subprocess.CompletedProcess([], 128, b'', b'fatal: detected dubious ownership')
+        with patch.object(pointers.subprocess, 'run', return_value=dubious) as run:
+            self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'git-check-indeterminate')
+        self.assertEqual(run.call_args.kwargs['env']['LC_ALL'], 'C')
+
+    def test_symlinked_pointer_directory_is_refused(self):
+        ready = self.preflight()
+        self.authorize()
+        directory = Path(pointers.pointer_dir(self.root))
+        moved = directory.with_name('elsewhere')
+        directory.rename(moved)
+        directory.symlink_to(moved)
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'unsafe-pointer-dir')
+        self.intent_file().unlink()
+        result = self.preflight()
+        self.assertEqual((result['stage'], result['reason']), ('pointer', 'pointer-write-failed'), result)
 
 
 if __name__ == '__main__':

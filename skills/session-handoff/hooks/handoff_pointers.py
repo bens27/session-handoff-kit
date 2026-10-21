@@ -35,6 +35,28 @@ def pointer_dir(root):
     return os.path.join(os.path.realpath(root), '.handoffs', 'pointers')
 
 
+def _safe_dir(path, private):
+    """Refuse a symlinked, foreign-owned or group/other-writable index directory."""
+    info = os.lstat(path)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & (0o077 if private else 0o022)):
+        raise ValueError('unsafe-pointer-dir')
+
+
+def _check_dirs(root, create=False):
+    handoffs = os.path.join(os.path.realpath(root), '.handoffs')
+    directory = pointer_dir(root)
+    _safe_dir(handoffs, private=False)
+    if create and not os.path.lexists(directory):
+        os.mkdir(directory, 0o700)
+    _safe_dir(directory, private=True)
+    return directory
+
+
+def _workspace_exists(path):
+    return os.path.isdir(path)
+
+
 def pointer_path(root, digest):
     if not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
         raise ValueError('invalid-binding-digest')
@@ -62,14 +84,13 @@ def _same(a, b):
 def write_pointer(root, data):
     """Atomically write (fsync) a private pointer; identical retries are no-ops, conflicts refuse."""
     location = pointer_path(root, data['binding_sha256'])
-    os.makedirs(os.path.dirname(location), mode=0o700, exist_ok=True)
+    _check_dirs(root, create=True)
     with ledger.locked(location):
         if os.path.lexists(location):
             if not _same(read_pointer(location), data):
                 raise PointerConflict('pointer-conflict')
             return location
-        protocol.write_json(location, data)
-        os.chmod(location, 0o600)
+        protocol.write_json(location, data)  # mkstemp: 0600
     return location
 
 
@@ -104,7 +125,8 @@ def git_tracked(path):
     directory = os.path.dirname(os.path.realpath(path))
     try:
         result = subprocess.run(['git', '-C', directory, 'ls-files', '--error-unmatch', '--',
-                                 os.path.realpath(path)], capture_output=True, timeout=5)
+                                 os.path.realpath(path)], capture_output=True, timeout=5,
+                                env=dict(os.environ, LC_ALL='C', LANG='C'))
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
         raise RuntimeError('git-check-indeterminate') from exc
     if result.returncode == 0:
@@ -168,6 +190,16 @@ def evaluate(root, location, session=None):
         return out('ineligible', 'git-check-indeterminate')
     if not ledger.trusted(record['path']):
         return out('ineligible', 'publication-untrusted')
+    # Task and workspace are bound to the sealed checkpoint, not to the pointer.
+    try:
+        fm = ledger._read_fm(record['path'])
+    except (OSError, ValueError):
+        return out('ineligible', 'publication-untrusted')
+    workspace = os.path.realpath(fm.get('workspace') or record['root'])
+    if data['workspace'] != workspace or data.get('task_id') != (fm.get('task_id') or None):
+        return out('ineligible', 'binding-mismatch')
+    if not _workspace_exists(workspace):
+        return out('ineligible', 'workspace-missing')
     if not user_continuation_authorized():
         return out('ineligible', 'continuation-not-authorized')
     mode = 'replay' if record['state'] == 'retrieved' else 'adopt'
@@ -180,10 +212,14 @@ def scan(root, session=None):
     """Candidates plus diagnostics; settled pointers are skipped silently."""
     candidates, diagnostics = [], []
     directory = Path(pointer_dir(root))
+    if not os.path.lexists(directory):
+        return dict(candidates=candidates, diagnostics=diagnostics)
     try:
+        _check_dirs(root)
         entries = sorted(directory.glob('*.json'))
-    except OSError:
-        entries = []
+    except (OSError, ValueError):
+        return dict(candidates=[], diagnostics=[dict(
+            status='ineligible', pointer=str(directory), reason='unsafe-pointer-dir', action=RECOVER)])
     for entry in entries:
         result = evaluate(root, str(entry), session)
         if result['status'] == 'candidate':
@@ -205,3 +241,17 @@ def prune(root, request_ids):
                 entry.unlink()
             except OSError:
                 pass
+
+
+def matches_intent(root, record):
+    """True when a v3 intent (pointer_version 1) has a readable pointer for its exact binding."""
+    try:
+        if record.get('pointer_version') != VERSION:
+            return False
+        _check_dirs(root)
+        data = read_pointer(pointer_path(root, record['binding_sha256']))
+    except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
+        return False
+    return (data['root'] == record['root'] and data['checkpoint_path'] == record['path']
+            and all(data[k] == record[k] for k in ('checkpoint_id', 'session', 'terminal',
+                                                   'request_id', 'binding_sha256')))

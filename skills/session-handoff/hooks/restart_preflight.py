@@ -347,12 +347,12 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         if previous is not None:
             if any(previous.get(k) != v for k, v in binding.items()):
                 return blocked('request-identity-conflict')
-            # A v3 intent (pointer written first) that crashed before its dispatch
-            # marker may reserve dispatch once, after every gate is rechecked below.
-            # Legacy intents without a pointer keep reconcile-only behavior.
+            # A v3 intent (recorded pointer_version, pointer written first) that crashed
+            # before its dispatch marker may reserve dispatch once, after every gate is
+            # rechecked below. A pointer file alone never grants this: legacy intents
+            # keep reconcile-only behavior even when a matching pointer is planted.
             if (previous['state'] == 'pending' and 'dispatch_started_at' not in previous
-                    and isinstance(previous.get('binding_sha256'), str)
-                    and os.path.lexists(pointers.pointer_path(root, previous['binding_sha256']))
+                    and pointers.matches_intent(root, previous)
                     and not intent_expired(previous)):
                 reentry = previous
             else:
@@ -466,6 +466,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                           host_confirmed=False, workers=workers, intent_at=time.time())
             # Bind the compact successor handle to this exact intent.
             record['binding_sha256'] = binding_digest(record)
+            record['pointer_version'] = pointers.VERSION  # v3 discriminator, never inferred from files
         # Pointer before any pending intent: a failed write leaves nothing to block.
         try:
             pointers.write_pointer(root, pointers.build(
