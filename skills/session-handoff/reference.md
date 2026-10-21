@@ -166,6 +166,12 @@ A save within ten minutes of resume or the third same-topic pressure save within
 30 minutes still reports diagnostics and `thrash_warning` front matter; with
 progress these are advisory and automatic continuation proceeds. The hook warns
 before saving; the save result decides whether progress warrants continuation.
+Long-running orchestrators that resume one topic by design can list it in
+`"continuous_topics": ["<topic>"]` in `~/.context-watch/thresholds.json` or
+`<root>/.context-watch.json`: for those topics `rapid-resume` and `repeated-topic`
+stay in the diagnostics (`continuous_topic: true`) but never pause. Required headings
+match `## Objective`, `## Current state`, `## Next steps` exactly at their start;
+trailing text after a space (for example `## Current state (main abc123)`) is allowed.
 Five previous AgentsRoom restart intents within an hour or another session's
 intent within two minutes remain hard stops, even with progress. Intent counts
 are terminal-local and cannot observe restarts outside this kit. Durable resume

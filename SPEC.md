@@ -526,6 +526,12 @@ to other gates. Transition diagnostics and JSON `thrash_warning` front matter
 retain reasons, progress evidence, topic count, elapsed resume time and available
 startup/observed/resume token figures. The pressure hook emits one warning line;
 before the draft exists, soft reasons warn and save makes the progress decision.
+A topic listed in the `continuous_topics` setting (string list, from
+`~/.context-watch/thresholds.json` or `<root>/.context-watch.json`) is exempt from
+pausing on `rapid-resume` and `repeated-topic`; the reasons are still reported and
+`continuous_topic` is true in the diagnostics. Hard limits below are unaffected.
+Required body headings (`## Objective`, `## Current state`, `## Next steps`) match
+at line start; text after a space following the title is allowed.
 Five prior AgentsRoom restart intents within 3600 seconds (`restart-budget`) or
 a different session's intent within 120 seconds (`restart-cooldown`) always
 returns `paused`, regardless of progress. These hard limits are unchanged.

@@ -208,6 +208,57 @@ with patch('time.time', return_value=stamp):
         self.assertIn('rapid-resume', out['transition']['diagnostics']['reasons'])
         self.assertTrue(out['transition']['diagnostics']['progress']['present'])
 
+    def rapid_resume_save(self):
+        """Orchestrator shape: same-topic resume + pressure save, no commits/files/register change."""
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(31000, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 121  # past the independent 120-second cooldown
+        self.hook(140000, session='s2')
+        return self.save(session='s2', body=BODY + 'Coordinated more lanes.\n')
+
+    def test_orchestrator_without_opt_out_pauses_on_rapid_resume(self):
+        out = self.rapid_resume_save()
+        self.assertEqual(out['transition']['kind'], 'paused')
+        self.assertFalse(out['transition']['diagnostics']['progress']['present'])
+
+    def test_continuous_topic_opt_out_exempts_soft_thrash_reasons(self):
+        (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['work'])))
+        out = self.rapid_resume_save()
+        self.assertEqual(out['transition']['kind'], 'agents_restart')
+        diag = out['transition']['diagnostics']
+        self.assertIn('rapid-resume', diag['reasons'])  # still reported
+        self.assertEqual(diag['pause_reasons'], [])
+        self.assertTrue(diag['continuous_topic'])
+
+    def test_continuous_opt_out_keeps_hard_limits(self):
+        (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['work'])))
+        self.hook(140000)
+        first = self.save()
+        self.hook(31000, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        second = self.save(session='s2')  # within 120 s: restart-cooldown stays a hard stop
+        self.assertEqual(second['transition']['kind'], 'paused')
+        self.assertIn('restart-cooldown', second['transition']['diagnostics']['pause_reasons'])
+
+    def test_other_topic_is_not_exempted(self):
+        (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['other'])))
+        self.assertEqual(self.rapid_resume_save()['transition']['kind'], 'paused')
+
+    def test_heading_with_trailing_text_is_accepted(self):
+        body = BODY.replace('## Current state', '## Current state (main 7116643, pushed)')
+        out = self.save(body=body)
+        self.assertEqual(out['outcome'], 'saved', out)
+
+    def test_missing_heading_error_says_match_is_exact(self):
+        body = BODY.replace('## Next steps', '## Next-steps')
+        p = subprocess.run(self.python_command(HOOKS / 'handoff_ledger.py', 'save', '--session', 's1'),
+                           input=json.dumps(dict(topic='work', description='d', body=body)),
+                           cwd=self.root, env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertIn("missing section '## Next steps'", p.stdout + p.stderr)
+
     def git(self, *args):
         p = subprocess.run(['git', '-C', str(self.root), *args], env=self.env,
                            capture_output=True, text=True, timeout=10)

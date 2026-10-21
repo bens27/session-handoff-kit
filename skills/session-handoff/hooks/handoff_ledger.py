@@ -264,8 +264,8 @@ def _problems(text, fm):
         out.append("checkpoint body is empty; preserve the incomplete file and finish its content")
     else:
         for section in REQUIRED_SECTIONS:
-            if not re.search(r"^## %s\s*$" % re.escape(section), body, re.M):
-                out.append("missing section '## %s'" % section)
+            if not re.search(r"^## %s(?:[ \t].*)?$" % re.escape(section), body, re.M):
+                out.append("missing section '## %s' (heading must start with exactly this text; trailing text after a space is allowed)" % section)
     return out
 
 

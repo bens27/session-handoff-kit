@@ -350,9 +350,13 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
     if os.environ.get('AGENTSROOM_AGENT_ID') and any(
             r['fm'].get('session_id') != session and age(r['fm'].get('created')) < 120 for r in intents):
         reasons.append('restart-cooldown')
+    # An orchestrator topic resumes itself by design: the soft reasons never pause it.
+    # The hard restart limits are not affected.
+    topics = project_setting(root, 'continuous_topics', list) or []
+    continuous = bool(topic) and topic in [t for t in topics if isinstance(t, str)]
     pause_reasons = [r for r in reasons if r in ('restart-budget', 'restart-cooldown')
-                     or (progress is not None and not progress['present'])]
-    return dict(reasons=reasons, pause_reasons=pause_reasons, progress=progress, seconds_since_resume=round(elapsed) if elapsed is not None else None,
+                     or (progress is not None and not progress['present'] and not continuous)]
+    return dict(reasons=reasons, pause_reasons=pause_reasons, continuous_topic=continuous, progress=progress, seconds_since_resume=round(elapsed) if elapsed is not None else None,
                 topic_saves_30m=len(same), restart_intents_1h=len(intents),
                 startup_input_tokens=note.get('startup_input_tokens'),
                 observed_input_tokens=note.get('observed_input_tokens'),
@@ -1197,7 +1201,7 @@ def clean_pytest_summary(log):
 
 def section(body, title):
     import re
-    match = re.search(r'^## %s\s*$\n(.*?)(?=^## |\Z)' % re.escape(title), body, re.M | re.S)
+    match = re.search(r'^## %s(?:[ \t].*)?$\n(.*?)(?=^## |\Z)' % re.escape(title), body, re.M | re.S)
     return match[1].strip() if match else ''
 
 
