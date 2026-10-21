@@ -475,12 +475,15 @@ never grants new dispatch permission.
 
 New saves record both project-scope Claude settings files at the observed cwd
 (or project root). Preflight compares their bytes, including absent files, before
-creating a restart intent. `blocked: hooks-changed` names the changed path:
-resolve the host's hook approval and save again before restarting. User-scope
-settings are outside this check. Older checkpoints without a baseline retain
-existing behavior. A save-time hash is a drift baseline, not proof of approval.
-AgentsRoom should preserve hook approval across same-terminal replacement as
-its separate host-side mitigation.
+creating a restart intent. By default (`hook_drift: "warn"`) drift does not stop
+the restart: the result carries a `hooks-changed` warning listing each changed
+file with its saved and current SHA256. Review the change if it was not expected.
+Set `"hook_drift": "block"` in `~/.context-watch/thresholds.json` or the
+project's `.context-watch.json` to block instead; then review the change and
+save again to record a new baseline. A user-scope `block` cannot be relaxed by
+project config, and an invalid value blocks with `invalid-hook-drift-policy`.
+User-scope Claude settings are outside this check. Older checkpoints without a
+baseline retain existing behavior. A save-time hash is a drift baseline only.
 
 What is proven about that approval (b7ec7020, Claude Code 2.1.306, 2026-10-21):
 a pty capture of launches with AgentsRoom's flags (`--dangerously-skip-permissions`,
@@ -491,10 +494,9 @@ and a hook edit mid-session; a hook change without the bypass flag also showed
 none. The only dialog seen was workspace trust, for a plain untrusted directory
 without bypass; the scratch worktree of the trusted repository showed no trust
 dialog (observed for that worktree only). On Claude Code 2.1.306 there was no
-host hook approval to resolve: `hooks-changed` reported drift only. Where no
-approval prompt exists, as on 2.1.306, resolving `hooks-changed` means reviewing
-the change and saving again; the host-side mitigation applies only to hosts that
-prompt. The reported successor-start prompts were not reproduced and their source
+host hook approval to resolve: `hooks-changed` reported drift only, which is
+why drift now warns by default (9a3f7656). A host that does prompt for changed
+hooks should preserve that approval across same-terminal replacement. The reported successor-start prompts were not reproduced and their source
 is unknown. Untested: older Claude Code versions, AgentsRoom's own UI dialogs,
 and Codex's changed-command approval for a Codex successor.
 

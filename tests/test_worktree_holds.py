@@ -48,6 +48,25 @@ class WorktreeHoldTests(unittest.TestCase):
     def hold(self, root, reason='Chief requires a pause', scope='project'):
         return self.cli('handoff_ledger.py', 'hold', '--root', root, '--scope', scope, '--reason', reason)[1]
 
+    def test_restart_cli_reports_hook_drift_as_warning_or_block(self):
+        config = self.worker / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks": {"Stop": []}}')
+        (self.worker / '.context-watch.json').write_text('{"hook_drift": "block"}')
+        _, blocked = self.cli('restart_preflight.py', 'restart', '--root', self.worker,
+                              '--workers', '[]', '--host-capable')
+        self.assertEqual((blocked['outcome'], blocked['reason']), ('blocked', 'hooks-changed'), blocked)
+        self.assertEqual([c['path'] for c in blocked['changed']], [str(config)])
+        self.assertIn('.claude/settings.local.json', blocked['detail'])
+        self.assertNotIn('approval', blocked['detail'])
+        (self.worker / '.context-watch.json').unlink()
+        _, ready = self.cli('restart_preflight.py', 'restart', '--root', self.worker,
+                            '--workers', '[]', '--host-capable')
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        [warning] = ready['warnings']
+        self.assertEqual(warning['reason'], 'hooks-changed')
+        self.assertEqual([c['path'] for c in warning['changed']], [str(config)])
+
     def test_main_project_hold_blocks_worker_successor_adoption(self):
         self.assert_adoption_held('project')
 

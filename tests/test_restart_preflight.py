@@ -139,23 +139,69 @@ class RestartTests(unittest.TestCase):
             restart.record_acceptance(self.root, 'restart-1', valid)
         self.assertFalse(restart.status(self.root, 'restart-1')['host_confirmed'])
 
-    def test_project_hook_drift_blocks_before_creating_restart_intent(self):
+    def _hook_drift_policy(self, project=None, user=None):
+        if project is not None:
+            (Path(self.root) / '.context-watch.json').write_text(json.dumps({'hook_drift': project}))
+        if user is not None:
+            (Path(self.root) / '.context-watch').mkdir(exist_ok=True)
+            (Path(self.root) / '.context-watch/thresholds.json').write_text(json.dumps({'hook_drift': user}))
+
+    def test_project_hook_drift_warns_by_default_and_names_changed_files(self):
         config = Path(self.root) / '.claude/settings.local.json'
         config.parent.mkdir()
         config.write_text('{"hooks":{"Stop":[]}}')
+        result = self.preflight()
+        self.assertEqual(result['outcome'], 'ready')
+        self.assertTrue(result['dispatch'])
+        [warning] = result['warnings']
+        self.assertEqual(warning['reason'], 'hooks-changed')
+        self.assertEqual(warning['policy'], 'warn')
+        self.assertEqual([c['path'] for c in warning['changed']], [str(config)])
+        self.assertIsNone(warning['changed'][0]['saved_sha256'])
+        self.assertEqual(len(warning['changed'][0]['current_sha256']), 64)
+        self.assertIn('.claude/settings.local.json', warning['action'])
+        self.assertNotIn('approval', warning['action'])
+
+    def test_project_hook_drift_blocks_when_policy_is_block(self):
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')
+        self._hook_drift_policy(project='block')
         blocked = self.preflight()
         self.assertEqual(blocked['outcome'], 'blocked')
         self.assertEqual(blocked['reason'], 'hooks-changed')
         self.assertEqual(blocked['path'], str(config))
+        self.assertEqual([c['path'] for c in blocked['changed']], [str(config)])
+        self.assertNotIn('approval', blocked['action'])
+        self.assertIn('save again', blocked['action'])
         self.assertIsNone(restart.status(self.root, 'restart-1'))
         config.unlink()
-        self.assertTrue(self.preflight()['dispatch'])
+        result = self.preflight()
+        self.assertTrue(result['dispatch'])
+        self.assertNotIn('warnings', result)
+
+    def test_project_config_cannot_relax_user_block_policy(self):
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')
+        self._hook_drift_policy(project='warn', user='block')
+        self.assertEqual(self.preflight()['reason'], 'hooks-changed')
+
+    def test_invalid_hook_drift_policy_fails_closed(self):
+        for value in ('Block', 'off', 1, True, None, ['warn']):
+            with self.subTest(value=value):
+                self._hook_drift_policy(project=value)
+                result = self.preflight()
+                self.assertEqual(result['outcome'], 'blocked')
+                self.assertEqual(result['reason'], 'invalid-hook-drift-policy')
+                self.assertIsNone(restart.status(self.root, 'restart-1'))
 
     def test_modified_and_deleted_project_hook_files_are_detected(self):
         configs = [Path(self.root) / '.claude' / name for name in ('settings.json', 'settings.local.json')]
         configs[0].parent.mkdir()
         for path in configs:
             path.write_text('{"hooks": {}}')
+        self._hook_drift_policy(project='block')
         saved = protocol.save(self.root, 'old', 'hook-baseline', dict(
             topic='hooks', description='Saved hook baseline',
             body='## Objective\nFix\n## Current state\nSaved\n## Next steps\nContinue\n'))

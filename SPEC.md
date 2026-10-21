@@ -476,11 +476,20 @@ without waiting on a busy record's lock and removing its lock sidecar; pending i
 or not) and invalid records are never pruned.
 New saves record the hook-observed workspace (or project root) and SHA256 of
 `.claude/settings.json` and `.claude/settings.local.json`, including absence.
-Preflight compares that save-time baseline before creating an intent. Drift
-returns `blocked`, `hooks-changed` and the file path; unreadable configuration
-blocks. Legacy checkpoints without a baseline retain existing behavior. This
-comparison detects drift, not host approval; the host should preserve approval
-across replacements of the same terminal.
+Preflight compares that save-time baseline before creating an intent. The
+`hook_drift` key (`warn` default, or `block`) in `~/.context-watch/thresholds.json`
+or the restart root's `.context-watch.json` sets the result: `block` in either
+scope wins, so project config cannot relax a user-scope block; any other present
+value blocks with `invalid-hook-drift-policy`. Under `warn`, drift proceeds with
+`warnings: [{reason: hooks-changed, policy, changed, action}]`; under `block` it
+returns `blocked`, `hooks-changed`, the first changed `path` and the full
+`changed` list. Each `changed` entry gives the path with saved and current
+SHA256 (null for absent); `restart` passes `warnings`, `changed` and `policy`
+through, with the action text as `detail`. Unreadable configuration and invalid
+baselines still block. Legacy checkpoints without a baseline retain existing
+behavior. This comparison detects drift only. Claude Code 2.1.306 showed no host
+hook approval (b7ec7020), so the action text asks for a review and, when
+blocked, a new save; it names no approval step.
 
 AgentsRoom saves (environment agent ID or terminal session file) prepend
 `agents_read_inbox` to Next steps and persist an open `agentsroom-inbox`

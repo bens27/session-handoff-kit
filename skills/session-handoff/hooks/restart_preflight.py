@@ -286,6 +286,29 @@ def prune_settled(root, now=None, held=()):
     return pruned
 
 
+HOOK_DRIFT_POLICIES = ('warn', 'block')
+
+
+def hook_drift_policy(root):
+    """Effective hook-drift policy: 'warn' by default, 'block' if either the
+    user or the project scope asks for it, None when a present value is invalid.
+
+    A project file cannot relax a user-scope block: whoever can rewrite the
+    project's hook files can also rewrite its .context-watch.json."""
+    policies = []
+    for path in (os.path.join(os.path.expanduser('~'), '.context-watch', 'thresholds.json'),
+                 os.path.join(root, '.context-watch.json')):
+        try:
+            data = protocol.load_state_json(path)
+        except (OSError, ValueError):
+            continue  # absent or unreadable config keeps project_setting's behavior
+        if isinstance(data, dict) and 'hook_drift' in data:
+            if type(data['hook_drift']) is not str or data['hook_drift'] not in HOOK_DRIFT_POLICIES:
+                return None
+            policies.append(data['hook_drift'])
+    return 'block' if 'block' in policies else 'warn'
+
+
 def preflight(root, path, session, terminal, request_id, workers=None,
               host_capable=False, hold=False, observations=None):
     """Persist intent before returning dispatch=True exactly once per request.
@@ -336,19 +359,36 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             return blocked('human-hold')
         if fm.get('status') != 'open' or not ledger.publication_valid(path, text, fm):
             return blocked('publication-not-ready')
+        warnings = []
         if fm.get('project_hooks'):
             workspace = fm.get('workspace') or root
+            policy = hook_drift_policy(root)
+            if policy is None:
+                return dict(blocked('invalid-hook-drift-policy'),
+                            action='Set hook_drift to "warn" or "block" in .context-watch.json '
+                                   'or ~/.context-watch/thresholds.json.')
             try:
                 baseline = json.loads(fm['project_hooks'])
                 current = protocol.project_hook_snapshot(workspace)
                 if not isinstance(baseline, dict) or set(baseline) != set(current):
                     return blocked('invalid-hook-baseline')
-                for name, digest in current.items():
-                    if baseline[name] != digest:
-                        return dict(blocked('hooks-changed'), path=os.path.join(workspace, name),
-                                    action='Project hook configuration changed since save; resolve host hook approval before a new restart.')
+                changed = [dict(path=os.path.join(workspace, name), saved_sha256=baseline[name],
+                                current_sha256=digest)
+                           for name, digest in sorted(current.items()) if baseline[name] != digest]
             except (OSError, ValueError, TypeError):
                 return blocked('hook-config-unreadable')
+            if changed:
+                names = ', '.join(os.path.relpath(c['path'], workspace) for c in changed)
+                if policy == 'block':
+                    return dict(blocked('hooks-changed'), path=changed[0]['path'], changed=changed,
+                                policy=policy,
+                                action='Project hook files changed since save (%s). Review the change, '
+                                       'then save again to record it as the new baseline before a new '
+                                       'restart.' % names)
+                warnings.append(dict(reason='hooks-changed', policy=policy, changed=changed,
+                                     action='Project hook files changed since save (%s); the restart '
+                                            'proceeds. Review the change if it was not expected; set '
+                                            'hook_drift to "block" to stop restarts on drift.' % names))
         if ledger.resolve(path, root).get('authoritative') != path:
             return blocked('stale-checkpoint')
         # Validate every persisted intent, including legacy request IDs. A
@@ -412,7 +452,10 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             # always describes the attempt that produced the dispatchable prompt.
             protocol.write_json(location[:-len('.json')] + '.observations', observations)
         protocol.write_json(location, record)
-        return dict(record, outcome='ready', dispatch=True)
+        result = dict(record, outcome='ready', dispatch=True)
+        if warnings:
+            result['warnings'] = warnings
+        return result
 
 
 TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
@@ -756,8 +799,13 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         out.update(call='agents_restart', agent=terminal, restart_prompt=result['restart_prompt'],
                    action='Write the session status, then call agents_restart(prompt=restart_prompt) as the '
                           'final tool action and end the turn with one short line.')
+        if result.get('warnings'):
+            out['warnings'] = result['warnings']
     else:
-        out.update({k: result[k] for k in ('reason', 'state') if k in result},
+        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy') if k in result})
+        if result.get('action'):
+            out['detail'] = result['action']
+        out.update(
                    action='Do not call agents_restart. Pending means reconcile with host history; '
                           'refused means the host declined this checkpoint\'s deterministic request, so a '
                           'retry needs a new save once the cause is resolved; blocked means keep the '
