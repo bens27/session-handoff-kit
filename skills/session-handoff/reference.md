@@ -556,6 +556,33 @@ reconciliation. The dispatcher hands a pending successor the same command in its
 (`{root,request_id,session,terminal,delivery_receipt}` after a manual prepare)
 remains for manual recovery and audits.
 
+### Handoff v3 outline (proposal; not available yet)
+
+The review contract is [SPEC §7.3d](../../SPEC.md#73d-handoff-v3-proposal--one-call-lifecycle-e3ef793a).
+Continue using the commands above until the approved implementation is installed.
+The proposed successor/save reference will follow these branches:
+
+1. **Reminder/save:** one `handoff` script call accepts body and suggested skill
+   names; the script publishes, indexes and invokes a capable host bridge.
+2. **Unsupported host or blocked transition:** report the exact stage and retain
+   the saved checkpoint; use the existing explicit restart path only within its
+   authorization. The present AgentsRoom procedure has no Python restart bridge.
+3. **Startup:** inspect project pointers after recording native identity; an
+   exact restart request wins, one eligible owned pointer loads when authorized,
+   several use configured ask/latest-owned/manual policy. Adopt owns delivery.
+4. **Skills:** activate installed suggestions with handoff source identity;
+   report native activation versus context delivery, missing skills and failures.
+5. **Recovery:** reconcile pending dispatch without retrying restart; preserve
+   holds, bindings, receipts and workspace checks; same-successor replay avoids
+   duplicate body or skill injection.
+6. **Configuration/install:** document warning lead, mandatory point and host
+   enforcement limits, pointer policy and suggested-skill opt-in; migrate kit
+   hooks to stable user-scope registration with native trust review and rollback.
+
+The short handle remains a locator for the existing six-field intent binding.
+The proposed project pointer is only an index; it adds no execution authority.
+Full schemas, precedence, crash states and acceptance cases live in the spec.
+
 ### Controlled native proof (requires separate authorization)
 
 1. Independently review the isolated patch. Pin a clean runtime snapshot and an

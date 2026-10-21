@@ -847,6 +847,228 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
     `"authorization": {"source": "user"}` is asserted by the caller; both rely
     on the model following the skill, not on enforcement.
 
+### 7.3d Handoff v3 proposal — one-call lifecycle (e3ef793a)
+
+**Design for review; not implemented.** This section defines an opt-in v3
+agent lifecycle. Sections 7.2–7.3c remain the shipped behavior until migration.
+Lane E reviews this proposal; Ben approves it before implementation starts.
+The chat surface and its shared contract are unchanged.
+
+#### Reminder and save entry point
+
+The v3 reminder contains one required action: “Call `python3 <pinned-hooks>/handoff_ledger.py
+handoff --input -` once with JSON containing topic, description, body and
+suggested_skills.” The body retains Objective, Current state and Next steps,
+including authorization, holds, unresolved decisions and completed effects.
+Telemetry stays in diagnostics. The agent supplies reasoning and suggested skill
+names; the script generates timestamps, identity, lineage, receipts, ledger
+updates, pointer and restart request. No manual ledger edits or second preflight
+call are part of the successful v3 agent path. `handoff` is a proposed command,
+not an alias available in the current CLI.
+
+Input is one JSON object: required `topic`, `description`, `body`,
+`suggested_skills` (unique installed skill names; `[]` allowed); optional
+`request_id`, `task_id`, `predecessor`, `references`, `optional_references` and
+`continuity`. Existing save validation, trusted inheritance and verification
+policy apply. Omitted request_id uses the existing deterministic draft hash;
+changed content under the same ID conflicts. Task ID is an opaque correlation
+label, never authorization; omitted means unknown, not a model-invented ticket.
+New suggestions are advisory and distinct from existing `skills`, whose entries
+remain required preparation dependencies. Missing suggestions are reported;
+missing required skills still block. Do not silently promote suggestions to
+required dependencies or inherit a new execution permission from body text.
+
+The script composes publication -> restart preflight -> durable pointer ->
+adapter dispatch. Reuse `handoff_protocol.save`, `restart_preflight.restart` and
+the existing deterministic request ID, locks and guards. A failed publication
+never clears the session. Successful save with blocked restart returns the
+published checkpoint and exact blocking stage for manual continuation.
+
+#### Durable identity and project pointer
+
+Reuse checkpoint_id and the existing restart intent's six-field binding
+(checkpoint_id, path, request_id, root, session, terminal), its full SHA256 and
+884a1469 `h-<24 hex>` locator. Agent identity is the observed terminal/host agent
+ID plus native session, not a display name. Bind optional task_id and suggestions
+to the published checkpoint content hash; do not redefine the six-field digest
+or mint a parallel handoff identity. The project pointer is a new index into
+these records, not a second ledger or authority to resume.
+
+Proposed location: `<canonical-root>/.handoffs/pointers/<full-binding-sha256>.json`.
+Its versioned record contains schema_version=1, checkpoint_id, checkpoint path,
+root, recorded workspace, predecessor session, terminal, optional task_id,
+request_id, full binding SHA256, handle and created time. Task and workspace
+must equal the sealed checkpoint metadata; other fields must equal the intent.
+Keep checkpoint text and skill bodies out of the pointer. The fallback save
+location remains supported: this project index may point to it after validation.
+If the project index cannot be written, keep the checkpoint, report stage
+`pointer`, and do not dispatch an automatic restart.
+
+Publish pointers with private permissions, temporary-file fsync and atomic
+replacement under the existing registry locking discipline, after publication
+and ready intent persistence and before dispatch. Never overwrite a conflicting
+binding. Pointer readers require bounded regular files, no symlink/FIFO
+following, valid schema and exact record/digest agreement, as handle readers do.
+A pointer never supplies live terminal identity. Never import a pointer from a
+clone as trusted state. Canonical root and recorded workspace checks remain;
+missing workspaces require explicit reconciliation, not automatic checkout
+selection. Each pointer is independent so concurrent terminals cannot overwrite
+one another. The existing temporary terminal pointer in
+`context_watch.write_terminal_pointer` records current session identity only;
+it is neither this new project index nor the restart handle locator.
+
+#### Restart and crash boundaries
+
+The kit owns deterministic state, validation and delivery. A host adapter owns
+fresh identity observations, complete worker/report inventory, intentional hold
+state, restart capability, host invocation and successor skill activation.
+A capable adapter must expose a programmatic bridge callable from the handoff
+script; returning a tool name to the model does not satisfy v3 one-call restart.
+The current AgentsRoom procedure is model-orchestrated and has no such Python
+bridge. That adapter integration is a prerequisite, not a capability this spec
+claims already exists. Without it, return `saved/manual-required`; retain the
+current explicit final-tool restart procedure as the compatibility path.
+
+The bridge receives the persisted request ID and exact short-handle prompt,
+validates the current intent and supplies fresh observations to preflight.
+Unknown capability, inventory, identity or hold state blocks automatic dispatch;
+empty inventory is valid only when the adapter actually observed no workers.
+All project/topic/terminal holds, waiting-input state, durable report requirements,
+publication trust, claims, hook drift and restart budgets remain enforced.
+A fresh authorization check immediately before invocation must honor holds
+introduced after save. Neither a config option nor a pointer can release a hold.
+
+There is no atomic transaction with the host. Crash after publication but before
+pointer: identical retry repairs only missing derived state. Crash after ready
+intent but before pointer: retry may publish that pointer from the same validated
+intent, without obtaining a second dispatch permission. Crash after pointer or
+uncertain invocation: leave the intent pending and reconcile host evidence;
+never retry dispatch merely because a response is missing. A recovered pending
+intent does not emit another restart request. Definitive refusal retains the
+checkpoint and requires a new save once the cause is resolved. Retrieved/closed
+retries replay delivery under existing receipt rules or return no transition.
+Keep seven-day pending-intent expiry, two-hour delivery/claim limits and existing
+settled-intent retention. Pointer cleanup removes only validated settled entries
+when their intents are eligible for pruning; expired/invalid pending entries
+remain diagnostic and never authorize fallback to another checkpoint.
+
+#### Successor startup and skills
+
+SessionStart first records fresh hook/host identity, then reads the project
+pointer index. A host restart request ID selects its exact intent before any
+choice policy. Otherwise consider only trusted, authoritative, unexpired pointers
+owned by this terminal with a different predecessor session; another terminal's
+pointer is never an automatic candidate. One eligible pointer loads through
+`adopt` when configured continuation authorization exists. Several use the
+resolved selection policy; default `ask` lists checkpoint/task/terminal and a
+none option, `latest-owned` selects by created time then canonical path, and
+`manual` announces without loading. Zero candidates use the current announcer.
+Explicit targets never fall back. Invalid relevant pointers stop automatic
+selection with a diagnostic; foreign pointers are reported without adoption.
+Native resume/fork/compaction and an unrelated explicit opening task keep the
+current startup rules. One pointer alone is selection, not execution authority.
+
+The startup hook calls the same adopt implementation programmatically, then
+emits the complete delivery once into the successor's context; it does not also
+inject a generic resume command. Exact host restart prompts arriving afterward
+must reuse the same receipt and avoid duplicate body/skill injection. Preserve
+binding, environment terminal, distinct native session, workspace, dependency,
+verification, hold and receipt checks. Receipt and transport success prove
+neither model reading nor host replacement. Native transcript evidence alone
+sets host acceptance/scheduling; observed successor identity and delivered
+content remain separate observations, as today.
+
+With `activate_suggested_skills=true`, resolve suggestions against installed
+catalogs, deduplicate by canonical path and fingerprint, and ask the adapter to
+activate them as part of authorized successor preparation, before next-step
+execution. Supply source `{kind: "session-handoff", checkpoint_id, request_id,
+binding_sha256}` and successor session/terminal. Record per-skill resolved path,
+hash and adapter result in a delivery extension keyed by that successor, without
+altering the existing receipt token contract. Use the existing preparation
+catalog and fingerprint checks; reject changed dependencies on retry. A skill
+name or handoff body cannot grant permissions, install code or run a command.
+Native activation and text delivery are separate result types. Where the host
+supports only context injection, deliver trusted installed skill text marked
+with the same source and report `delivered-as-context`, not native activation.
+Missing suggestions or unsupported activation are explicit diagnostics; if the
+adapter cannot deliver skills with source identity at all, keep next steps
+paused at stage `skills` for manual resolution. Existing required skills remain
+mandatory even when suggested activation is disabled. Retry only missing skill
+delivery to the same proven successor; never trigger another restart.
+
+#### Configuration, stable hooks and migration
+
+Extend the existing flat project `.context-watch.json` and global
+`~/.context-watch/thresholds.json` with typed v3 keys:
+
+| Key | Meaning and default |
+| --- | --- |
+| `handoff_v3` | Boolean, default false; opt into this lifecycle. |
+| `warning_window_tokens` | Nonnegative integer lead before resolved §6 threshold; default 0. |
+| `mandatory_at_tokens` | Positive absolute occupancy or null (default); mandatory save point. |
+| `resume_pointer_policy` | `ask` (default), `latest-owned`, or `manual`. |
+| `activate_suggested_skills` | Boolean, default false. |
+
+Per key, project overrides global; absent values use defaults. Strict validation
+reports the file/key and disables automatic v3 transitions on malformed values;
+these reserved keys never become model-threshold map entries. Report effective
+value and source. Existing environment/threshold precedence and host-window
+reserve cap remain §6. Warning begins at max(0, resolved threshold minus lead).
+Mandatory point must be at least the warning point and within a reported window
+minus reserve; invalid combinations disable automatic v3 transitions. When
+telemetry is unavailable, report that enforcement is unavailable rather than
+estimating occupancy. Existing behavior remains unchanged with v3 disabled.
+
+“Mandatory” means that at the point the adapter blocks new ordinary work until
+a valid save is published, permitting checkpoint creation, status/recovery and
+user decisions. Finishing an already issued atomic operation remains allowed.
+A warning hook alone cannot enforce this: require a supported host work gate,
+otherwise report `mandatory-unenforced` and a required save instruction. This
+setting never forces restart through holds or native permission denial. Project
+configuration selects timing/selection, but cannot create continuation or skill
+execution authority: retain explicit user authorization/configured autoresume,
+and require `activate_suggested_skills=true` in user scope as well as in the
+effective config for automatic suggested-skill activation. A project can disable
+this permission but cannot enable it against the user setting.
+
+For Claude installations, register stable user-scope hook commands via
+`install.py` at `CLAUDE_CONFIG_DIR/settings.json`, pointing to a validated runtime
+snapshot or stable shared dispatcher path. Hooks read project policy as data;
+no per-worktree hook registration is generated at restart. Migration inventories
+standalone/plugin and project registrations, backs up settings, removes only
+kit-owned duplicate project hooks with explicit installation authorization,
+preserves foreign hooks and verifies native registration/trust before enabling
+v3. This removes the kit's need to change project hook definitions at successor
+start, addressing that source of hooks-changed prompts. It cannot guarantee
+prompt-free launches: native trust, changed user hooks, foreign project hooks
+and host approval persistence remain host-owned. Keep current drift checks;
+never treat moving hooks to user scope as approval or a trust bypass. Managed
+Codex homes need the same per-profile registration/trust acceptance in §13 and
+`docs/local-rollout.md`.
+
+Migration is additive: old saves, dispatch, explicit adopt, short handles and the
+one-release legacy JSON-binding window remain usable. Validate existing intents
+before deriving pointers; never infer authorization from old files or alter a
+pending prompt/digest. Rollback disables v3 selection/bridge use while preserving
+checkpoints, pointers, intents and receipts for explicit adoption. No production
+config is changed by this spec. Adapter acceptance must be proven in an isolated
+root with separate authorization for any live restart proof.
+
+Implementation anchors (current code): `handoff_protocol.py` `save`,
+`project_setting`, `project_hook_snapshot`, `prepare`, `skill_roots`;
+`restart_preflight.py` `restart`, `preflight`, `binding_digest`, `binding_command`,
+`adopt_handle`, `adopt`; `context_watch.py` `write_terminal_pointer`,
+`handle_session_start`, `main`; `install.py` `claude`, `codex`.
+All hook modules are under `skills/session-handoff/hooks/`.
+
+Acceptance regressions must cover one-call success and each crash boundary;
+identical/changed retries; concurrent terminals and multiple pointers; corrupt,
+foreign, expired and redirected pointers; holds arriving before dispatch;
+unsupported host capabilities; missing workspace; skill source/hash/dedup and
+partial activation; no duplicate delivery; stable hook migration/rollback.
+Use isolated state roots and affected project checks; no production restart proof
+is implied by test or implementation authorization.
+
 ### 7.4 Shared contract between the agent and chat skills
 
 `tests/verify-skills.py` reads the **Both skills must contain** list below and
