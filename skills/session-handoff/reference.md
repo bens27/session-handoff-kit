@@ -559,29 +559,33 @@ remains for manual recovery and audits.
 ### Handoff v3 outline (proposal; not available yet)
 
 The review contract is [SPEC §7.3d](../../SPEC.md#73d-handoff-v3-proposal--one-call-lifecycle-e3ef793a).
-Continue using the commands above until the approved implementation is installed.
-The proposed successor/save reference will follow these branches:
+Use the shipped commands above until the approved implementation is installed.
+The proposed reference follows these branches:
 
-1. **Reminder/save:** one `handoff` script call accepts body and suggested skill
-   names; the script publishes, indexes and invokes a capable host bridge.
-2. **Unsupported host or blocked transition:** report the exact stage and retain
-   the saved checkpoint; use the existing explicit restart path only within its
-   authorization. The present AgentsRoom procedure has no Python restart bridge.
-3. **Startup:** inspect project pointers after recording native identity; an
-   exact restart request wins, one eligible owned pointer loads when authorized,
-   several use configured ask/latest-owned/manual policy. Adopt owns delivery.
-4. **Skills:** activate installed suggestions with handoff source identity;
-   report native activation versus context delivery, missing skills and failures.
-5. **Recovery:** reconcile pending dispatch without retrying restart; preserve
-   holds, bindings, receipts and workspace checks; same-successor replay avoids
-   duplicate body or skill injection.
-6. **Configuration/install:** document warning lead, mandatory point and host
-   enforcement limits, pointer policy and suggested-skill opt-in; migrate kit
-   hooks to stable user-scope registration with native trust review and rollback.
+1. **Save:** extend dispatch's save operation with a draft; one script publishes,
+   writes the project pointer before the intent and reserves dispatch durably.
+   On AgentsRoom it returns `{call: agents_restart, prompt: <short-handle prompt>}`;
+   the agent's only second action is that exact final-tool call, then turn end.
+2. **Recovery:** no dispatch marker permits one validated attempt; a marker means
+   reconcile, never re-dispatch. Pointer failure leaves no pending intent.
+   Uncertain invocation is normal while AgentsRoom awaits turn end.
+3. **Startup:** require private HOME-locator provenance, untracked local records,
+   pending intent, terminal ownership and user-scope continuation authority;
+   several candidates use ask/latest-owned/manual. Settled pointers stay silent;
+   retrieved delivery replays only to its recorded successor under receipt rules.
+4. **Skills:** AgentsRoom delivers suggested installed skills as adopt context
+   with handoff source identity; native activation needs a capability probe.
+5. **Pressure:** warning lead and Claude user-scope PreToolUse/Stop mandatory gate;
+   supported read/status/recovery remains available; verify Codex gate support
+   separately and report mandatory-unenforced only where no gate is available.
+6. **Installation:** kit hooks already use user scope. New handlers fast no-op
+   outside opted-in projects, isolate failures and load only protected user-owned
+   runtime code outside projects. Hook-prompt diagnosis is separate host work.
 
-The short handle remains a locator for the existing six-field intent binding.
-The proposed project pointer is only an index; it adds no execution authority.
-Full schemas, precedence, crash states and acceptance cases live in the spec.
+The handle reuses the existing six-field intent binding. A project pointer is
+an index, never continuation authority; project config cannot enable autoresume.
+A host bridge is an optional external feature, not a startup prerequisite. Full
+schemas, crash rules, config consumers and ordered slices live in the spec.
 
 ### Controlled native proof (requires separate authorization)
 
