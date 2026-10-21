@@ -580,8 +580,8 @@ native cycle in one command with compact output:
   from the predecessor, prepares internally, records the receipt and resumes the exact
   checkpoint. The body is emitted once, by resume. Output is the resume result
   plus `restart: {request_id, predecessor_session, successor_session, terminal,
-  state, host_confirmed:false}` and a `report` line that states the observed
-  identity apart from host acceptance (`host_confirmed=false`). A rerun by the same successor replays; any
+  state, host_confirmed}` and a `report` line that states the observed
+  identity apart from host acceptance (false until native acceptance is imported). A rerun by the same successor replays; any
   failure, including a failed resume, returns `outcome: blocked` with its `stage`
   (`identity`, `intent`, `binding`, `prepare`, `successor`, `hold`, `resume`) and
   preserves state. A pending intent older than 7 days is refused (stage `intent`,
@@ -595,6 +595,21 @@ native cycle in one command with compact output:
   are pruned at the next preflight, skipping busy records; pending intents never are. A dispatcher hold applying to the project, topic or
   terminal yields `outcome: held` (stage `hold`) after the receipt is recorded and
   before any resume; rerun after an explicit release.
+
+`acceptance` accepts JSON `{root,request_id,transcript}` on stdin or `--input`.
+Successor confirmation automatically searches the predecessor's Codex sessions
+or Claude projects transcript and imports a matching native AgentsRoom restart
+call/response. Codex completed MCP events and Claude tool-use/result pairs are
+supported. Explicit import through this operation uses the same checks,
+retaining the event and its SHA256. Exact prompt, predecessor thread, terminal,
+completion after intent, and `ok:true,scheduled:true` are required. It records
+`host_confirmed:true` for acceptance/scheduling only; it never dispatches or
+claims replacement/delivery. Files must resolve under a native sessions root,
+name the predecessor session, be regular files opened without following a final
+symlink, and fit the bounded read limits (64 MiB per file, 2 MiB per line).
+Expired pending intents cannot import evidence.
+Without supported native evidence, the flag remains false. Local transcript
+provenance is evidence, not cryptographic host attestation.
 
 `preflight(root, path, session, terminal, request_id, workers=None,
 host_capable=False, hold=False)` validates authoritative open publication and
@@ -638,7 +653,8 @@ the local delivery receipt, checkpoint and required dependency fingerprints.
 The receipt must have been created strictly after the durable intent and be no
 more than two hours old; an already confirmed retry remains idempotent. It
 durably records `retrieved`. Retrieval authorizes no execution and clears
-no human hold. Every result retains `host_confirmed: false`: caller-provided
+no human hold. Without imported native acceptance evidence, `host_confirmed`
+stays false: caller-provided
 JSON cannot prove host replacement, inventory completeness or agent reading.
 The agent must gather those observations separately; JSON fields are assertions,
 not an authority source. In AgentsRoom the adapter is the agent procedure in
@@ -764,7 +780,7 @@ only the `branch` file the result names.
   `host` observations the caller supplies (`restart_capable`, `workers`,
   `hold`, `restart_request_id`). Delegated continuity items whose owner is
   missing from the worker inventory block it, as do workers with no
-  delegation. `host_confirmed` is always `false`: the kit cannot observe the
+  delegation. `host_confirmed` in dispatch eligibility stays `false`: dispatch does not observe the
   host.
 - **Recheck.** Pass `"expect": {"state": <token>}` before you act on an older
   decision. Changed authorization, holds or workspace give `state_changed`.

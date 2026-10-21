@@ -16,6 +16,8 @@ import time
 import fcntl
 import hmac
 import math
+import stat
+from datetime import datetime
 
 import handoff_ledger as ledger
 import handoff_protocol as protocol
@@ -59,6 +61,72 @@ def binding_command(binding):
         shlex.quote(json.dumps({k: binding[k] for k in BINDING_KEYS}, sort_keys=True, separators=(',', ':'))))
 
 
+def _accepted_event(record, event):
+    """Validate the external native event against an already validated binding."""
+    try:
+        if event.get('type') == 'claude-native-pair':
+            call, reply = event['call'], event['reply']
+            if call.get('sessionId') != record['session'] or reply.get('sessionId') != record['session']:
+                return False
+            uses = [c for c in call['message']['content'] if c.get('type') == 'tool_use'
+                    and c.get('name') in ('mcp__AgentsRoom-MCP__agents_restart', 'mcp__AgentsRoom_MCP__agents_restart')]
+            results = reply['message']['content']
+            completed = datetime.fromisoformat(reply['timestamp'].replace('Z', '+00:00')).timestamp()
+            for use in uses:
+                for result in results:
+                    if (result.get('type') != 'tool_result' or result.get('tool_use_id') != use.get('id')
+                            or result.get('is_error', False) is not False):
+                        continue
+                    content = result.get('content')
+                    if isinstance(content, str):
+                        content = [dict(type='text', text=content)]
+                    native = dict(type='event_msg', payload=dict(type='item_completed',
+                        thread_id=record['session'], completed_at_ms=completed * 1000,
+                        item=dict(type='McpToolCall', server='AgentsRoom-MCP', tool='agents_restart',
+                                  status='completed', arguments=use.get('input'),
+                                  result=dict(isError=False, content=content))))
+                    if _accepted_event(record, native):
+                        return True
+            return False
+        payload = event['payload']
+        item = payload['item']
+        completed = payload['completed_at_ms']
+        prompt = record.get('restart_prompt')
+        if (not isinstance(prompt, str) or not prompt
+                or event.get('type') != 'event_msg' or payload.get('type') != 'item_completed'
+                or payload.get('thread_id') != record['session']
+                or item.get('type') != 'McpToolCall' or item.get('server') != 'AgentsRoom-MCP'
+                or item.get('tool') != 'agents_restart' or item.get('status') != 'completed'
+                or item.get('arguments', {}).get('prompt') != prompt
+                or not isinstance(completed, (int, float)) or isinstance(completed, bool)
+                or not math.isfinite(completed) or not record['intent_at'] <= completed / 1000 <= time.time()):
+            return False
+        result = item['result']
+        if result.get('isError') is not False:
+            return False
+        replies = [json.loads(c['text']) for c in result.get('content', []) if c.get('type') == 'text']
+        return any(r.get('ok') is True and r.get('scheduled') is True
+                   and r.get('agent', {}).get('id') == record['terminal'] for r in replies)
+    except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
+        return False
+
+
+def _acceptance_valid(record):
+    proof = record.get('host_acceptance')
+    try:
+        return (isinstance(proof, dict) and proof.get('source') in ('codex-native-transcript', 'claude-native-transcript')
+                and proof.get('request_id') == record['request_id']
+                and isinstance(proof.get('transcript'), str) and bool(proof['transcript'])
+                and _confined_transcript(record, proof['transcript'])[1] == proof['source']
+                and isinstance(proof.get('native_line_sha256'), str)
+                and re.fullmatch(r'[0-9a-f]{64}', proof['native_line_sha256']) is not None
+                and proof.get('event_sha256') == hashlib.sha256(
+                    json.dumps(proof['event'], sort_keys=True).encode()).hexdigest()
+                and _accepted_event(record, proof['event']))
+    except (ValueError, TypeError, KeyError, RecursionError):
+        return False
+
+
 def status(root, request_id):
     """Read validated durable state; only FileNotFound means no intent.
 
@@ -74,7 +142,8 @@ def status(root, request_id):
              and all(isinstance(record.get(k), str) and record[k].strip()
                      for k in required_strings)
              and record.get('state') in ('pending', 'refused', 'retrieved')
-             and record.get('host_confirmed') is False
+             and (record.get('host_confirmed') is False
+                  or (record.get('host_confirmed') is True and _acceptance_valid(record)))
              and isinstance(record.get('workers'), list)
              and isinstance(record.get('intent_at'), (int, float))
              and not isinstance(record.get('intent_at'), bool)
@@ -280,6 +349,113 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         return dict(record, outcome='ready', dispatch=True)
 
 
+TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
+TRANSCRIPT_MAX_LINE = 2 * 1024 * 1024
+
+
+def _transcript_roots():
+    home = Path.home()
+    roots = [(home / '.claude/projects', 'claude-native-transcript')]
+    roots.extend((p / 'sessions', 'codex-native-transcript')
+                 for p in (home / '.agentsroom/codex').glob('*'))
+    roots.append((Path(os.environ.get('CODEX_HOME') or home / '.codex') / 'sessions',
+                  'codex-native-transcript'))
+    return [(p.resolve(), source) for p, source in roots]
+
+
+def _confined_transcript(record, transcript):
+    path = Path(transcript)
+    real = path.resolve()
+    source = next((source for root, source in _transcript_roots()
+                   if real.is_relative_to(root)), None)
+    session = record['session']
+    if (not source or not re.search(r'(?<![a-zA-Z0-9])' + re.escape(session)
+                                   + r'(?![a-zA-Z0-9])', real.stem)
+            or real.suffix != '.jsonl'):
+        raise ValueError('Transcript must be a predecessor session file under a native sessions root.')
+    return real, source
+
+
+def _transcript_evidence(record, transcript):
+    path = Path(transcript)
+    real, source = _confined_transcript(record, transcript)
+    session = record['session']
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > TRANSCRIPT_MAX_BYTES:
+            raise ValueError('Transcript must be a bounded regular file.')
+        calls = {}
+        consumed = 0
+        evidence = None
+        while True:
+            line = stream.readline(TRANSCRIPT_MAX_LINE + 1)
+            if not line:
+                break
+            consumed += len(line)
+            if len(line) > TRANSCRIPT_MAX_LINE or consumed > TRANSCRIPT_MAX_BYTES:
+                raise ValueError('Transcript exceeds read bounds.')
+            try:
+                event = json.loads(line)
+                if source == 'claude-native-transcript':
+                    content = event.get('message', {}).get('content', [])
+                    if not isinstance(content, list):
+                        continue
+                    for item in content:
+                        if item.get('type') == 'tool_use' and event.get('sessionId') == session:
+                            calls[item.get('id')] = event
+                    matching = [calls[c.get('tool_use_id')] for c in content
+                                if c.get('type') == 'tool_result' and c.get('tool_use_id') in calls]
+                    event = next((dict(type='claude-native-pair', call=call, reply=event)
+                                  for call in matching if _accepted_event(record,
+                                      dict(type='claude-native-pair', call=call, reply=event))), {})
+                if _accepted_event(record, event):
+                    evidence = dict(source=source, request_id=record['request_id'],
+                        transcript=str(real), event_sha256=hashlib.sha256(
+                            json.dumps(event, sort_keys=True).encode()).hexdigest(),
+                        native_line_sha256=hashlib.sha256(line).hexdigest(),
+                        event=event, observed_at=time.time())
+            except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
+                continue
+        return evidence
+
+
+def _import_automatic(record):
+    if record['host_confirmed'] or intent_expired(record):
+        return record
+    session = record['session']
+    # Do not interpolate a session id into a glob: native identity is data.
+    for root, _ in _transcript_roots():
+        for path in root.rglob('*.jsonl'):
+            if session not in path.name:
+                continue
+            try:
+                evidence = _transcript_evidence(record, path)
+            except (OSError, ValueError):
+                continue
+            if evidence:
+                record.update(host_confirmed=True, host_acceptance=evidence)
+                break
+        if record['host_confirmed']:
+            break
+    return record
+
+
+def record_acceptance(root, request_id, transcript):
+    """Import bounded native scheduling evidence; never dispatch a restart."""
+    location = _location(root, request_id)
+    with ledger.locked(location):
+        record = status(root, request_id)
+        if not record or record['state'] == 'refused' or intent_expired(record):
+            raise ValueError('No unexpired pending or retrieved restart intent.')
+        evidence = _transcript_evidence(record, transcript)
+        if evidence is None:
+            raise ValueError('No matching native host acceptance; preserve the intent and reconcile without redispatch.')
+        record.update(host_confirmed=True, host_acceptance=evidence)
+        protocol.write_json(location, record)
+        return record
+
+
 def record_refusal(root, request_id, reason):
     """Record a returned host refusal/error. Never closes the checkpoint."""
     location = _location(root, request_id)
@@ -289,6 +465,8 @@ def record_refusal(root, request_id, reason):
             raise ValueError('No restart intent.')
         if record['state'] == 'retrieved':
             raise ValueError('Successor receipt already recorded.')
+        if record['host_confirmed']:
+            raise ValueError('Host acceptance already recorded; reconcile without marking a refusal.')
         record.update(state='refused', refusal=str(reason), host_confirmed=False)
         protocol.write_json(location, record)
         return record
@@ -298,7 +476,7 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
     """Validate a real local preparation receipt, not an agent's claim to read.
 
     This proves kit retrieval only. Host process replacement and agent semantic
-    understanding remain unproven; host_confirmed is deliberately always false.
+    understanding remain unproven; only native acceptance evidence sets host_confirmed.
     Call after read-only prepare; this never claims or acknowledges work.
     """
     location = _location(root, request_id)
@@ -343,8 +521,9 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
             raise ValueError('Checkpoint changed since restart intent.')
         # Keep the receipt proven here: a later resume rewrites the live .delivery
         # file. Only the token's digest is kept; the token itself grants reuse.
+        record = _import_automatic(record)
         record.update(state='retrieved', successor_session=session,
-                      retrieval_fingerprint=receipt['fingerprint'], host_confirmed=False,
+                      retrieval_fingerprint=receipt['fingerprint'],
                       retrieval_receipt=dict(token_sha256=hashlib.sha256(delivery_receipt.encode()).hexdigest(),
                                              path=record['path'], fingerprint=receipt['fingerprint'],
                                              created=created, references=dict(references), confirmed_at=now))
@@ -395,9 +574,11 @@ def adopt(root, request_id, binding=None):
         return blocked('successor', 'another-successor-already-confirmed')
     identity = dict(request_id=request_id, predecessor_session=record['session'],
                     successor_session=session, terminal=terminal,
-                    state=record['state'], host_confirmed=False)
-    report = ('Observed identity %s -> %s on terminal %s (hook/host recorded). Host request '
-              'acceptance is not observed: host_confirmed=false.' % (record['session'], session, terminal))
+                    state=record['state'], host_confirmed=record['host_confirmed'])
+    report = ('Observed identity %s -> %s on terminal %s (hook/host recorded). %s' % (
+        record['session'], session, terminal,
+        'Native transcript records host acceptance/scheduling: host_confirmed=true; replacement is a separate observation.'
+        if record['host_confirmed'] else 'Host request acceptance is not observed: host_confirmed=false.'))
     # Dispatcher holds gate execution, not retrieval: the receipt above stays recorded.
     import handoff_dispatch as dispatch
     try:
@@ -493,7 +674,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
 
 def cli():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['preflight', 'status', 'refusal', 'successor', 'adopt', 'restart'])
+    parser.add_argument('operation', choices=['preflight', 'status', 'refusal', 'successor', 'adopt', 'restart', 'acceptance'])
     parser.add_argument('binding', nargs='?', help='adopt: exact restart binding JSON from the restart prompt')
     parser.add_argument('--input', help='JSON argument object; defaults to stdin')
     parser.add_argument('--root', help='adopt: project root')
@@ -525,7 +706,8 @@ def cli():
             return 0 if result['outcome'] == 'ready' else 1
         data = protocol.load_state_json(args.input) if args.input else protocol.decode_state_json(sys.stdin.read())
         function = {'preflight': preflight, 'status': status,
-                    'refusal': record_refusal, 'successor': confirm_successor}[args.operation]
+                    'refusal': record_refusal, 'successor': confirm_successor,
+                    'acceptance': record_acceptance}[args.operation]
         result = function(**data)
         if args.operation == 'successor':
             result = {k: v for k, v in result.items() if k != 'restart_prompt'}

@@ -464,6 +464,19 @@ prunes, under the registry lock, retrieved/refused intents older than 30 days
 whose checkpoint is no longer open and authoritative (compared by real path),
 without waiting on a busy record's lock and removing its lock sidecar; pending intents (expired
 or not) and invalid records are never pruned.
+Successor confirmation automatically imports a Codex completed MCP event or
+Claude tool-use/result pair from the predecessor native transcript, matching the exact saved prompt, predecessor thread, terminal,
+post-intent completion time and `ok:true,scheduled:true` AgentsRoom response.
+The event and SHA256 remain in `host_acceptance`; `host_confirmed:true` means
+acceptance/scheduling only. Successor retrieval preserves that evidence and
+reports acceptance separately from observed native identity and kit delivery.
+No caller boolean or receipt can establish host acceptance. Explicit imports
+use the same matcher. Files must name the predecessor session, resolve under
+Codex sessions or Claude projects roots, and be regular files opened with
+O_NOFOLLOW and O_NONBLOCK. Reads are capped at 64 MiB/file and 2 MiB/line.
+Expired pending intents cannot import. Persisted acceptance is checked again
+against the retained event and hash on every status read. Local evidence is
+not cryptographic host attestation.
 Only the agent invokes the MCP restart tool, as its final tool action before ending
 the turn. Pending/refused/retrieved states supply no new dispatch prompt. This
 orchestration provides no atomic host transaction or host replacement guarantee.
@@ -731,7 +744,8 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
 7. Restart eligibility is `true`, `false` or `"unknown"` and lists its
    blockers. Absent host evidence is never assumed. Delegated continuity
    items are reconciled against the supplied worker inventory, and any gap
-   blocks. `host_confirmed` is always false. For AgentsRoom, the adapter is the
+   blocks. Dispatch eligibility alone keeps `host_confirmed` false; native acceptance
+   evidence is imported separately by restart preflight. For AgentsRoom, the adapter is the
    agent procedure in `reference.md` ## AgentsRoom restart: the agent gathers
    the observations with supported tools, so they are model-gathered, not
    host-attested.

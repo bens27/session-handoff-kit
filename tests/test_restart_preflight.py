@@ -33,6 +33,101 @@ class RestartTests(unittest.TestCase):
         args.update(kw)
         return restart.preflight(**args)
 
+    def test_native_host_acceptance_survives_successor_receipt(self):
+        ready = self.preflight()
+        event = {'timestamp': '2026-10-21T17:01:28Z', 'type': 'event_msg',
+                 'payload': {'type': 'item_completed', 'thread_id': 'old',
+                    'completed_at_ms': __import__('time').time() * 1000,
+                    'item': {'type': 'McpToolCall', 'id': 'native-call-1',
+                        'server': 'AgentsRoom-MCP', 'tool': 'agents_restart',
+                        'arguments': {'prompt': ready['restart_prompt']}, 'status': 'completed',
+                        'result': {'isError': False, 'content': [{'type': 'text', 'text': json.dumps({
+                            'ok': True, 'scheduled': True, 'agent': {'id': 'term'}})}]}}}}
+        transcript = Path(self.root) / '.agentsroom/codex/profile/sessions/rollout-old.jsonl'
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(json.dumps(event) + '\n')
+        accepted = restart.record_acceptance(self.root, 'restart-1', str(transcript))
+        self.assertTrue(accepted['host_confirmed'])
+        self.assertEqual(accepted['state'], 'pending')
+        import copy
+        for proof in (dict(accepted['host_acceptance'], transcript='/nonexistent/anything'),
+                      dict(accepted['host_acceptance'], native_line_sha256=None),
+                      {'source': 'codex-native-transcript', 'request_id': 'restart-1'},
+                      dict(accepted['host_acceptance'], event_sha256='0' * 64)):
+            tampered = dict(accepted, host_acceptance=proof)
+            protocol.write_json(restart._location(self.root, 'restart-1'), tampered)
+            with self.assertRaises(ValueError):
+                restart.status(self.root, 'restart-1')
+        protocol.write_json(restart._location(self.root, 'restart-1'), accepted)
+        with self.assertRaises(ValueError):
+            restart.record_refusal(self.root, 'restart-1', 'cannot erase host scheduling')
+        receipt = protocol.prepare(self.path, self.root, 'new')['delivery_receipt']
+        successor = restart.confirm_successor(self.root, 'restart-1', 'new', 'term', receipt)
+        self.assertTrue(successor['host_confirmed'])
+        self.assertEqual(restart.status(self.root, 'restart-1')['state'], 'retrieved')
+        import copy
+        for field, value in (('thread_id', 'foreign'), ('prompt', 'different prompt'),
+                             ('terminal', 'foreign'), ('completed_at_ms', 0), ('server', 'other')):
+            altered = copy.deepcopy(event)
+            if field in ('thread_id', 'completed_at_ms'):
+                altered['payload'][field] = value
+            elif field == 'prompt':
+                altered['payload']['item']['arguments']['prompt'] = value
+            elif field == 'terminal':
+                altered['payload']['item']['result']['content'][0]['text'] = json.dumps({
+                    'ok': True, 'scheduled': True, 'agent': {'id': value}})
+            else:
+                altered['payload']['item'][field] = value
+            transcript.write_text(json.dumps(altered) + '\n')
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                restart.record_acceptance(self.root, 'restart-1', str(transcript))
+        event['payload']['item']['result']['content'][0]['text'] = json.dumps({'ok': True, 'scheduled': False})
+        transcript.write_text(json.dumps(event) + '\n')
+        with self.assertRaises(ValueError):
+            restart.record_acceptance(self.root, 'restart-1', str(transcript))
+        self.assertTrue(restart.status(self.root, 'restart-1')['host_confirmed'])
+
+    def test_acceptance_rejects_unconfined_symlink_fifo_and_expired_evidence(self):
+        import time
+        ready = self.preflight()
+        event = dict(type='event_msg', payload=dict(type='item_completed', thread_id='old',
+            completed_at_ms=time.time() * 1000, item=dict(type='McpToolCall',
+            server='AgentsRoom-MCP', tool='agents_restart', status='completed',
+            arguments=dict(prompt=ready['restart_prompt']), result=dict(isError=False,
+            content=[dict(type='text', text=json.dumps(dict(ok=True, scheduled=True,
+                                                         agent=dict(id='term'))))]))))
+        outside = Path(self.root) / 'rollout-old.jsonl'
+        outside.write_text(json.dumps(event) + '\n')
+        root = Path(self.root) / '.agentsroom/codex/profile/sessions'
+        root.mkdir(parents=True)
+        linked = root / 'linked-old.jsonl'
+        linked.symlink_to(outside)
+        fifo = root / 'fifo-old.jsonl'
+        os.mkfifo(fifo)
+        wrong = root / 'foreign.jsonl'
+        wrong.write_text(outside.read_text())
+        for path in (outside, linked, fifo, wrong):
+            with self.subTest(path=path), self.assertRaises((ValueError, OSError)):
+                restart.record_acceptance(self.root, 'restart-1', path)
+        large = root / 'large-old.jsonl'
+        with large.open('wb') as stream:
+            stream.truncate(64 * 1024 * 1024 + 1)
+        with self.assertRaises(ValueError):
+            restart.record_acceptance(self.root, 'restart-1', large)
+        oversized_line = root / 'line-old.jsonl'
+        oversized_line.write_bytes(b' ' * (2 * 1024 * 1024 + 1))
+        with self.assertRaises(ValueError):
+            restart.record_acceptance(self.root, 'restart-1', oversized_line)
+        valid = root / 'rollout-old.jsonl'
+        valid.write_text(outside.read_text())
+        stale = dict(ready, intent_at=time.time() - 30 * 86400)
+        protocol.write_json(restart._location(self.root, 'restart-1'), stale)
+        with self.assertRaises(ValueError):
+            restart.record_acceptance(self.root, 'restart-1', valid)
+        self.assertFalse(restart.status(self.root, 'restart-1')['host_confirmed'])
+
+
+
     def test_intent_is_durable_and_duplicate_never_dispatches_twice(self):
         self.assertEqual(self.preflight()['outcome'], 'ready')
         result = self.preflight()
@@ -564,6 +659,47 @@ class AdoptTests(unittest.TestCase):
                               '--root', self.root, '--request-id', request_id],
                              env=dict(self.env, **env), text=True, capture_output=True)
         return run.returncode, run.stdout, self.json.loads(run.stdout)
+
+
+
+
+    def test_adopt_cli_automatically_imports_native_acceptance(self):
+        import subprocess, time
+        reply = {'ok': True, 'scheduled': True, 'agent': {'id': 'term'}}
+        event = {'type': 'event_msg', 'payload': {
+            'type': 'item_completed', 'thread_id': 'old', 'completed_at_ms': time.time() * 1000,
+            'item': {'type': 'McpToolCall', 'server': 'AgentsRoom-MCP', 'tool': 'agents_restart',
+                     'status': 'completed', 'arguments': {'prompt': self.prompt},
+                     'result': {'isError': False, 'content': [{'type': 'text', 'text': json.dumps(reply)}]}}}}
+        transcript = Path(self.root) / '.agentsroom/codex/profile/sessions/2026/rollout-old.jsonl'
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(json.dumps(event) + '\n')
+        self.pointer('new')
+        _, _, adopted = self.adopt()
+        self.assertEqual(adopted['outcome'], 'resumed')
+        self.assertTrue(adopted['restart']['host_confirmed'])
+        self.assertIn('acceptance/scheduling', adopted['report'])
+
+    def test_adopt_automatically_imports_claude_tool_pair(self):
+        import time
+        from datetime import datetime, timezone
+        call = dict(type='assistant', sessionId='old', message=dict(role='assistant', content=[
+            dict(type='tool_use', id='restart-call', name='mcp__AgentsRoom-MCP__agents_restart',
+                 input=dict(prompt=self.prompt))]))
+        reply = dict(type='user', sessionId='old',
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            message=dict(role='user', content=[dict(type='tool_result', tool_use_id='restart-call',
+                content=[dict(type='text', text=json.dumps(dict(ok=True, scheduled=True,
+                            agent=dict(id='term'))))])]))
+        transcript = Path(self.root) / '.claude/projects/project/old.jsonl'
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(json.dumps(call) + '\n' + json.dumps(reply) + '\n')
+        self.pointer('new')
+        _, _, adopted = self.adopt()
+        self.assertEqual(adopted['outcome'], 'resumed')
+        self.assertTrue(adopted['restart']['host_confirmed'])
+        self.assertEqual(restart.status(self.root, 'req-1')['host_acceptance']['source'],
+                         'claude-native-transcript')
 
     def test_adopt_delivers_body_once_and_records_retrieval_without_prompt_echo(self):
         self.pointer('new')

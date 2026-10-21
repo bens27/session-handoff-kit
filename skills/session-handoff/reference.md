@@ -470,8 +470,21 @@ hook or host, differ from the predecessor session, sit on the intent's terminal
 `host_session_id` (stage `identity`). It then prepares the exact checkpoint
 internally, records the delivery receipt (stage `prepare`/`successor`) and resumes,
 emitting the body once. Its `restart` object and `report` line give the observed
-predecessor -> successor identity apart from host acceptance, which stays
-`host_confirmed:false`: receipt confirmation is kit delivery evidence only.
+predecessor -> successor identity apart from host acceptance. Receipt confirmation
+alone leaves `host_confirmed:false`. Successor confirmation automatically discovers
+the predecessor's Codex completed MCP event or Claude tool-use/result pair.
+Explicit import through `restart_preflight.py acceptance` uses JSON input
+`{root,request_id,transcript}` and the same validation.
+The importer requires the exact saved prompt, predecessor thread, terminal,
+post-intent completion time and an `ok:true,scheduled:true` tool response.
+It retains the event and SHA256 in the intent, without dispatching or changing
+retrieval state. Only that evidence sets `host_confirmed:true`, meaning host
+acceptance/scheduling, not a host-attested process replacement. Local transcripts
+are auditable evidence, not cryptographic attestations. Native-root confinement,
+predecessor filename, regular-file and bounded-read checks apply. Expired pending
+intents cannot import. Other harness formats
+remain unconfirmed until a supported evidence reader exists; never substitute a
+caller boolean. Preserve native successor identity and delivery evidence separately.
 A rerun by the same successor replays; another successor is refused.
 Dispatch given `host.restart_request_id` and no target selects that pending,
 unexpired intent's checkpoint on this terminal exactly, even among several open ones.
