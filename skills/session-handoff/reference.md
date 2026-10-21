@@ -487,12 +487,16 @@ a pty capture of launches with AgentsRoom's flags (`--dangerously-skip-permissio
 `--mcp-config`, `--plugin-dir`) in a scratch git worktree showed no startup prompt.
 That held for a new `.claude/settings.local.json`, a touched or rewritten one,
 an added hook, a changed hook script, changed plugin hooks, a project `.mcp.json`,
-and a hook edit mid-session. It also held without the bypass flag. The only
-dialog seen was workspace trust, for a plain untrusted directory without bypass;
-worktrees of a trusted repository inherit trust. So for Claude Code there is no
-host hook approval to resolve: `hooks-changed` reports drift only. The reported
-successor-start prompts were not reproduced and their source is unknown.
-Codex's changed-command approval is a separate host behavior and was not tested.
+and a hook edit mid-session; a hook change without the bypass flag also showed
+none. The only dialog seen was workspace trust, for a plain untrusted directory
+without bypass; the scratch worktree of the trusted repository showed no trust
+dialog (observed for that worktree only). On Claude Code 2.1.306 there was no
+host hook approval to resolve: `hooks-changed` reported drift only. Where no
+approval prompt exists, as on 2.1.306, resolving `hooks-changed` means reviewing
+the change and saving again; the host-side mitigation applies only to hosts that
+prompt. The reported successor-start prompts were not reproduced and their source
+is unknown. Untested: older Claude Code versions, AgentsRoom's own UI dialogs,
+and Codex's changed-command approval for a Codex successor.
 
 
 ### Inbox continuity
