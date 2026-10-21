@@ -926,6 +926,17 @@ no symlink/FIFO following, schema validation and private permissions. A pointer
 never supplies live terminal identity. Preserve canonical-root, dependency and
 workspace checks; a missing workspace needs explicit reconciliation.
 
+**Slice 2 implemented (cf143858).** `hooks/handoff_pointers.py` writes and
+evaluates the index; the pointer stores the checkpoint path as
+`checkpoint_path` and `binding_sha256`, `handle`, `created_at` and `version`
+alongside the fields above. User-scope continuation authorization is
+`AUTORESUME`/`CONTEXT_WATCH_AUTORESUME` or `autoresume: true` in
+`~/.context-watch/thresholds.json`. A missing or rotated receipt key, a foreign
+HOME, a binding mismatch, expiry, a Git-tracked or indeterminate path, or a
+symlink/FIFO/non-private pointer is ineligible with a diagnostic; explicit adopt
+is the recovery. No second key exists. The marker re-entry below applies only to
+intents that have a pointer; legacy intents stay reconcile-only.
+
 #### Restart and crash boundaries
 
 Under registry/publication locks, validate the published checkpoint and all

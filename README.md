@@ -624,6 +624,27 @@ adapter first retrieves and materializes the report. A worker's assertion that
 it finished is insufficient. Local report hashes prove bytes, not correctness
 or that a running worker cannot produce further results.
 
+**Project pointer index (v3-2).** Before persisting a new intent, preflight
+writes a private, body-free pointer to
+`.handoffs/pointers/<binding-sha256>.json` (schema version 1), then the intent
+and HOME locator, then a durable `dispatch_started_at` marker before returning
+`dispatch: true`. A failed pointer write blocks with `stage: pointer` and leaves
+no pending intent; a pointer without an intent is inert, and an identical retry
+finishes it. A pending intent with a pointer but no marker may reserve dispatch
+once after every gate is rechecked; with a marker the result is
+`reason: dispatch-reserved` and the agent reconciles, never re-dispatches.
+Legacy intents without a pointer keep reconcile-only behavior.
+`handoff_pointers.scan(root, session)` lists candidates only when the handle
+resolves through this user's HOME locator, the binding matches the intent, the
+publication is sealed by the existing `~/.context-watch/receipt.key`, no
+pointer, intent or checkpoint is tracked by Git (indeterminate checks fail
+closed) and continuation is authorized in user scope (`AUTORESUME` /
+`CONTEXT_WATCH_AUTORESUME` or `autoresume` in `~/.context-watch/thresholds.json`;
+project config never authorizes). Anything else is a diagnostic whose recovery
+is explicit `adopt`. Retrieved intents list only for their recorded successor
+(`mode: replay`); settled pointers are skipped silently and pruned with their
+intents. Startup selection is a later slice.
+
 The agent calls the supported host tool only for `dispatch: true`, using the
 returned `restart_prompt`, one sentence: `Continue the handoff: run exactly
 python3 …/restart_preflight.py adopt h-<24 hex>`. A per-user locator resolves the

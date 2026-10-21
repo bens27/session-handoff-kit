@@ -20,6 +20,7 @@ import stat
 from datetime import datetime
 
 import handoff_ledger as ledger
+import handoff_pointers as pointers
 import handoff_protocol as protocol
 
 
@@ -338,15 +339,29 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     registry = str(Path(location).parent / 'registry')
     with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(registry), ledger.locked(path), ledger.locked(location):
         try:
-            prune_settled(root, held=(location,))
+            pointers.prune(root, prune_settled(root, held=(location,)))
             previous = status(root, request_id)
         except ValueError:
             return blocked('invalid-persisted-intent')
+        reentry = None
         if previous is not None:
             if any(previous.get(k) != v for k, v in binding.items()):
                 return blocked('request-identity-conflict')
-            return dict({k: v for k, v in previous.items() if k != 'restart_prompt'},
-                        outcome=previous['state'], dispatch=False)
+            # A v3 intent (pointer written first) that crashed before its dispatch
+            # marker may reserve dispatch once, after every gate is rechecked below.
+            # Legacy intents without a pointer keep reconcile-only behavior.
+            if (previous['state'] == 'pending' and 'dispatch_started_at' not in previous
+                    and isinstance(previous.get('binding_sha256'), str)
+                    and os.path.lexists(pointers.pointer_path(root, previous['binding_sha256']))
+                    and not intent_expired(previous)):
+                reentry = previous
+            else:
+                result = dict({k: v for k, v in previous.items() if k != 'restart_prompt'},
+                              outcome=previous['state'], dispatch=False)
+                if 'dispatch_started_at' in previous:
+                    result.update(reason='dispatch-reserved',
+                                  action='Dispatch was already reserved; reconcile host history, never re-emit the restart call.')
+                return result
         if not session or not terminal:
             return blocked('missing-identity')
         try:
@@ -398,6 +413,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # different request name must not turn uncertain dispatch into permission.
         try:
             for entry in Path(location).parent.glob('*.json'):
+                if reentry is not None and os.path.realpath(entry) == location:
+                    continue
                 raw = protocol.load_state_json(entry)
                 other = status(root, raw.get('request_id'))
                 if other is None or os.path.realpath(entry) != _location(root, other['request_id']):
@@ -435,11 +452,30 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                 return blocked('worker-report-not-durable')
         if host_capable is not True:
             return blocked('host-capability-absent')
-        record = dict(binding, checkpoint_id=fm.get('checkpoint_id'),
-                      fingerprint=ledger.content_fingerprint(text), state='pending',
-                      host_confirmed=False, workers=workers, intent_at=time.time())
-        # Bind the compact successor handle to this exact intent.
-        record['binding_sha256'] = binding_digest(record)
+        if reentry is not None:
+            if (reentry.get('fingerprint') != ledger.content_fingerprint(text)
+                    or reentry.get('checkpoint_id') != fm.get('checkpoint_id')
+                    or reentry.get('workers') != workers
+                    or reentry.get('binding_sha256') != binding_digest(reentry)
+                    or not isinstance(reentry.get('restart_prompt'), str)):
+                return blocked('request-identity-conflict')
+            record = dict(reentry)
+        else:
+            record = dict(binding, checkpoint_id=fm.get('checkpoint_id'),
+                          fingerprint=ledger.content_fingerprint(text), state='pending',
+                          host_confirmed=False, workers=workers, intent_at=time.time())
+            # Bind the compact successor handle to this exact intent.
+            record['binding_sha256'] = binding_digest(record)
+        # Pointer before any pending intent: a failed write leaves nothing to block.
+        try:
+            pointers.write_pointer(root, pointers.build(
+                record, fm.get('workspace') or root, fm.get('task_id')))
+        except pointers.PointerConflict:
+            return dict(blocked('pointer-conflict'), stage='pointer',
+                        action='Preserve the checkpoint; a different pointer already holds this binding.')
+        except (OSError, ValueError, ledger.ConflictError) as exc:
+            return dict(blocked('pointer-write-failed'), stage='pointer', detail=str(exc)[:200],
+                        action='Preserve the checkpoint; retry the same request after restoring the pointer index.')
         try:
             prompt = 'Continue the handoff: run exactly ' + binding_command(
                 dict(binding, checkpoint_id=record['checkpoint_id']))
@@ -449,11 +485,17 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                         action='Preserve the checkpoint; restore access to the locator store before requesting a restart.')
         if len(prompt) > 20000:
             return blocked('restart-prompt-too-large')
+        if reentry is not None and prompt != reentry['restart_prompt']:
+            return blocked('request-identity-conflict')
         record['restart_prompt'] = prompt
-        if observations is not None:
+        if observations is not None and reentry is None:
             # Under the intent lock and only with a new intent, so the evidence
             # always describes the attempt that produced the dispatchable prompt.
             protocol.write_json(location[:-len('.json')] + '.observations', observations)
+        if reentry is None:
+            protocol.write_json(location, record)
+        # Durable single-attempt reservation, written before any host call is returned.
+        record['dispatch_started_at'] = time.time()
         protocol.write_json(location, record)
         result = dict(record, outcome='ready', dispatch=True)
         if warnings:

@@ -1,0 +1,249 @@
+"""v3-2 project pointer index (SPEC 7.3d): provenance, ordering and dispatch marker."""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+HOOKS = Path(__file__).resolve().parents[1] / 'skills/session-handoff/hooks'
+sys.path.insert(0, str(HOOKS))
+import handoff_pointers as pointers
+import handoff_protocol as protocol
+import restart_preflight as restart
+
+
+class PointerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = str(Path(self.tmp.name).resolve())
+        (Path(self.root) / '.handoffs').mkdir()
+        self.env = patch.dict(os.environ, {
+            'HOME': self.root, 'USERPROFILE': self.root, 'HANDOFF_TERMINAL_ID': 'term',
+            'AGENTSROOM_AGENT_ID': '', 'AUTORESUME': '', 'CONTEXT_WATCH_AUTORESUME': '',
+            'HANDOFF_AUTO': ''})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.saved = protocol.save(self.root, 'old', 'save-1', {
+            'topic': 'work', 'description': 'Continue work',
+            'body': '## Objective\nFix it\n## Current state\nSaved\n## Next steps\nTest it\n'})
+        self.path = self.saved['path']
+
+    def preflight(self, **kw):
+        args = dict(root=self.root, path=self.path, session='old', terminal='term',
+                    request_id='restart-1', workers=[], host_capable=True)
+        args.update(kw)
+        return restart.preflight(**args)
+
+    def authorize(self):
+        user = Path(self.root) / '.context-watch'
+        user.mkdir(exist_ok=True)
+        (user / 'thresholds.json').write_text(json.dumps({'autoresume': True}))
+
+    def pointer_file(self, ready):
+        return Path(pointers.pointer_path(self.root, ready['binding_sha256']))
+
+    def intent_file(self):
+        return Path(restart._location(self.root, 'restart-1'))
+
+    # -- ordering and schema -------------------------------------------------
+    def test_preflight_writes_private_pointer_then_intent_then_marker(self):
+        ready = self.preflight()
+        self.assertTrue(ready['dispatch'], ready)
+        record = restart.status(self.root, 'restart-1')
+        self.assertIsInstance(record.get('dispatch_started_at'), float)
+        location = self.pointer_file(ready)
+        self.assertEqual(location.stat().st_mode & 0o777, 0o600)
+        data = json.loads(location.read_text())
+        self.assertEqual(data['version'], 1)
+        for key in ('checkpoint_id', 'request_id', 'root', 'session', 'terminal', 'binding_sha256'):
+            self.assertEqual(data[key], record[key])
+        self.assertEqual(data['checkpoint_path'], record['path'])
+        self.assertEqual(data['handle'], 'h-' + record['binding_sha256'][:24])
+        self.assertEqual(data['workspace'], self.root)
+        self.assertNotIn('Fix it', location.read_text())
+
+    def test_pointer_write_failure_leaves_no_pending_intent(self):
+        with patch.object(pointers, 'write_pointer', side_effect=OSError('disk full')):
+            result = self.preflight()
+        self.assertEqual((result['outcome'], result['stage'], result['dispatch']),
+                         ('blocked', 'pointer', False), result)
+        self.assertIsNone(restart.status(self.root, 'restart-1'))
+        self.assertTrue(Path(self.path).exists())
+
+    def test_pointer_without_intent_is_inert_and_identical_retry_finishes(self):
+        real = protocol.write_json
+        def crash(path, value):
+            if path == str(self.intent_file()):
+                raise OSError('crash before intent')
+            return real(path, value)
+        with patch.object(protocol, 'write_json', side_effect=crash):
+            with self.assertRaises(OSError):
+                self.preflight()
+        self.authorize()
+        scan = pointers.scan(self.root)
+        self.assertEqual(scan['candidates'], [])
+        self.assertEqual([d['reason'] for d in scan['diagnostics']], ['incomplete-index'])
+        ready = self.preflight()
+        self.assertTrue(ready['dispatch'], ready)
+        self.assertEqual(len(pointers.scan(self.root)['candidates']), 1)
+
+    def test_missing_marker_permits_exactly_one_reservation(self):
+        ready = self.preflight()
+        record = restart.status(self.root, 'restart-1')
+        del record['dispatch_started_at']
+        protocol.write_json(str(self.intent_file()), record)  # crash before the marker
+        again = self.preflight()
+        self.assertTrue(again['dispatch'], again)
+        self.assertEqual(again['restart_prompt'], ready['restart_prompt'])
+        third = self.preflight()
+        self.assertEqual((third['dispatch'], third['reason']), (False, 'dispatch-reserved'), third)
+
+    def test_marker_retry_rechecks_holds(self):
+        self.preflight()
+        record = restart.status(self.root, 'restart-1')
+        del record['dispatch_started_at']
+        protocol.write_json(str(self.intent_file()), record)
+        held = self.preflight(hold=True)
+        self.assertEqual((held['dispatch'], held['reason']), (False, 'human-hold'))
+        self.assertNotIn('dispatch_started_at', restart.status(self.root, 'restart-1'))
+
+    def test_marker_present_never_redispatches(self):
+        self.preflight()
+        again = self.preflight()
+        self.assertEqual((again['outcome'], again['dispatch'], again['reason']),
+                         ('pending', False, 'dispatch-reserved'), again)
+
+    def test_legacy_intent_without_pointer_keeps_reconcile_behavior(self):
+        ready = self.preflight()
+        record = restart.status(self.root, 'restart-1')
+        del record['dispatch_started_at']
+        protocol.write_json(str(self.intent_file()), record)
+        self.pointer_file(ready).unlink()
+        again = self.preflight()
+        self.assertFalse(again['dispatch'], again)
+
+    def test_conflicting_pointer_refuses_overwrite(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        data = json.loads(location.read_text())
+        self.intent_file().unlink()
+        protocol.write_json(str(location), dict(data, workspace='/elsewhere'))
+        result = self.preflight()
+        self.assertEqual((result['outcome'], result['stage'], result['reason']),
+                         ('blocked', 'pointer', 'pointer-conflict'), result)
+        self.assertIsNone(restart.status(self.root, 'restart-1'))
+
+    # -- eligibility ---------------------------------------------------------
+    def test_pending_trusted_pointer_with_user_authorization_is_candidate(self):
+        ready = self.preflight()
+        self.authorize()
+        scan = pointers.scan(self.root)
+        self.assertEqual([c['request_id'] for c in scan['candidates']], ['restart-1'], scan)
+        self.assertEqual(scan['candidates'][0]['pointer'], str(self.pointer_file(ready)))
+
+    def test_project_config_cannot_authorize_continuation(self):
+        self.preflight()
+        (Path(self.root) / '.context-watch.json').write_text(json.dumps({'autoresume': True, 'auto': True}))
+        scan = pointers.scan(self.root)
+        self.assertEqual(scan['candidates'], [])
+        self.assertEqual(scan['diagnostics'][0]['reason'], 'continuation-not-authorized')
+
+    def test_missing_or_rotated_receipt_key_is_ineligible(self):
+        self.preflight()
+        self.authorize()
+        key = Path(self.root) / '.context-watch/receipt.key'
+        key.write_bytes(os.urandom(32))  # rotated
+        scan = pointers.scan(self.root)
+        self.assertEqual(scan['diagnostics'][0]['reason'], 'publication-untrusted')
+        self.assertIn('adopt', scan['diagnostics'][0]['action'])
+        key.unlink()
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'publication-untrusted')
+
+    def test_foreign_home_cannot_resolve_handle(self):
+        self.preflight()
+        other = tempfile.mkdtemp(dir=self.root)
+        Path(other, '.context-watch').mkdir()
+        Path(other, '.context-watch/thresholds.json').write_text(json.dumps({'autoresume': True}))
+        with patch.dict(os.environ, {'HOME': other, 'USERPROFILE': other}):
+            scan = pointers.scan(self.root)
+        self.assertEqual(scan['candidates'], [])
+        self.assertEqual(scan['diagnostics'][0]['reason'], 'locator-unresolved')
+
+    def test_planted_pointer_without_locator_or_intent(self):
+        self.authorize()
+        directory = Path(pointers.pointer_dir(self.root))
+        directory.mkdir(parents=True, exist_ok=True)
+        digest = 'a' * 64
+        protocol.write_json(str(directory / (digest + '.json')), dict(
+            version=1, checkpoint_id='b' * 64, checkpoint_path=self.path, root=self.root,
+            workspace=self.root, session='old', terminal='term', request_id='forged',
+            binding_sha256=digest, handle='h-' + digest[:24], created_at=time.time()))
+        scan = pointers.scan(self.root)
+        self.assertEqual(scan['candidates'], [])
+        self.assertEqual(scan['diagnostics'][0]['reason'], 'incomplete-index')
+
+    def git(self, *args):
+        subprocess.run(['git', '-C', self.root, *args], check=True, capture_output=True,
+                       env=dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
+                                GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t'))
+
+    def test_git_tracked_pointer_intent_or_checkpoint_is_refused(self):
+        ready = self.preflight()
+        self.authorize()
+        self.git('init', '-q')
+        self.assertEqual(len(pointers.scan(self.root)['candidates']), 1)
+        for tracked in (self.pointer_file(ready), self.intent_file(), Path(self.path)):
+            self.git('add', '-f', str(tracked))
+            scan = pointers.scan(self.root)
+            self.assertEqual(scan['candidates'], [], tracked)
+            self.assertEqual(scan['diagnostics'][0]['reason'], 'git-tracked')
+            self.git('rm', '-q', '--cached', str(tracked))
+
+    def test_indeterminate_git_check_fails_closed(self):
+        self.preflight()
+        self.authorize()
+        with patch.object(pointers.subprocess, 'run', side_effect=subprocess.TimeoutExpired('git', 5)):
+            scan = pointers.scan(self.root)
+        self.assertEqual(scan['diagnostics'][0]['reason'], 'git-check-indeterminate')
+
+    def test_symlink_and_fifo_pointers_are_not_followed(self):
+        ready = self.preflight()
+        self.authorize()
+        location = self.pointer_file(ready)
+        real = location.with_name('real.data')
+        location.rename(real)
+        location.symlink_to(real)
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'invalid-pointer')
+        location.unlink()
+        os.mkfifo(location)
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'invalid-pointer')
+
+    def test_retrieved_replays_only_to_recorded_successor_and_settled_is_silent(self):
+        self.preflight()
+        self.authorize()
+        receipt = protocol.prepare(self.path, self.root, 'new')['delivery_receipt']
+        restart.confirm_successor(self.root, 'restart-1', 'new', 'term', receipt)
+        self.assertEqual(pointers.scan(self.root, session='other'),
+                         {'candidates': [], 'diagnostics': []})
+        replay = pointers.scan(self.root, session='new')['candidates']
+        self.assertEqual([(c['request_id'], c['mode']) for c in replay], [('restart-1', 'replay')])
+        record = restart.status(self.root, 'restart-1')
+        protocol.write_json(str(self.intent_file()), dict(record, state='refused', refusal='host'))
+        self.assertEqual(pointers.scan(self.root, session='new'),
+                         {'candidates': [], 'diagnostics': []})
+
+    def test_expired_pending_is_ineligible(self):
+        self.preflight()
+        self.authorize()
+        record = restart.status(self.root, 'restart-1')
+        protocol.write_json(str(self.intent_file()), dict(record, intent_at=time.time() - 8 * 86400))
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'intent-expired')
+
+
+if __name__ == '__main__':
+    unittest.main()
