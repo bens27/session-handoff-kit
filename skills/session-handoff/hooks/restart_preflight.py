@@ -465,7 +465,10 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
     if not checkpoint_id:
         return blocked('publication-not-ready')
     request_id = request_id_for(terminal, checkpoint_id)
-    holds = dispatch.applicable_holds(dispatch.read_holds(root), fm.get('topic'))
+    try:
+        holds = dispatch.applicable_holds(dispatch.read_holds(root), fm.get('topic'))
+    except OSError as exc:
+        return dict(blocked('hold'), stage='hold', detail=str(exc))
     hold = bool(hold) or bool(holds)
     observations = dict(root=root, path=path, session=session, terminal=terminal,
                         request_id=request_id, workers=workers, host_capable=host_capable is True,

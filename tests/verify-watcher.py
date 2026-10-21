@@ -652,8 +652,8 @@ def main():
     checkpoint(proj_n5, sid_n5, env_n, resumed=True)
     p_n = run_hook(dict(nudge_evt, session_id=sid_n5, cwd=proj_n5), env_n)
     check("stop-nudge-silent-after-handoff-resumed", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
-    # A linked git worktree belongs to its main checkout's handoff project: a
-    # save from the root satisfies a Stop whose cwd is inside the worktree.
+    # Each linked worktree has its own handoff project: a main-checkout save
+    # must not satisfy the worktree's Stop; only its own publication does.
     proj_wt = os.path.join(tmp, "proj-worktree")
     os.makedirs(os.path.join(proj_wt, ".handoffs"))
     git = lambda *a: subprocess.run(["git", "-C", proj_wt, "-c", "user.name=t", "-c", "user.email=t@t", *a],
@@ -668,7 +668,12 @@ def main():
     time.sleep(0.05)
     checkpoint(proj_wt, sid_wt, env_n)
     p_n = run_hook(dict(nudge_evt, session_id=sid_wt, cwd=os.path.join(wt, ".handoffs")), env_n)
-    check("stop-nudge-silent-after-handoff-from-main-checkout", p_n.stdout.strip() == "",
+    check("stop-worktree-rejects-main-checkout-handoff",
+          "No published checkpoint matches" in p_n.stdout and wt in p_n.stdout,
+          "stdout=%r" % p_n.stdout[:300])
+    checkpoint(wt, sid_wt, env_n)
+    p_n = run_hook(dict(nudge_evt, session_id=sid_wt, cwd=os.path.join(wt, ".handoffs")), env_n)
+    check("stop-nudge-silent-after-own-worktree-handoff", p_n.stdout.strip() == "",
           "stdout=%r" % p_n.stdout[:300])
     sid_n3 = "verify-" + uuid.uuid4().hex[:8]
     # Real floor path: a threshold under the startup context yields a floor note

@@ -112,6 +112,19 @@ project `.handoffs/` and `~/.claude/handoffs/<project-basename>/`. Both are read
 as is legacy `HANDOFF.md`. Failure returns an explicit action; host sandbox
 or approval denial cannot be bypassed by filesystem fallback.
 
+Project discovery starts from the caller's cwd (or an explicitly selected root),
+not the installed script's location. A linked Git worktree is a discovery
+boundary: the nearest handoff convention inside it wins, otherwise its own Git
+worktree root is used. An established home-fallback claim remains in use;
+otherwise new worktree checkpoints prefer local `.handoffs/` even before it
+exists. The `.git` file bounds discovery even without a working Git executable;
+submodules and other non-worktree Git-file checkouts retain ancestor
+convention discovery, including superproject holds. Ordinary folders
+and Git-directory repositories retain ancestor convention discovery. Checkpoints
+previously misplaced in main are not moved: intentionally inspect/continue them
+with protocol `prepare`/`resume --session ID` and explicit `--root <main>`.
+Holds are shared controls, not isolated checkpoint state; see Dispatcher below.
+
 `prepare TOPIC --session ID` retrieves only. `--execute` claims for preparation;
 `verify PATH --session ID` runs the recorded check; `acknowledge PATH --session ID`
 marks transfer only after successful preparation. Required dependencies are
@@ -506,3 +519,13 @@ the branch to load (`branches/save.md` or `branches/resume.md`). Holds:
 and `release --scope ...`; `release <path>` keeps its legacy meaning. The
 request and result fields are in SPEC §7.3c. Without `dispatch`, read a
 branch directly.
+
+Linked workers observe the union of main-checkout and local holds; identical
+records are deduplicated, and a local hold cannot mask a main hold. Shared Git
+metadata and hold-read failures block execution instead of dropping controls.
+The write/release root remains explicit: `hold --scope project` in a worktree
+creates a local restriction. To control all linked workers, use
+`hold --scope project --root <main> --reason R`; after user approval release that
+shared hold with `release --scope project --root <main>`. Local release removes
+only the local record. Hold results expose origin and name it in release guidance.
+Save/retrieve stay available while resume/adoption and restart are held.

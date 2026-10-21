@@ -316,6 +316,18 @@ from one timestamp and binds retries to session/request identity. Predecessor
 replacement is explicit. Legacy dated/undated files and HANDOFF.md remain
 readable. Required execution skills and references are optional metadata;
 preparation loads them only in the applicable phase and with advisory size measurement.
+
+Project resolution uses the caller's cwd or explicit root, independent of the
+installed script path. A linked Git worktree bounds ancestor convention search:
+use the nearest handoff convention within that worktree, or its Git worktree
+root if none exists. An established home-fallback claim is honored; otherwise
+new saves prefer its local `.handoffs/` even when absent. The `.git` file is a
+boundary without invoking Git, so an unavailable/slow executable cannot cause
+discovery to climb into main; submodules and other non-worktree Git-file checkouts retain ancestor
+convention discovery, including superproject holds. Ordinary Git-directory repositories keep convention-based discovery.
+Existing misplaced checkpoints require an explicit `--root <main>` for protocol
+preparation/continuation and are not implicitly migrated. Holds are a shared
+control plane, not worktree-local checkpoint state; see §7.3c item 8.
 A stored document resembles:
 
 ```markdown
@@ -717,7 +729,15 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    host-attested.
 8. Holds are scoped (`project`, `topic:<t>`, `terminal:<id>`) and stay in
    force until explicitly released. A corrupt hold fails closed as a project
-   hold. Holds block resume and autoresume only.
+   hold. A linked worker reads the deduplicated union of its local holds and
+   main-checkout holds (the common Git directory's parent); shared metadata or
+   hold-read failures block execution. Identical records are reported once with
+   the shared origin preferred; differing local records never mask a main hold.
+   Writes/releases stay under the explicitly selected root: `hold --scope project`
+   from a worktree is an additional worktree-local restriction, while a repo-wide
+   hold/release must select `--root <main>`. Releasing a local hold cannot remove
+   a main hold. Hold reports include origin, and release guidance names that root.
+   Holds gate resume/autoresume and restart; saving and retrieval remain available.
 9. A pending restart intent (`restart_preflight` state) blocks re-dispatch
    until the host reconciles it. Besides a caller-supplied
    `host.restart_request_id`, the dispatcher scans `.handoffs/restart/`

@@ -151,31 +151,54 @@ def _fallback_claims(d):
     return False
 
 
-def _main_checkout(start):
-    """Main checkout of a linked git worktree containing start, else None."""
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
-            cwd=start, capture_output=True, text=True, timeout=5).stdout.split("\n")
-        gitdir, common = out[0], out[1]
-    except Exception:
-        return None
-    if gitdir and common and gitdir != common and os.path.basename(common) == ".git":
-        return os.path.dirname(common)
-    return None
+def _linked_worktree_root(start):
+    """Nearest linked-worktree boundary; submodules retain ancestor discovery.
+
+    Inspect the marker directly: a missing/slow Git executable must never make
+    discovery fall through to the main checkout's checkpoint directory.
+    """
+    current = os.path.abspath(start)
+    while True:
+        marker = os.path.join(current, '.git')
+        if os.path.isfile(marker):
+            # Submodules also use a Git-file marker, but must still inherit the
+            # superproject convention. A linked worktree has common metadata
+            # (or its reciprocal gitdir marker when common metadata is lost).
+            try:
+                with open(marker, encoding='utf-8') as stream:
+                    pointer = stream.read(8192).strip()
+                if pointer.startswith('gitdir: ') and pointer[8:].strip():
+                    gitdir = os.path.realpath(os.path.join(current, pointer[8:].strip()))
+                    if (os.path.lexists(os.path.join(gitdir, 'commondir'))
+                            or os.path.isfile(os.path.join(gitdir, 'gitdir'))
+                            or os.path.basename(os.path.dirname(gitdir)) == 'worktrees'):
+                        return current
+                else:
+                    return current  # malformed metadata must not fall into main
+            except (OSError, ValueError):
+                return current  # preserve a fail-closed boundary on unreadable metadata
+        if os.path.isdir(marker):
+            return None
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
 
 
 def project_root(start):
     """Nearest ancestor (inclusive) with a .handoffs/ dir or a fallback-dir handoff
-    naming it as project, stopping at $HOME; else start. Deliberately NOT the git
-    toplevel: a folder of projects can itself be a git repo. A linked git worktree
-    resolves to its main checkout, so one repo is one handoff project."""
+    naming it as project, stopping at $HOME; else start. A linked Git worktree
+    is a boundary: use its root if no nearer handoff convention exists, and
+    never discover its main checkout's ledger. Other Git repositories retain
+    convention-based discovery: a folder of projects can itself be a repo."""
     start = os.path.abspath(start)
-    start = _main_checkout(start) or start
+    worktree = _linked_worktree_root(start)
     home = os.path.abspath(os.path.expanduser("~"))
     d = start
     while d != home:
-        if os.path.isdir(os.path.join(d, ".handoffs")) or (d != start and _fallback_claims(d)):
+        if os.path.isdir(os.path.join(d, ".handoffs")) or ((d != start or worktree is not None) and _fallback_claims(d)):
+            return d
+        if worktree and _same_dir(d, worktree):
             return d
         parent = os.path.dirname(d)
         if parent == d:
@@ -488,6 +511,8 @@ def save_path(root):
     abs_root = project_root(root)
     hdir = os.path.join(abs_root, ".handoffs")
     if os.path.isdir(hdir):
+        return hdir
+    if _linked_worktree_root(abs_root) and not _fallback_claims(abs_root):
         return hdir
     return _fallback_dir(abs_root)
 

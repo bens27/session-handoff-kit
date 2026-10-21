@@ -300,24 +300,64 @@ def _holds_dir(root):
     return os.path.join(root, '.handoffs', 'holds')
 
 
-def read_holds(root):
-    """Durable explicit holds; an unreadable or corrupt hold fails closed."""
+def _hold_roots(root):
+    """Main controls are shared; worker controls are additional, never overrides."""
+    local = ledger.project_root(root)
+    worktree = ledger._linked_worktree_root(local)
+    if not worktree:
+        return [local]
     try:
-        names = sorted(os.listdir(_holds_dir(root)))
+        with open(os.path.join(worktree, '.git'), encoding='utf-8') as stream:
+            pointer = stream.read(8192).strip()
+    except ValueError as exc:
+        raise OSError('Invalid Git worktree metadata; shared holds cannot be checked') from exc
+    if not pointer.startswith('gitdir: ') or not pointer[8:].strip():
+        raise OSError('Invalid Git worktree metadata; shared holds cannot be checked')
+    gitdir = os.path.realpath(os.path.join(worktree, pointer[8:].strip()))
+    if not os.path.isdir(gitdir):
+        raise OSError('Git worktree metadata unavailable; shared holds cannot be checked')
+    try:
+        with open(os.path.join(gitdir, 'commondir'), encoding='utf-8') as stream:
+            relative = stream.read(8192).strip()
     except FileNotFoundError:
-        return []
-    holds = []
-    for name in names:
-        if not name.endswith('.json'):
-            continue
+        # A submodule/separate-git-dir marker has no linked-worktree control plane.
+        if os.path.isfile(os.path.join(gitdir, 'gitdir')) or os.path.basename(os.path.dirname(gitdir)) == 'worktrees':
+            raise OSError('Linked-worktree common metadata missing; shared holds cannot be checked')
+        return [local]
+    if not relative:
+        raise OSError('Invalid common Git directory; shared holds cannot be checked')
+    common = os.path.realpath(os.path.join(gitdir, relative))
+    if not os.path.isdir(common):
+        raise OSError('Common Git directory unavailable; shared holds cannot be checked')
+    if ledger._same_dir(common, gitdir):
+        return [local]
+    main = os.path.dirname(common)
+    return list(dict.fromkeys([os.path.realpath(main), os.path.realpath(local)]))
+
+
+def read_holds(root):
+    """Union of shared-main and local holds; unreadable/corrupt state fails closed."""
+    holds, seen = [], set()
+    for origin in _hold_roots(root):
         try:
-            record = protocol.load_state_json(os.path.join(_holds_dir(root), name), 8192)
-            if not (isinstance(record.get('scope'), str) and SCOPE.fullmatch(record['scope'])):
-                raise ValueError
-        except ValueError:
-            record = dict(scope='project', reason='unreadable hold record %s; inspect it before releasing' % name)
-        holds.append(dict(scope=record['scope'], reason=str(record.get('reason', ''))[:300],
-                          created=record.get('created'), source='explicit'))
+            names = sorted(os.listdir(_holds_dir(origin)))
+        except FileNotFoundError:
+            continue
+        for name in names:
+            if not name.endswith('.json'):
+                continue
+            try:
+                record = protocol.load_state_json(os.path.join(_holds_dir(origin), name), 8192)
+                if not (isinstance(record.get('scope'), str) and SCOPE.fullmatch(record['scope'])):
+                    raise ValueError
+            except ValueError:
+                record = dict(scope='project', reason='unreadable hold record %s; inspect it before releasing' % name)
+            hold = dict(scope=record['scope'], reason=str(record.get('reason', ''))[:300],
+                        created=record.get('created'), source='explicit')
+            identity = json.dumps(hold, sort_keys=True)
+            if identity not in seen:
+                seen.add(identity)
+                holds.append(dict(hold, root=origin))
     return holds
 
 
@@ -644,7 +684,7 @@ def route(request, root):
                           authorization_source=authorized, next_action=successor_action(root, pending, session), **common)
     if execute and active:
         hold = active[0]
-        how = ('run ' + _command('release', '--scope', hold['scope']) if hold['source'] == 'explicit'
+        how = ('run ' + _command('release', '--scope', hold['scope'], '--root', hold.get('root', root)) if hold['source'] == 'explicit'
                else 'ask the %s to lift it' % hold['source'])
         return result('blocked', 'held', request, next_action=dict(kind='ask', command='', text=(
             'Held (%s: %s). Only the user releases a hold; ask them, then %s.' % (hold['scope'], hold['reason'], how))), **common)
