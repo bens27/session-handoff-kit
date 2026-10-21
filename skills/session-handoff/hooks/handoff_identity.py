@@ -209,6 +209,21 @@ def without_session_identity(environ):
     return child
 
 
+def runner_environment(environ):
+    """A copy of `environ` for an auto runner's children: one terminal per runner.
+
+    Drops inherited session ids and AGENTSROOM_AGENT_ID (it would route a save to
+    restarting the caller's tab), and always assigns a fresh runner-<uuid>
+    HANDOFF_TERMINAL_ID: an inherited one (claude-auto's tmux-<uuid>, the caller's
+    own) would let children resume the caller's or a sibling runner's handoffs.
+    Call once per runner and reuse the result, so every run shares one terminal."""
+    import uuid
+    child = without_session_identity(environ)
+    child.pop('AGENTSROOM_AGENT_ID', None)
+    child['HANDOFF_TERMINAL_ID'] = 'runner-' + uuid.uuid4().hex
+    return child
+
+
 def session_key(evt):
     """The session id, else a hash of the transcript path, so sessions whose
     host omits the id never share one latch; None when neither is known."""

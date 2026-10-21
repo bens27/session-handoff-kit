@@ -1122,11 +1122,13 @@ def auto_cli(argv):
     if max_runs < 1:
         print("[auto] --max must be a positive run limit", file=sys.stderr)
         return 2
-    # Each child starts a new host session; it must not inherit the caller's id.
-    child_env = handoff_identity.without_session_identity(dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1"))
+    # Each child starts a new host session in this runner's own terminal: no
+    # inherited session ids, and no AgentsRoom id that would route its save to
+    # restarting the caller's tab. The terminal stays constant across runs.
+    child_env = handoff_identity.runner_environment(dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1"))
+    import uuid
     rc = 0
     for run in range(1, max_runs + 1):
-        import uuid
         run_id = uuid.uuid4().hex
         child_env['HANDOFF_RUN_ID'] = run_id
         print("[auto] run %d: %s" % (run, " ".join(cmd + [prompt])), file=sys.stderr)

@@ -142,6 +142,36 @@ subprocess.run([sys.executable,os.environ['AUDIT_LEDGER'],'save','.','--session'
         self.assertEqual(p.returncode,75,p.stderr)
         self.assertEqual(self.cli('lookup')['total'],1)
 
+    def test_auto_runner_children_get_their_own_terminal_not_the_callers_agent(self):
+        child=Path(self.tmp.name)/'identity-agent.py'
+        child.write_text("""import json,os,subprocess,sys
+with open(os.environ['IDENTITY_LOG'],'a') as f:
+    f.write(json.dumps([os.environ.get('AGENTSROOM_AGENT_ID'),os.environ.get('HANDOFF_TERMINAL_ID')])+'\\n')
+if sum(1 for _ in open(os.environ['IDENTITY_LOG']))==1:
+    run=os.environ['HANDOFF_RUN_ID']
+    doc={'topic':'run-'+run,'body':'## Objective\\nFix parser.\\n## Current state\\nCheckpointed.\\n## Next steps\\nContinue work.\\n'}
+    subprocess.run([sys.executable,os.environ['AUDIT_LEDGER'],'save','.','--session',run,'--request-id','fixture'],input=json.dumps(doc),text=True,capture_output=True,check=True)
+""")
+        # An AgentsRoom orchestrator, and a claude-auto (tmux) one whose terminal id
+        # children must not inherit either.
+        for caller in ({'AGENTSROOM_AGENT_ID':'agent-orchestrator'},{'HANDOFF_TERMINAL_ID':'tmux-x'}):
+            with self.subTest(caller=caller):
+                terminals=[]
+                for runner in ('a','b'):
+                    log=Path(self.tmp.name)/('identity-%s-%s.jsonl'%(runner,'-'.join(caller.values())))
+                    env={**self.env,'AUDIT_LEDGER':str(LEDGER),'IDENTITY_LOG':str(log),**caller}
+                    p=subprocess.run([sys.executable,str(WATCHER),'auto','--max','3','--',sys.executable,str(child)],
+                                     cwd=self.root,env=env,capture_output=True,text=True,timeout=20)
+                    self.assertEqual(p.returncode,0,p.stderr)
+                    runs=[json.loads(line) for line in log.read_text().splitlines()]
+                    self.assertEqual(len(runs),2,p.stderr)
+                    self.assertEqual([agent for agent,_ in runs],[None,None],'child inherited the caller\'s AgentsRoom identity')
+                    self.assertTrue(runs[0][1],'child has no terminal identity')
+                    self.assertNotEqual(runs[0][1],'tmux-x','child inherited the caller\'s terminal identity')
+                    self.assertEqual(runs[0][1],runs[1][1],'terminal identity changed between runs of one runner')
+                    terminals.append(runs[0][1])
+                self.assertNotEqual(terminals[0],terminals[1],'two runners share one terminal identity')
+
     def test_auto_runner_requires_a_positive_run_limit(self):
         for limit in ('0','-1'):
             with self.subTest(limit=limit):

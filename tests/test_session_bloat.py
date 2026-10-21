@@ -507,6 +507,9 @@ def pressure(sid):
     subprocess.run([sys.executable, hook], input=json.dumps(dict(hook_event_name='PostToolUse', session_id=sid, cwd=str(root), transcript_path=str(trace))), capture_output=True, text=True, check=True)
 pressure('first')
 saved = cli('save', '.', '--session', 'first', doc=dict(topic='work', description='work', body=body))
+# A real successor's host fires SessionStart before it resumes; that moves
+# this runner terminal's pointer from the predecessor to the successor.
+subprocess.run([sys.executable, hook], input=json.dumps(dict(hook_event_name='SessionStart', session_id='second', cwd=str(root))), capture_output=True, text=True, check=True)
 cli('resume', saved['path'], '--session', 'second')
 pressure('second')
 cli('save', '.', '--session', 'second', doc=dict(topic='work', description='next', body=body + 'Later.\\n', predecessor=saved['path']))

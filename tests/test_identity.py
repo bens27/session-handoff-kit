@@ -206,6 +206,21 @@ class SessionFallbackOrder(Case):
         child = identity.without_session_identity(dict(CODEX_THREAD_ID='a', HANDOFF_SESSION_ID='b', KEEP='c'))
         self.assertEqual(child, dict(KEEP='c'))
 
+    def test_runner_environment_owns_one_terminal_and_drops_agent_id(self):
+        base = dict(CODEX_THREAD_ID='a', HANDOFF_SESSION_ID='b', AGENTSROOM_AGENT_ID='agent-x', KEEP='c')
+        first, second = identity.runner_environment(base), identity.runner_environment(base)
+        for child in (first, second):
+            self.assertEqual(set(child), {'KEEP', 'HANDOFF_TERMINAL_ID'})
+            self.assertRegex(child['HANDOFF_TERMINAL_ID'], r'^runner-[0-9a-f]{32}$')
+        self.assertNotEqual(first['HANDOFF_TERMINAL_ID'], second['HANDOFF_TERMINAL_ID'])
+        for blank in ('', '  '):
+            self.assertTrue(identity.runner_environment(dict(HANDOFF_TERMINAL_ID=blank))['HANDOFF_TERMINAL_ID'].startswith('runner-'))
+        inherited = [identity.runner_environment(dict(base, HANDOFF_TERMINAL_ID='tmux-x')) for _ in range(2)]
+        for child in inherited:
+            self.assertRegex(child['HANDOFF_TERMINAL_ID'], r'^runner-[0-9a-f]{32}$')
+            self.assertNotIn('AGENTSROOM_AGENT_ID', child)
+        self.assertNotEqual(inherited[0]['HANDOFF_TERMINAL_ID'], inherited[1]['HANDOFF_TERMINAL_ID'])
+
 
 if __name__ == '__main__':
     unittest.main()
