@@ -482,6 +482,18 @@ existing behavior. A save-time hash is a drift baseline, not proof of approval.
 AgentsRoom should preserve hook approval across same-terminal replacement as
 its separate host-side mitigation.
 
+What is proven about that approval (b7ec7020, Claude Code 2.1.306, 2026-10-21):
+a pty capture of launches with AgentsRoom's flags (`--dangerously-skip-permissions`,
+`--mcp-config`, `--plugin-dir`) in a scratch git worktree showed no startup prompt.
+That held for a new `.claude/settings.local.json`, a touched or rewritten one,
+an added hook, a changed hook script, changed plugin hooks, a project `.mcp.json`,
+and a hook edit mid-session. It also held without the bypass flag. The only
+dialog seen was workspace trust, for a plain untrusted directory without bypass;
+worktrees of a trusted repository inherit trust. So for Claude Code there is no
+host hook approval to resolve: `hooks-changed` reports drift only. The reported
+successor-start prompts were not reproduced and their source is unknown.
+Codex's changed-command approval is a separate host behavior and was not tested.
+
 
 ### Inbox continuity
 
