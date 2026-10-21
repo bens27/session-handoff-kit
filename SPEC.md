@@ -485,8 +485,9 @@ value blocks with `invalid-hook-drift-policy`. Under `warn`, drift proceeds with
 returns `blocked`, `hooks-changed`, the first changed `path` and the full
 `changed` list. Each `changed` entry gives the path with saved and current
 SHA256 (null for absent); `restart` passes `warnings`, `changed` and `policy`
-through, with the action text as `detail`. Unreadable configuration and invalid
-baselines still block. Legacy checkpoints without a baseline retain existing
+through, with the action text as `detail`. Unreadable hook files and invalid
+baselines still block, as does a policy config file that exists but cannot be
+read or parsed. Legacy checkpoints without a baseline retain existing
 behavior. This comparison detects drift only. Claude Code 2.1.306 showed no host
 hook approval (b7ec7020), so the action text asks for a review and, when
 blocked, a new save; it names no approval step.

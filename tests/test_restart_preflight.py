@@ -196,6 +196,20 @@ class RestartTests(unittest.TestCase):
                 self.assertEqual(result['reason'], 'invalid-hook-drift-policy')
                 self.assertIsNone(restart.status(self.root, 'restart-1'))
 
+    def test_corrupt_hook_drift_config_fails_closed(self):
+        user = Path(self.root) / '.context-watch'
+        user.mkdir(exist_ok=True)
+        for path in (user / 'thresholds.json', Path(self.root) / '.context-watch.json'):
+            with self.subTest(path=path.name):
+                path.write_text('{"hook_drift": "block",')  # truncated JSON
+                result = self.preflight()
+                self.assertEqual(result['outcome'], 'blocked')
+                self.assertEqual(result['reason'], 'invalid-hook-drift-policy')
+                self.assertIn('readable JSON', result['action'])
+                self.assertIsNone(restart.status(self.root, 'restart-1'))
+                path.unlink()
+        self.assertTrue(self.preflight()['dispatch'])
+
     def test_modified_and_deleted_project_hook_files_are_detected(self):
         configs = [Path(self.root) / '.claude' / name for name in ('settings.json', 'settings.local.json')]
         configs[0].parent.mkdir()

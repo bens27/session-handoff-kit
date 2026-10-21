@@ -291,7 +291,8 @@ HOOK_DRIFT_POLICIES = ('warn', 'block')
 
 def hook_drift_policy(root):
     """Effective hook-drift policy: 'warn' by default, 'block' if either the
-    user or the project scope asks for it, None when a present value is invalid.
+    user or the project scope asks for it, None when a present value is invalid
+    or an existing config file cannot be read or parsed.
 
     A project file cannot relax a user-scope block: whoever can rewrite the
     project's hook files can also rewrite its .context-watch.json."""
@@ -300,8 +301,10 @@ def hook_drift_policy(root):
                  os.path.join(root, '.context-watch.json')):
         try:
             data = protocol.load_state_json(path)
+        except FileNotFoundError:
+            continue  # an absent scope expresses no policy
         except (OSError, ValueError):
-            continue  # absent or unreadable config keeps project_setting's behavior
+            return None  # an unreadable or corrupt scope could be hiding a block
         if isinstance(data, dict) and 'hook_drift' in data:
             if type(data['hook_drift']) is not str or data['hook_drift'] not in HOOK_DRIFT_POLICIES:
                 return None
@@ -365,8 +368,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             policy = hook_drift_policy(root)
             if policy is None:
                 return dict(blocked('invalid-hook-drift-policy'),
-                            action='Set hook_drift to "warn" or "block" in .context-watch.json '
-                                   'or ~/.context-watch/thresholds.json.')
+                            action='Make .context-watch.json and ~/.context-watch/thresholds.json '
+                                   'readable JSON, with hook_drift absent, "warn" or "block".')
             try:
                 baseline = json.loads(fm['project_hooks'])
                 current = protocol.project_hook_snapshot(workspace)

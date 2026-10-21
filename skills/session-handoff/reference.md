@@ -496,8 +496,9 @@ without bypass; the scratch worktree of the trusted repository showed no trust
 dialog (observed for that worktree only). On Claude Code 2.1.306 there was no
 host hook approval to resolve: `hooks-changed` reported drift only, which is
 why drift now warns by default (9a3f7656). A host that does prompt for changed
-hooks should preserve that approval across same-terminal replacement. The reported successor-start prompts were not reproduced and their source
-is unknown. Untested: older Claude Code versions, AgentsRoom's own UI dialogs,
+hooks should preserve that approval across same-terminal replacement. The
+reported successor-start prompts were not reproduced and their source is
+unknown. Untested: older Claude Code versions, AgentsRoom's own UI dialogs,
 and Codex's changed-command approval for a Codex successor.
 
 
