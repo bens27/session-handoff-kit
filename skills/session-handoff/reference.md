@@ -483,10 +483,15 @@ successors still perform the inbox read before continuing.
 ### Successor delivery
 
 The restart prompt is one sentence: `Continue the handoff: run exactly python3
-<hooks>/restart_preflight.py adopt '<binding JSON>'`. Run that command bare, with
+<hooks>/restart_preflight.py adopt h-<24 hex>`. Run that command bare, with
 no pipe or clipping, and follow its returned action, holds and authorization.
-`adopt` enforces what earlier prompts spelled out: the binding must match the
-recorded intent field for field (stage `binding`); identity must come from the
+The handle resolves through `~/.local/state/session-handoff/restart-handles/`
+to root and request_id, then the ledger supplies the checkpoint, predecessor and
+terminal. This uses the same HOME across predecessor and successor and works from
+any cwd with pinned snapshot hooks. `adopt` recomputes the six-field binding's
+SHA256 and checks it against the handle, locator and recorded intent (stage
+`binding`). Preserve state and report on missing or mismatching locators. Legacy
+full-binding JSON is accepted for one release. Identity must come from the
 hook or host, differ from the predecessor session, sit on the intent's terminal
 (read from the environment, never from input) and not conflict with
 `host_session_id` (stage `identity`). It then prepares the exact checkpoint

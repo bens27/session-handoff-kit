@@ -449,8 +449,18 @@ deterministic request ID, adds durable holds and preflights; observations are
 stored under the intent lock only with a new ready intent. A rerun after a host
 refusal returns `refused` (a retry needs a new save).
 New ready intents return `restart_prompt`: one sentence naming one successor
-command, `restart_preflight.py adopt '<binding JSON>'`, whose only argument is the
-compact binding. It refuses a binding that differs from the recorded intent, checks
+command, `restart_preflight.py adopt h-<24 hex>`. The handle is a prefix of the
+SHA256 of the canonical six-field binding (checkpoint_id, path, request_id, root,
+session, terminal). A private per-user locator under
+`~/.local/state/session-handoff/restart-handles/` records root, request_id and the
+full hash; the intent stores that hash too. The successor resolves the locator
+without consulting cwd or taking root from the prompt, reloads the ledger intent
+and recomputes its binding hash. Missing, redirected or mismatching locators and
+bindings fail at stage `binding` before delivery. Collisions refuse overwrite.
+Locators may outlive pruned intents; they confer no adoption authority without a
+valid intent. The hooks path stays pinned to the emitting installation, including
+candidate snapshots. Legacy full-binding JSON remains accepted for one release.
+After binding validation, adopt checks
 identity, refuses a pending intent older than 7 days (as does the stepwise
 `successor`; dispatch warns on it instead of routing, and it blocks only its own
 checkpoint's restart), prepares internally, records

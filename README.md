@@ -626,10 +626,12 @@ or that a running worker cannot produce further results.
 
 The agent calls the supported host tool only for `dispatch: true`, using the
 returned `restart_prompt`, one sentence: `Continue the handoff: run exactly
-python3 …/restart_preflight.py adopt '<binding JSON>'`. The compact binding
-(checkpoint_id, path, request_id, root, session, terminal) is the command's only
-argument, so it appears once, and every identity, retrieval and receipt rule is
-enforced by `adopt` rather than stated as prose (about 580 B against 2.3 KB).
+python3 …/restart_preflight.py adopt h-<24 hex>`. A per-user locator resolves the
+handle to its ledger intent; `adopt` verifies the binding hash before enforcing
+identity, retrieval and receipt rules. Root and checkpoint paths stay out of the
+prompt. Pinned snapshot hooks work independently of cwd; predecessor and successor
+share HOME. Legacy full-binding JSON remains accepted for one release. See
+[Successor delivery](skills/session-handoff/reference.md#successor-delivery).
 Pending/refused/retrieved
 responses carry no new restart prompt. The exact prompt is persisted for audit;
 new identifiers are bounded ASCII tokens and the final prompt is checked against

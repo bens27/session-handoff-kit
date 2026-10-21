@@ -54,11 +54,47 @@ def intent_expired(record, now=None):
 BINDING_KEYS = ('checkpoint_id', 'path', 'request_id', 'root', 'session', 'terminal')
 
 
+def binding_digest(binding):
+    return hashlib.sha256(json.dumps({k: binding[k] for k in BINDING_KEYS},
+                                    sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _handle_location(handle):
+    if not isinstance(handle, str) or re.fullmatch(r'h-[0-9a-f]{24}', handle) is None:
+        raise ValueError('invalid-restart-handle')
+    return Path.home() / '.local/state/session-handoff/restart-handles' / (handle + '.json')
+
+
 def binding_command(binding):
-    """The successor command that carries the exact binding as its only argument."""
-    return 'python3 %s adopt %s' % (
-        shlex.quote(os.path.realpath(__file__)),
-        shlex.quote(json.dumps({k: binding[k] for k in BINDING_KEYS}, sort_keys=True, separators=(',', ':'))))
+    """Publish a hash-bound locator, independent of cwd and the hooks installation."""
+    digest = binding_digest(binding)
+    handle = 'h-' + digest[:24]
+    location = _handle_location(handle)
+    locator = dict(root=binding['root'], request_id=binding['request_id'], binding_sha256=digest)
+    location.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with ledger.locked(str(location)):
+        if location.exists():
+            if protocol.load_state_json(location) != locator:
+                raise ValueError('restart-handle-collision')
+        else:
+            protocol.write_json(str(location), locator)
+    return 'python3 %s adopt %s' % (shlex.quote(os.path.realpath(__file__)), handle)
+
+
+def adopt_handle(handle):
+    """Resolve a handle to the ledger, then enforce the existing adopt lifecycle."""
+    try:
+        locator = protocol.load_state_json(_handle_location(handle), limit=16384)
+        record = status(locator['root'], locator['request_id'])
+        digest = binding_digest(record)
+        if (locator['binding_sha256'] != digest or handle != 'h-' + digest[:24]
+                or record.get('binding_sha256') != digest):
+            raise ValueError('binding-does-not-match-recorded-intent')
+        binding = {k: record[k] for k in BINDING_KEYS}
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return dict(outcome='blocked', stage='binding', reason=str(exc)[:500], host_confirmed=False,
+                    action='Preserve state and report; never restart, dispatch another intent or pick another checkpoint.')
+    return adopt(binding['root'], binding['request_id'], binding)
 
 
 def _accepted_event(record, event):
@@ -347,8 +383,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         record = dict(binding, checkpoint_id=fm.get('checkpoint_id'),
                       fingerprint=ledger.content_fingerprint(text), state='pending',
                       host_confirmed=False, workers=workers, intent_at=time.time())
-        # Deliver the exact binding inside the one successor command; adopt enforces
-        # identity, retrieval, receipt and resume, so the prompt carries no rules.
+        # Bind the compact successor handle to this exact intent.
+        record['binding_sha256'] = binding_digest(record)
         prompt = 'Continue the handoff: run exactly ' + binding_command(
             dict(binding, checkpoint_id=record['checkpoint_id']))
         if len(prompt) > 20000:
@@ -715,7 +751,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
 def cli():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['preflight', 'status', 'refusal', 'successor', 'adopt', 'restart', 'acceptance'])
-    parser.add_argument('binding', nargs='?', help='adopt: exact restart binding JSON from the restart prompt')
+    parser.add_argument('binding', nargs='?', help='adopt: short restart handle (legacy binding JSON accepted for one release)')
     parser.add_argument('--input', help='JSON argument object; defaults to stdin')
     parser.add_argument('--root', help='adopt: project root')
     parser.add_argument('--request-id', help='adopt: restart request ID from the binding')
@@ -726,13 +762,15 @@ def cli():
     args = parser.parse_args()
     try:
         if args.operation == 'adopt':
-            if args.binding is not None:
+            if args.binding is not None and not args.binding.lstrip().startswith('{'):
+                result = adopt_handle(args.binding)
+            elif args.binding is not None:
                 binding = json.loads(args.binding)
                 if not isinstance(binding, dict) or set(binding) != set(BINDING_KEYS):
                     raise ValueError('adopt binding must hold exactly: ' + ', '.join(BINDING_KEYS))
                 result = adopt(binding['root'], binding['request_id'], binding)
             elif not args.root or not args.request_id:
-                raise ValueError('adopt requires the binding JSON or --root and --request-id.')
+                raise ValueError('adopt requires a short handle, legacy binding JSON, or --root and --request-id.')
             else:
                 result = adopt(args.root, args.request_id)
             print(json.dumps(result))

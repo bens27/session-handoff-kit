@@ -219,7 +219,7 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(ready['outcome'], 'ready', ready)
         self.assertLessEqual(len(ready['restart_prompt']), 20000)
         self.assertIn(' adopt ', ready['restart_prompt'])
-        self.assertIn('"request_id":"%s"' % ('r' * 128), ready['restart_prompt'])
+        self.assertNotIn('r' * 128, ready['restart_prompt'])
 
     def test_other_pending_or_invalid_legacy_intent_blocks_new_checkpoint(self):
         import hashlib
@@ -521,9 +521,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         result = json.loads(ready.stdout)
         self.assertTrue(result['dispatch'])
         prompt = result['restart_prompt']
-        for required in (self.path, self.root, result['checkpoint_id'], '"cli-prompt"', '"old"', '"term"',
-                         ' adopt \'{'):
-            self.assertIn(required, prompt)
+        self.assertIn(' adopt h-', prompt)
+        for private in (self.path, self.root, result['checkpoint_id'], 'cli-prompt'):
+            self.assertNotIn(private, prompt)
         pending = subprocess.run(command, input=json.dumps(args), text=True, capture_output=True)
         repeat = json.loads(pending.stdout)
         self.assertEqual(repeat['outcome'], 'pending')
@@ -685,8 +685,10 @@ class AdoptTests(unittest.TestCase):
 
     def adopt(self, request_id='req-1', **env):
         import subprocess
-        run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt',
-                              '--root', self.root, '--request-id', request_id],
+        import shlex
+        argument = shlex.split(self.prompt)[-1]
+        args = [argument] if request_id == 'req-1' else ['--root', self.root, '--request-id', request_id]
+        run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt', *args],
                              env=dict(self.env, **env), text=True, capture_output=True)
         return run.returncode, run.stdout, self.json.loads(run.stdout)
 
@@ -862,16 +864,14 @@ class AdoptTests(unittest.TestCase):
                          (1, 'blocked', 'intent', 'restart-intent-expired'), out)
         self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
 
-    def test_restart_prompt_is_one_sentence_whose_command_carries_the_binding(self):
+    def test_restart_prompt_carries_only_a_short_handle(self):
         import shlex
-        record = restart.status(self.root, 'req-1')
-        binding = {k: record[k] for k in ('checkpoint_id', 'path', 'request_id', 'root', 'session', 'terminal')}
-        compact = self.json.dumps(binding, sort_keys=True, separators=(',', ':'))
-        command = 'python3 %s adopt %s' % (
-            shlex.quote(os.path.realpath(HOOKS / 'restart_preflight.py')), shlex.quote(compact))
-        self.assertEqual(self.prompt, 'Continue the handoff: run exactly ' + command)
-        self.assertEqual(self.prompt.count(self.path), 1)
-        self.assertEqual(self.prompt.count('python3 '), 1)
+        argv = shlex.split(self.prompt[len('Continue the handoff: run exactly '):])
+        self.assertEqual(len(argv), 4)
+        self.assertEqual(argv[2], 'adopt')
+        self.assertRegex(argv[3], r'^h-[0-9a-f]{24}$')
+        self.assertLess(len(self.prompt), 200)
+        self.assertNotIn(self.root, self.prompt)
 
     def test_adopt_by_binding_resumes_and_reports_identity_apart_from_host_acceptance(self):
         import shlex, subprocess
@@ -884,6 +884,65 @@ class AdoptTests(unittest.TestCase):
         self.assertEqual(run.stdout.count('UNIQUE-BODY-MARKER'), 1)
         self.assertIn('old -> new', out['report'])
         self.assertIn('host_confirmed=false', out['report'])
+
+    def test_short_handle_tampering_and_redirected_locator_fail_at_binding(self):
+        import shlex, subprocess
+        self.pointer('new')
+        handle = shlex.split(self.prompt)[-1]
+        location = Path(self.root) / '.local/state/session-handoff/restart-handles' / (handle + '.json')
+        original = location.read_text()
+        intent_path = Path(restart._location(self.root, 'req-1'))
+        original_intent = intent_path.read_text()
+        def refused(argument):
+            run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt', argument],
+                                 env=self.env, text=True, capture_output=True)
+            out = self.json.loads(run.stdout)
+            self.assertEqual((run.returncode, out['outcome'], out['stage']), (1, 'blocked', 'binding'), out)
+            self.assertNotIn('UNIQUE-BODY-MARKER', run.stdout)
+            self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+        for bad in ('h-' + '0' * 24, '../../escape', handle + 'a'):
+            refused(bad)
+        locator = self.json.loads(original)
+        for field, value in (('root', self.root + '/other'), ('request_id', 'other'),
+                             ('binding_sha256', '0' * 64)):
+            location.write_text(self.json.dumps(dict(locator, **{field: value})))
+            refused(handle)
+        location.write_text(original)
+        record = self.json.loads(original_intent)
+        for field, value in (('checkpoint_id', 'f' * 64), ('path', self.path + '.other'),
+                             ('session', 'someone'), ('terminal', 'elsewhere'),
+                             ('binding_sha256', '0' * 64)):
+            intent_path.write_text(self.json.dumps(dict(record, **{field: value})))
+            refused(handle)
+        intent_path.write_text(original_intent)
+        self.assertEqual(self.adopt()[2]['outcome'], 'resumed')
+
+    def test_legacy_binding_without_handle_metadata_still_resumes(self):
+        import subprocess
+        self.pointer('new')
+        record = restart.status(self.root, 'req-1')
+        record.pop('binding_sha256')
+        protocol.write_json(restart._location(self.root, 'req-1'), record)
+        binding = {k: record[k] for k in restart.BINDING_KEYS}
+        run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt',
+                              self.json.dumps(binding)], env=self.env, text=True, capture_output=True)
+        out = self.json.loads(run.stdout)
+        self.assertEqual((run.returncode, out['outcome']), (0, 'resumed'), out)
+
+    def test_pinned_snapshot_command_resolves_from_unrelated_working_directory(self):
+        import shlex, shutil, subprocess
+        self.pointer('new')
+        snapshot = Path(self.root) / 'pinned snapshot' / 'hooks'
+        shutil.copytree(HOOKS.parent, snapshot.parent)
+        record = restart.status(self.root, 'req-1')
+        with patch.object(restart, '__file__', str(snapshot / 'restart_preflight.py')):
+            command = restart.binding_command(record)
+        argv = shlex.split(command)
+        self.assertEqual(argv[1], str(snapshot / 'restart_preflight.py'))
+        argv[0] = sys.executable
+        run = subprocess.run(argv, env=self.env, cwd='/', text=True, capture_output=True)
+        out = self.json.loads(run.stdout)
+        self.assertEqual((run.returncode, out['outcome']), (0, 'resumed'), out)
 
     def test_adopt_refuses_binding_that_differs_from_recorded_intent(self):
         import subprocess
@@ -939,7 +998,8 @@ class RestartCommandTests(unittest.TestCase):
         code, out = self.restart_cli('--workers', '[]', '--host-capable')
         self.assertEqual((code, out['outcome'], out['dispatch']), (0, 'ready', True), out)
         self.assertEqual((out['request_id'], out['call'], out['agent']), (expected_id, 'agents_restart', 'term'))
-        self.assertIn('"request_id":"%s"' % expected_id, out['restart_prompt'])
+        self.assertEqual(restart.status(self.root, expected_id)['restart_prompt'], out['restart_prompt'])
+        self.assertNotIn(expected_id, out['restart_prompt'])
         self.assertIn(' adopt ', out['restart_prompt'])
         observations = list(Path(self.root).glob('.handoffs/restart/*.observations'))
         self.assertEqual(len(observations), 1)
