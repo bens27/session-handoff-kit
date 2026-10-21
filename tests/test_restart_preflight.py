@@ -33,6 +33,19 @@ class RestartTests(unittest.TestCase):
         args.update(kw)
         return restart.preflight(**args)
 
+    def test_unwritable_locator_store_blocks_without_creating_intent(self):
+        store = Path(self.root) / '.local/state/session-handoff/restart-handles'
+        store.mkdir(parents=True, exist_ok=True)
+        store.chmod(0o500)
+        self.addCleanup(store.chmod, 0o700)
+        result = self.preflight()
+        self.assertEqual((result['outcome'], result['stage'], result['reason']),
+                         ('blocked', 'restart-handle-unavailable', 'restart-handle-unavailable'))
+        self.assertFalse(result['dispatch'])
+        self.assertTrue(result['action'])
+        self.assertLessEqual(len(result['detail']), 200)
+        self.assertIsNone(restart.status(self.root, 'restart-1'))
+
     def test_native_host_acceptance_survives_successor_receipt(self):
         ready = self.preflight()
         event = {'timestamp': '2026-10-21T17:01:28Z', 'type': 'event_msg',
@@ -884,6 +897,30 @@ class AdoptTests(unittest.TestCase):
         self.assertEqual(run.stdout.count('UNIQUE-BODY-MARKER'), 1)
         self.assertIn('old -> new', out['report'])
         self.assertIn('host_confirmed=false', out['report'])
+
+    def test_locator_fifo_and_symlink_are_refused_without_hanging(self):
+        import shlex, subprocess
+        self.pointer('new')
+        handle = shlex.split(self.prompt)[-1]
+        location = Path(self.root) / '.local/state/session-handoff/restart-handles' / (handle + '.json')
+        copy = Path(self.root) / 'locator-copy.json'
+        copy.write_text(location.read_text())
+        location.unlink()
+        for kind in ('fifo', 'symlink'):
+            with self.subTest(kind=kind):
+                if kind == 'fifo':
+                    os.mkfifo(location)
+                else:
+                    location.symlink_to(copy)
+                try:
+                    run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'adopt', handle],
+                                         env=self.env, text=True, capture_output=True, timeout=3)
+                    out = self.json.loads(run.stdout)
+                    self.assertEqual((run.returncode, out['outcome'], out['stage']), (1, 'blocked', 'binding'), out)
+                    self.assertNotIn('UNIQUE-BODY-MARKER', run.stdout)
+                    self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+                finally:
+                    location.unlink()
 
     def test_short_handle_tampering_and_redirected_locator_fail_at_binding(self):
         import shlex, subprocess

@@ -490,8 +490,10 @@ to root and request_id, then the ledger supplies the checkpoint, predecessor and
 terminal. This uses the same HOME across predecessor and successor and works from
 any cwd with pinned snapshot hooks. `adopt` recomputes the six-field binding's
 SHA256 and checks it against the handle, locator and recorded intent (stage
-`binding`). Preserve state and report on missing or mismatching locators. Legacy
-full-binding JSON is accepted for one release. Identity must come from the
+`binding`). Preserve state and report on mismatching locators. If a locator is
+missing because HOME changed, recover with `adopt --root <root> --request-id <id>`
+using the recorded intent's root and request ID. Legacy full-binding JSON is
+accepted for one release. Identity must come from the
 hook or host, differ from the predecessor session, sit on the intent's terminal
 (read from the environment, never from input) and not conflict with
 `host_session_id` (stage `identity`). It then prepares the exact checkpoint

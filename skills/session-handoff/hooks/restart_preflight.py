@@ -65,6 +65,18 @@ def _handle_location(handle):
     return Path.home() / '.local/state/session-handoff/restart-handles' / (handle + '.json')
 
 
+def _read_locator(location):
+    fd = os.open(location, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
+            raise ValueError('Restart locator must be a bounded regular file.')
+        raw = stream.read(16385)
+        if len(raw) > 16384:
+            raise ValueError('Restart locator exceeds read bounds.')
+        return protocol.decode_state_json(raw.decode('utf-8'))
+
+
 def binding_command(binding):
     """Publish a hash-bound locator, independent of cwd and the hooks installation."""
     digest = binding_digest(binding)
@@ -74,7 +86,7 @@ def binding_command(binding):
     location.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with ledger.locked(str(location)):
         if location.exists():
-            if protocol.load_state_json(location) != locator:
+            if _read_locator(location) != locator:
                 raise ValueError('restart-handle-collision')
         else:
             protocol.write_json(str(location), locator)
@@ -84,7 +96,7 @@ def binding_command(binding):
 def adopt_handle(handle):
     """Resolve a handle to the ledger, then enforce the existing adopt lifecycle."""
     try:
-        locator = protocol.load_state_json(_handle_location(handle), limit=16384)
+        locator = _read_locator(_handle_location(handle))
         record = status(locator['root'], locator['request_id'])
         digest = binding_digest(record)
         if (locator['binding_sha256'] != digest or handle != 'h-' + digest[:24]
@@ -385,8 +397,13 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                       host_confirmed=False, workers=workers, intent_at=time.time())
         # Bind the compact successor handle to this exact intent.
         record['binding_sha256'] = binding_digest(record)
-        prompt = 'Continue the handoff: run exactly ' + binding_command(
-            dict(binding, checkpoint_id=record['checkpoint_id']))
+        try:
+            prompt = 'Continue the handoff: run exactly ' + binding_command(
+                dict(binding, checkpoint_id=record['checkpoint_id']))
+        except (OSError, ValueError, ledger.ConflictError) as exc:
+            return dict(blocked('restart-handle-unavailable'), stage='restart-handle-unavailable',
+                        detail=str(exc)[:200],
+                        action='Preserve the checkpoint; restore access to the locator store before requesting a restart.')
         if len(prompt) > 20000:
             return blocked('restart-prompt-too-large')
         record['restart_prompt'] = prompt
