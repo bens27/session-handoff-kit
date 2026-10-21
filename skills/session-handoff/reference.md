@@ -266,15 +266,28 @@ The AgentsRoom boot prompt carries an allowance: when the host explicitly
 requests a handoff summary during agent replacement, the agent may write the
 exact `.agentsroom/handoff-summary-<agent-id>.md` path named in that request,
 and only that file; all other `.agentsroom/` runtime-file restrictions remain.
-The request -> write -> successor-read flow is unproven: in a 2026-10-20
-self-restart test no summary request or path was delivered and no file was
-written. Do not describe that flow as working. The kit cannot redirect a host
-request silently: the successor must receive the actual saved checkpoint path
-or a host-persisted summary. Write the summary file only when the host names
-its exact path, and have any summary written name the saved checkpoint path;
-the ledger (`hooks/handoff_ledger.py save`) stays the source of truth. Keep
-the existing session/checkpoint available instead of claiming transfer, and
-report the unproven summary flow as a dependency rather than stay silent.
+The request and write steps are proven in one 2026-10-21 host-initiated
+replacement; successor delivery is not. In a 2026-10-20 self-restart test no
+summary request or path was delivered and no file was written. On 2026-10-21
+the user switched the agent's provider from its pill (Switch Provider ->
+relaunch with Agent summary); the host sent the explicit request naming the
+exact path, and the predecessor wrote it there, relative to the predecessor's
+working directory. The successor's boot prompt named only a transcript file
+(`.agentsroom/handoff-transcript-<agent-id>.txt`), not the summary, and the
+transcript existed only under the primary checkout's `.agentsroom/`, not the
+successor's working directory; the successor found the summary only by reading
+the transcript. Do not describe summary delivery as working. The kit cannot
+redirect a host request silently: the successor must receive the actual saved
+checkpoint path or a host-persisted summary. Write the summary file only when
+the host names its exact path. The predecessor records the summary's absolute
+path in the saved checkpoint, and the summary names the checkpoint's absolute
+path; the ledger (`hooks/handoff_ledger.py save`) stays the source of truth.
+A successor looks in its working directory and in `.agentsroom/` under the
+ledger's project root (the root the checkpoint was saved under); do not rely
+on `git rev-parse`, because the predecessor's working directory need not be a
+registered worktree. Keep the existing session/checkpoint available instead of
+claiming transfer, and report the unproven delivery as a dependency rather
+than stay silent.
 
 Publication receipts: generated checkpoints carry a `.published` sidecar binding
 the publication ID to its content fingerprint. Until that receipt is durable,
