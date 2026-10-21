@@ -568,8 +568,31 @@ def adopt(root, request_id, binding=None):
         return blocked('intent', 'no-pending-restart-intent')
     if binding is not None and any(binding.get(k) != record.get(k) for k in BINDING_KEYS):
         return blocked('binding', 'binding-does-not-match-recorded-intent')
+    identity_facts = dict(
+        expected=dict(predecessor_session=record['session'], terminal=record['terminal'],
+                      successor_session='different from predecessor'),
+        observed=dict(session=session, terminal=terminal, host_session=info['host_session_id'],
+                      source=info['identity_source']))
+    try:
+        fm = ledger._read_fm(record['path'])
+    except FileNotFoundError:
+        fm = {}  # Let prepare/resume report a missing checkpoint at its established stage.
+    except (OSError, ValueError) as exc:
+        return blocked('prepare', exc)
+    workspace = fm.get('workspace') or fm.get('project') or root
+    missing = not os.path.isdir(workspace)
+    workspace_facts = dict(path=workspace, exists=not missing,
+                           git=fm.get('workspace_git') or fm.get('git', ''), recovery_root=root)
     if not terminal or terminal != record['terminal'] or session == record['session']:
-        return blocked('identity', 'successor-identity-mismatch')
+        return dict(blocked('identity', 'successor-identity-mismatch'), identity=identity_facts,
+                    workspace=workspace_facts)
+    if missing:
+        return dict(blocked('workspace', 'workspace-missing'), identity=identity_facts,
+                    workspace=workspace_facts,
+                    action=('Preserve the checkpoint. Restore workspace %s from recorded Git position %s, '
+                            'or explicitly recover its body from project root %s and reconcile paths before continuing. '
+                            'Do not restart or automatically choose another workspace.' % (
+                                workspace, workspace_facts['git'] or '(unavailable)', root)))
     if intent_expired(record):
         return blocked('intent', 'restart-intent-expired')
     if record['state'] == 'pending':

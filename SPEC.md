@@ -477,6 +477,18 @@ AgentsRoom saves (environment agent ID or terminal session file) prepend
 continuity item. Unknown mail status is explicit; no unread count is fabricated.
 Plain CLI checkpoints gain no mail obligation. Save retries remain idempotent.
 
+Adopt identity mismatch diagnostics include expected predecessor session and
+terminal, observed session/terminal/host session and identity source. New saves
+record the hook-observed workspace and its Git position. A missing recorded
+workspace blocks adopt at stage `workspace`, reason `workspace-missing`, before
+retrieval, with the path, recovery root and recorded Git position. Identity
+mismatches remain primary and also carry workspace existence findings. Legacy
+checkpoints use their recorded project path; a stale host cwd absent from old
+checkpoint metadata cannot be reconstructed. Recovery requires explicit path
+reconciliation or recreating the recorded workspace; no workspace is selected
+or created automatically. AgentsRoom should launch at an existing cwd, falling
+back to the root with a notice when its saved cwd has disappeared.
+
 Successor confirmation automatically imports a Codex completed MCP event or
 Claude tool-use/result pair from the predecessor native transcript, matching the exact saved prompt, predecessor thread, terminal,
 post-intent completion time and `ok:true,scheduled:true` AgentsRoom response.

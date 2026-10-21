@@ -690,7 +690,36 @@ class AdoptTests(unittest.TestCase):
                              env=dict(self.env, **env), text=True, capture_output=True)
         return run.returncode, run.stdout, self.json.loads(run.stdout)
 
+    def test_identity_mismatch_reports_expected_and_observed_facts(self):
+        self.pointer('old')
+        _, _, result = self.adopt()
+        self.assertEqual(result['reason'], 'successor-identity-mismatch')
+        self.assertEqual(result['identity']['expected']['terminal'], 'term')
+        self.assertEqual(result['identity']['expected']['predecessor_session'], 'old')
+        self.assertEqual(result['identity']['observed']['session'], 'old')
+        self.assertEqual(result['identity']['observed']['terminal'], 'term')
 
+    def test_missing_recorded_workspace_reports_recovery_without_retrieval(self):
+        import subprocess
+        restart.record_refusal(self.root, 'req-1', 'fixture host refused')
+        workspace = Path(self.root) / 'removed-worktree'
+        workspace.mkdir()
+        hook = subprocess.run([sys.executable, str(HOOKS / 'context_watch.py')],
+            input=json.dumps(dict(hook_event_name='SessionStart', session_id='old',
+                                  source='startup', cwd=str(workspace))),
+            env=dict(self.env, HOME=str(Path(self.root).parent)), text=True, capture_output=True)
+        self.assertEqual(hook.returncode, 0, hook.stderr)
+        saved = protocol.save(self.root, 'old', 'missing-workspace-save', dict(
+            topic='missing', description='Missing workspace', body=self.BODY))
+        ready = restart.preflight(self.root, saved['path'], 'old', 'term', 'req-2', workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        workspace.rmdir()
+        self.pointer('new')
+        _, _, result = self.adopt(request_id='req-2')
+        self.assertEqual(result['reason'], 'workspace-missing')
+        self.assertEqual(result['workspace']['path'], str(workspace))
+        self.assertIn(self.root, result['action'])
+        self.assertEqual(restart.status(self.root, 'req-2')['state'], 'pending')
 
     def test_agentsroom_adopt_leads_with_inbox_even_for_older_checkpoint(self):
         self.pointer('new')

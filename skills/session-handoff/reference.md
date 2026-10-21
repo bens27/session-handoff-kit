@@ -508,6 +508,15 @@ intents cannot import. Other harness formats
 remain unconfirmed until a supported evidence reader exists; never substitute a
 caller boolean. Preserve native successor identity and delivery evidence separately.
 A rerun by the same successor replays; another successor is refused.
+On identity mismatch, inspect `identity.expected` (predecessor session and
+terminal) and `identity.observed` (session, terminal, host session, source).
+A valid successor whose recorded workspace is gone gets `workspace-missing`
+at stage `workspace` before retrieval. Preserve state; explicitly recover the
+body from `workspace.recovery_root` and reconcile paths, or recreate the workspace
+from its recorded Git position, then retry. Older checkpoints without cwd
+metadata can only check their recorded project root. Host-side cwd fallback
+must be reported by AgentsRoom; the kit does not silently choose a directory.
+
 Dispatch given `host.restart_request_id` and no target selects that pending,
 unexpired intent's checkpoint on this terminal exactly, even among several open ones.
 

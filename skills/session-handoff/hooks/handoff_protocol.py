@@ -696,6 +696,7 @@ def save(root, session, request_id, document):
         fields['workspace_changes_hash'] = workspace_changes_hash(root)
         workspace = os.path.realpath(note.get('cwd') or root)
         fields['workspace'] = workspace
+        fields['workspace_git'] = ledger._git_position(workspace)
         fields['project_hooks'] = json.dumps(project_hook_snapshot(workspace), sort_keys=True)
 
         if predecessor:
