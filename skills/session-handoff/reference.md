@@ -458,6 +458,18 @@ intent persistence; identifier or prompt rejection creates no intent. The exact
 prompt is retained in the intent for audit via `status`; finding it in status
 never grants new dispatch permission.
 
+### Project hook drift
+
+New saves record both project-scope Claude settings files at the observed cwd
+(or project root). Preflight compares their bytes, including absent files, before
+creating a restart intent. `blocked: hooks-changed` names the changed path:
+resolve the host's hook approval and save again before restarting. User-scope
+settings are outside this check. Older checkpoints without a baseline retain
+existing behavior. A save-time hash is a drift baseline, not proof of approval.
+AgentsRoom should preserve hook approval across same-terminal replacement as
+its separate host-side mitigation.
+
+
 ### Successor delivery
 
 The restart prompt is one sentence: `Continue the handoff: run exactly python3

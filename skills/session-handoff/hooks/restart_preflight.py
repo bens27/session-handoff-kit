@@ -288,6 +288,19 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             return blocked('human-hold')
         if fm.get('status') != 'open' or not ledger.publication_valid(path, text, fm):
             return blocked('publication-not-ready')
+        if fm.get('project_hooks'):
+            workspace = fm.get('workspace') or root
+            try:
+                baseline = json.loads(fm['project_hooks'])
+                current = protocol.project_hook_snapshot(workspace)
+                if not isinstance(baseline, dict) or set(baseline) != set(current):
+                    return blocked('invalid-hook-baseline')
+                for name, digest in current.items():
+                    if baseline[name] != digest:
+                        return dict(blocked('hooks-changed'), path=os.path.join(workspace, name),
+                                    action='Project hook configuration changed since save; resolve host hook approval before a new restart.')
+            except (OSError, ValueError, TypeError):
+                return blocked('hook-config-unreadable')
         if ledger.resolve(path, root).get('authoritative') != path:
             return blocked('stale-checkpoint')
         # Validate every persisted intent, including legacy request IDs. A

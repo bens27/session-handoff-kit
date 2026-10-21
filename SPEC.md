@@ -464,6 +464,14 @@ prunes, under the registry lock, retrieved/refused intents older than 30 days
 whose checkpoint is no longer open and authoritative (compared by real path),
 without waiting on a busy record's lock and removing its lock sidecar; pending intents (expired
 or not) and invalid records are never pruned.
+New saves record the hook-observed workspace (or project root) and SHA256 of
+`.claude/settings.json` and `.claude/settings.local.json`, including absence.
+Preflight compares that save-time baseline before creating an intent. Drift
+returns `blocked`, `hooks-changed` and the file path; unreadable configuration
+blocks. Legacy checkpoints without a baseline retain existing behavior. This
+comparison detects drift, not host approval; the host should preserve approval
+across replacements of the same terminal.
+
 Successor confirmation automatically imports a Codex completed MCP event or
 Claude tool-use/result pair from the predecessor native transcript, matching the exact saved prompt, predecessor thread, terminal,
 post-intent completion time and `ok:true,scheduled:true` AgentsRoom response.

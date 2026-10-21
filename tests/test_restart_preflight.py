@@ -126,7 +126,37 @@ class RestartTests(unittest.TestCase):
             restart.record_acceptance(self.root, 'restart-1', valid)
         self.assertFalse(restart.status(self.root, 'restart-1')['host_confirmed'])
 
+    def test_project_hook_drift_blocks_before_creating_restart_intent(self):
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')
+        blocked = self.preflight()
+        self.assertEqual(blocked['outcome'], 'blocked')
+        self.assertEqual(blocked['reason'], 'hooks-changed')
+        self.assertEqual(blocked['path'], str(config))
+        self.assertIsNone(restart.status(self.root, 'restart-1'))
+        config.unlink()
+        self.assertTrue(self.preflight()['dispatch'])
 
+    def test_modified_and_deleted_project_hook_files_are_detected(self):
+        configs = [Path(self.root) / '.claude' / name for name in ('settings.json', 'settings.local.json')]
+        configs[0].parent.mkdir()
+        for path in configs:
+            path.write_text('{"hooks": {}}')
+        saved = protocol.save(self.root, 'old', 'hook-baseline', dict(
+            topic='hooks', description='Saved hook baseline',
+            body='## Objective\nFix\n## Current state\nSaved\n## Next steps\nContinue\n'))
+        for path in configs:
+            for value in ('{"hooks":{"Stop":[]}}', None):
+                if value is None:
+                    path.unlink()
+                else:
+                    path.write_text(value)
+                result = self.preflight(path=saved['path'])
+                self.assertEqual(result['reason'], 'hooks-changed')
+                self.assertEqual(result['path'], str(path))
+                path.write_text('{"hooks": {}}')
+        self.assertTrue(self.preflight(path=saved['path'])['dispatch'])
 
     def test_intent_is_durable_and_duplicate_never_dispatches_twice(self):
         self.assertEqual(self.preflight()['outcome'], 'ready')

@@ -522,6 +522,17 @@ def original_retry_session(root, session, request_id):
         return False  # Unreadable state keeps hook identity; save itself reports the failure.
 
 
+def project_hook_snapshot(workspace):
+    """Hash project-scope config bytes; missing files are part of the baseline."""
+    result = {}
+    for name in ('.claude/settings.json', '.claude/settings.local.json'):
+        path = os.path.join(workspace, name)
+        try:
+            with open(path, 'rb') as stream:
+                result[name] = hashlib.sha256(stream.read()).hexdigest()
+        except FileNotFoundError:
+            result[name] = None
+    return result
 
 
 def save(root, session, request_id, document):
@@ -655,6 +666,10 @@ def save(root, session, request_id, document):
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
         fields['workspace_changes_hash'] = workspace_changes_hash(root)
+        workspace = os.path.realpath(note.get('cwd') or root)
+        fields['workspace'] = workspace
+        fields['project_hooks'] = json.dumps(project_hook_snapshot(workspace), sort_keys=True)
+
         if predecessor:
             fields['predecessor'] = predecessor
         progress = save_progress(root, fields, document['continuity'], prior)
