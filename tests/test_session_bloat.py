@@ -243,6 +243,18 @@ with patch('time.time', return_value=stamp):
         self.assertEqual(second['transition']['kind'], 'paused')
         self.assertIn('restart-cooldown', second['transition']['diagnostics']['pause_reasons'])
 
+    def test_continuous_opt_out_keeps_restart_budget(self):
+        (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['work'])))
+        self.clock = float(int(time.time()))
+        for n in range(5):  # five distinct-session intents, each past the 120 s cooldown
+            self.hook(140000, session='b%d' % n)
+            self.save(session='b%d' % n, topic='t%d' % n)
+            self.clock += 130
+        self.hook(140000, session='b9')
+        out = self.save(session='b9')
+        self.assertEqual(out['transition']['kind'], 'paused')
+        self.assertIn('restart-budget', out['transition']['diagnostics']['pause_reasons'])
+
     def test_other_topic_is_not_exempted(self):
         (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['other'])))
         self.assertEqual(self.rapid_resume_save()['transition']['kind'], 'paused')

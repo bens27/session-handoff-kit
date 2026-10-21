@@ -1201,7 +1201,7 @@ def clean_pytest_summary(log):
 
 def section(body, title):
     import re
-    match = re.search(r'^## %s(?:[ \t].*)?$\n(.*?)(?=^## |\Z)' % re.escape(title), body, re.M | re.S)
+    match = re.search(r'^## %s(?:[ \t][^\n]*)?$\n(.*?)(?=^## |\Z)' % re.escape(title), body, re.M | re.S)
     return match[1].strip() if match else ''
 
 

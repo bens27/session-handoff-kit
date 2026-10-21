@@ -43,6 +43,17 @@ class ResumeCliTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         return out['path']
 
+    def test_resume_extracts_next_step_under_relaxed_headings(self):
+        for n, heading in enumerate(('## Next steps (ordered)', '## Next steps ', '## Next steps')):
+            topic = 'relaxed-%d' % n
+            body = BODY.replace('## Next steps', heading, 1).replace('Run the parser checks.', '1. FIRST\n2. second')
+            code, saved = self.run_cli('save', '--session', 'old', '--request-id', 'r-' + topic,
+                                       input=json.dumps(dict(topic=topic, description='d', body=body)))
+            self.assertEqual(code, 0, saved)
+            _, out = self.run_cli('resume', saved['path'], '--session', 'new-%d' % n)
+            self.assertEqual(out['outcome'], 'resumed', out)
+            self.assertEqual(out['next_step'], '1. FIRST\n2. second', heading)
+
     def test_lookup_marks_and_selects_this_terminals_handoff(self):
         mine = self.save('alpha', terminal='term-a')
         self.save('beta', terminal='term-b')

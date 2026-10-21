@@ -530,6 +530,8 @@ A topic listed in the `continuous_topics` setting (string list, from
 `~/.context-watch/thresholds.json` or `<root>/.context-watch.json`) is exempt from
 pausing on `rapid-resume` and `repeated-topic`; the reasons are still reported and
 `continuous_topic` is true in the diagnostics. Hard limits below are unaffected.
+A repository `.context-watch.json` is honored for this key (project scope is intentional), so a repository
+can relax the soft pause for its listed topics; `restart-budget` and `restart-cooldown` stay hard stops.
 Required body headings (`## Objective`, `## Current state`, `## Next steps`) match
 at line start; text after a space following the title is allowed.
 Five prior AgentsRoom restart intents within 3600 seconds (`restart-budget`) or
