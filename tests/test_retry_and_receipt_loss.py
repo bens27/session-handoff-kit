@@ -235,6 +235,46 @@ class ReceiptLossTests(Base):
         code, own = self.successor('sess-r', 'term-r', 'req-r')
         self.assertEqual(own['outcome'], 'saved', own)
 
+    def test_lost_receipt_holder_action_points_to_recovery_not_save(self):
+        path, receipt = self.resumed()
+        self.damage(receipt, 'missing')
+        code, out = self.successor('sess-r', 'term-r', 'req-1')
+        self.assertEqual(out['outcome'], 'conflict', out)
+        self.assertIn('recover-transfer', out['action'])
+        self.assertIn('--confirm-holder', out['action'])
+        self.assertNotIn('save --input', out['action'])
+        self.assertIn('missing or unusable', out['action'])
+
+    def test_valid_receipt_without_terminal_gets_neutral_wording(self):
+        code, saved = self.save(dict(topic='mine', description='Mine', body=BODY), 'sess-a', 'req-1', 'term-a')
+        code, out = self.run_cli('resume', saved['path'], '--session', 'sess-r')  # no terminal identity at all
+        self.assertEqual(out['outcome'], 'resumed', out)
+        doc = dict(topic='mine', description='Next', body=BODY + '\nNext.\n', predecessor=saved['path'])
+        code, res = self.save(doc, 'sess-x', 'req-n', 'term-x')
+        self.assertEqual(res['outcome'], 'conflict', res)
+        self.assertIn('recover-transfer', res['action'])
+        self.assertNotIn('missing or unusable', res['action'])
+        self.assertIn('not tied to any terminal', res['action'])
+
+
+class MissingPathTests(Base):
+    """F4/F5: commands aimed at an absent checkpoint must not leave artifacts or misdirect."""
+
+    def missing(self):
+        return str(self.root / '.handoffs' / 'nope.md')
+
+    def test_acknowledge_of_absent_path_creates_no_lock(self):
+        code, out = self.run_cli('acknowledge', self.missing(), '--session', 'sess-a', terminal='term-a')
+        self.assertEqual(code, 1)
+        self.assertEqual(out['outcome'], 'blocked', out)
+        self.assertEqual(sorted(os.listdir(self.root / '.handoffs')), [])
+
+    def test_repair_of_absent_path_reports_none_without_artifacts(self):
+        code, out = self.run_cli('repair', self.missing(), '--session', 'sess-a', terminal='term-a')
+        self.assertEqual(out['outcome'], 'none', out)
+        self.assertIn('interrupted', out['action'])
+        self.assertEqual(sorted(os.listdir(self.root / '.handoffs')), [])
+
 
 if __name__ == '__main__':
     unittest.main()

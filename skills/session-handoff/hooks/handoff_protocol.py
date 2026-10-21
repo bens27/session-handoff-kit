@@ -2,6 +2,7 @@
 from handoff_contract import project_output, continuity_items, continuation_document
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -604,17 +605,27 @@ def save(root, session, request_id, document):
             held = ledger._read_fm(predecessor)
             if held.get('status') == 'resumed' and not owns_transfer(root, predecessor, held, session):
                 holder = resumed_holder(root, predecessor, held)
+                ledger_cli = shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py'))
+                untraceable = not holder.get('terminal') and not holder.get('runner_id')
+                recovery = (dict(command='python3 %s recover-transfer %s --previous-session %s --resumed-at %s --fingerprint %s' % (
+                    ledger_cli, shlex.quote(predecessor), shlex.quote(held.get('resumed_by', '')),
+                    shlex.quote(held.get('resumed', '')), snapshot(predecessor)),
+                    requires='Explicit user confirmation that this terminal performed this exact transfer; then add --confirm-holder.')
+                    if untraceable else None)
+                if recovery:
+                    # No terminal/runner is recorded for the holder, so this terminal cannot be told apart from it and save is refused here.
+                    why = ('its transfer receipt is missing or unusable' if not holder
+                           else 'its transfer receipt is not tied to any terminal or runner')
+                    action = ('Handoff resumed by %s at %s, but %s, so the holder cannot be verified and save is refused. '
+                              'If the user confirms this terminal performed that transfer, run the `recovery` command (recover-transfer ... --confirm-holder) in this terminal, then retry the save; '
+                              'otherwise do not supersede it.' % (held.get('resumed_by'), held.get('resumed'), why))
+                else:
+                    action = ('Handoff resumed by %s in terminal %s at %s; do not supersede a different or untraceable holder. Continue in the holding terminal with: python3 %s save --input <original-draft.json>.'
+                              % (held.get('resumed_by'), holder.get('terminal') or 'unknown', held.get('resumed'), ledger_cli))
                 return dict(outcome='conflict', path=predecessor,
                             holder=dict(resumed_by=held.get('resumed_by'), terminal=holder.get('terminal'),
                                         runner_id=holder.get('runner_id'), resumed=held.get('resumed')),
-                            recovery=(dict(command='python3 %s recover-transfer %s --previous-session %s --resumed-at %s --fingerprint %s' % (
-                                shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py')), shlex.quote(predecessor),
-                                shlex.quote(held.get('resumed_by', '')), shlex.quote(held.get('resumed', '')), snapshot(predecessor)),
-                                requires='Explicit user confirmation that this terminal performed this exact transfer; then add --confirm-holder.')
-                                if not holder.get('terminal') and not holder.get('runner_id') else None),
-                            action='Handoff resumed by %s in terminal %s at %s; do not supersede a different or untraceable holder. Continue in the holding terminal with: python3 %s save --input <original-draft.json>.'
-                            % (held.get('resumed_by'), holder.get('terminal') or 'unknown', held.get('resumed'),
-                               shlex.quote(os.path.join(os.path.dirname(__file__), 'handoff_ledger.py'))))
+                            recovery=recovery, action=action)
             # Only a command this machine saved is inherited; an untrusted predecessor's would be laundered into a trusted successor.
             if not document.get('verify') and ledger.trusted(record['path'], record['text'], record['fm']):
                 document = dict(document, verify=record['fm'].get('verify', ''))
@@ -767,6 +778,8 @@ def recovery_path(root, path):
 
 def repair(path, root, session):
     root, path = ledger.project_root(root), os.path.realpath(path)
+    if not os.path.exists(path):
+        return dict(outcome='none', path=path, action='No checkpoint exists at this path; nothing to repair. Use lookup to find the intended checkpoint. If a save was interrupted before the document was written, retry the original save request ID and draft.')
     with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(path):
         try:
             recovery = load_state_json(recovery_path(root, path))
@@ -1077,6 +1090,8 @@ def prepared_receipt(path, root, session):
 
 def acknowledge(path, root, session):
     root = ledger.project_root(root)
+    if not os.path.exists(path):
+        raise FileNotFoundError(errno.ENOENT, 'No such file or directory', path)  # before locked(): no stray .lock
     with ledger.locked(path):
         fm = ledger._read_fm(path)
         ledger._check_owner(path, session)
