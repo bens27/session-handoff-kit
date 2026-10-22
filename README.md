@@ -595,7 +595,15 @@ native cycle in one command with compact output:
   identity apart from host acceptance (false until native acceptance is imported). A rerun by the same successor replays; any
   failure, including a failed resume, returns `outcome: blocked` with its `stage`
   (`identity`, `intent`, `binding`, `prepare`, `successor`, `hold`, `resume`) and
-  preserves state. A pending intent older than 7 days is refused (stage `intent`,
+  preserves state. A prepare refusal includes the recorded `path`, exact adopt
+  `command` and available retrieval-only `preparation` (body, dependencies,
+  continuity and predecessor; no delivery receipt). Inspect that path for the
+  objective/next step if no body is available. `prepare-path-alias` distinguishes
+  equivalent canonical paths from `prepare-target-mismatch`; both leave the
+  intent pending. Resolve the cause before retrying; an explicit adopt command
+  authorizes only the recorded checkpoint, never a different checkpoint or a
+  bypass of identity, trust, ownership or holds.
+  A pending intent older than 7 days is refused (stage `intent`,
   `restart-intent-expired`), also by the stepwise `successor`; dispatch reports it
   as a stale warning rather than routing a successor, and it blocks only its own
   checkpoint's restart, so a new save can restart. The retrieved intent keeps a

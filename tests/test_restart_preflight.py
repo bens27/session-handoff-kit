@@ -765,6 +765,67 @@ class AdoptTests(unittest.TestCase):
                              env=dict(self.env, **env), text=True, capture_output=True)
         return run.returncode, run.stdout, self.json.loads(run.stdout)
 
+    def test_prepare_target_change_reports_context_and_authorization_without_adopting(self):
+        saved = protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'work', 'description': 'Later work', 'predecessor': self.path,
+            'continuity': [{'id': 'pending', 'status': 'open', 'text': 'Keep this obligation'}],
+            'body': '## Objective\nLater objective\n## Current state\nLater state\n## Next steps\nLater next step\n'})
+        self.assertEqual(saved['outcome'], 'saved', saved)
+        self.pointer('new')
+        _, _, result = self.adopt()
+        self.assertEqual((result['outcome'], result['stage']), ('blocked', 'prepare'))
+        self.assertEqual(result['reason'], 'prepare-target-mismatch')
+        self.assertEqual(result['path'], self.path)
+        self.assertEqual(result['preparation']['path'], saved['path'])
+        self.assertIn('Later objective', result['preparation']['body'])
+        self.assertIn('Later next step', result['preparation']['body'])
+        self.assertEqual(result['preparation']['predecessor'], self.path)
+        self.assertEqual(result['preparation']['continuity'][0]['id'], 'pending')
+        self.assertNotIn('delivery_receipt', result['preparation'])
+        self.assertEqual(result['command'], restart.adopt_command(self.root, 'req-1'))
+        self.assertIn('authoriz', result['action'])
+        self.assertIn('different checkpoint', result['action'])
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+        self.assertEqual(protocol.history(self.root)['items'][0]['status'], 'open')
+
+    def test_adopt_reports_equivalent_path_alias_without_confirming_successor(self):
+        alias = Path(self.root) / '.handoffs' / '00000000-alias.md'
+        alias.symlink_to(self.path)
+        Path(str(alias) + '.published').symlink_to(self.path + '.published')
+        self.pointer('new')
+        _, stdout, result = self.adopt()
+        self.assertEqual((result['outcome'], result['stage'], result['reason']),
+                         ('blocked', 'prepare', 'prepare-path-alias'), result)
+        self.assertEqual(result['path'], self.path)
+        self.assertEqual(result['preparation']['path'], str(alias))
+        self.assertEqual(os.path.realpath(result['preparation']['path']), self.path)
+        self.assertEqual(result['command'], restart.adopt_command(self.root, 'req-1'))
+        self.assertEqual(stdout.count('UNIQUE-BODY-MARKER'), 1)
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'pending')
+
+    def test_prepare_dependency_block_preserves_diagnostic_and_exact_retry_command(self):
+        import shlex, subprocess
+        restart.record_refusal(self.root, 'req-1', 'Replace fixture intent')
+        dependency = Path(self.root) / 'required.txt'
+        dependency.write_text('Required context')
+        saved = protocol.save(self.root, 'old', 'save-dependency', {
+            'topic': 'dependency', 'description': 'Dependency work', 'body': self.BODY,
+            'references': ['required.txt']})
+        ready = restart.preflight(self.root, saved['path'], 'old', 'term', 'req-dependency',
+                                  workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        dependency.unlink()
+        self.pointer('new')
+        _, _, result = self.adopt(request_id='req-dependency')
+        self.assertEqual(result['reason'], 'prepare-needs-context')
+        self.assertEqual(result['path'], saved['path'])
+        self.assertIn('required.txt', result['preparation']['action'])
+        self.assertEqual(restart.status(self.root, 'req-dependency')['state'], 'pending')
+        dependency.write_text('Required context')
+        run = subprocess.run(shlex.split(result['command']), env=self.env, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)['outcome'], 'resumed', run.stdout)
+
     def test_identity_mismatch_reports_expected_and_observed_facts(self):
         self.pointer('old')
         _, _, result = self.adopt()

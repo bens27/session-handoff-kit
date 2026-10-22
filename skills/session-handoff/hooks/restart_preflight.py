@@ -702,7 +702,8 @@ def adopt(root, request_id, binding=None):
 
     Identity comes only from hook/host facts and the environment terminal, never
     from caller claims. The body is emitted once, by resume; the internal
-    prepare only produces the delivery receipt. Any failure preserves state.
+    prepare only produces the delivery receipt on success. A blocked prepare
+    returns retrieval context without confirming a successor or authorizing it.
     """
     def blocked(stage, reason):
         return dict(outcome='blocked', stage=stage, reason=str(reason)[:500], host_confirmed=False,
@@ -726,12 +727,34 @@ def adopt(root, request_id, binding=None):
                       successor_session='different from predecessor'),
         observed=dict(session=session, terminal=terminal, host_session=info['host_session_id'],
                       source=info['identity_source']))
+
+    def prepare_blocked(reason, prepared=None):
+        command = adopt_command(root, request_id)
+        result = dict(blocked('prepare', reason), path=record['path'], identity=identity_facts,
+                      command=command)
+        if prepared is not None:
+            # Retrieval context survives the refusal; a receipt must not suggest
+            # that this different or incomplete preparation confirmed adoption.
+            result['preparation'] = {k: v for k, v in prepared.items() if k != 'delivery_receipt'}
+        detail = {
+            'prepare-path-alias': 'Preparation returned an equivalent canonical path under an alias; reconcile path spelling before retrying. ',
+            'prepare-target-mismatch': 'Preparation selected a different checkpoint; this intent cannot adopt it. ',
+        }.get(reason, '')
+        result['action'] = (
+            'Inspect the recorded checkpoint at %s for its objective and next step. '
+            'Any preparation below is retrieval-only and describes its returned path, not an adopted checkpoint. '
+            '%sResolve the reported block first. Explicitly running this exact command authorizes continuation '
+            'of the recorded checkpoint only, subject to identity, trust, ownership and hold checks: %s. '
+            'It does not authorize a different checkpoint; ask the user before switching work. '
+            'Preserve this intent; do not restart or dispatch another intent.' % (record['path'], detail, command))
+        return result
+
     try:
         fm = Record.load(record['path']).fm
     except FileNotFoundError:
         fm = {}  # Let prepare/resume report a missing checkpoint at its established stage.
     except (OSError, ValueError) as exc:
-        return blocked('prepare', exc)
+        return prepare_blocked(exc)
     workspace = fm.get('workspace') or fm.get('project') or root
     missing = not os.path.isdir(workspace)
     workspace_facts = dict(path=workspace, exists=not missing,
@@ -752,9 +775,14 @@ def adopt(root, request_id, binding=None):
         try:
             prepared = protocol.prepare(record['path'], root, session)
         except (OSError, ValueError, TypeError, KeyError, ledger.ConflictError) as exc:
-            return blocked('prepare', exc)
-        if prepared.get('outcome') != 'retrieved' or prepared.get('path') != record['path']:
-            return blocked('prepare', prepared.get('action') or prepared.get('outcome'))
+            return prepare_blocked(exc)
+        if prepared.get('outcome') != 'retrieved':
+            return prepare_blocked('prepare-' + str(prepared.get('outcome', 'unknown')), prepared)
+        path = prepared.get('path')
+        if path != record['path']:
+            reason = ('prepare-path-alias' if isinstance(path, str) and os.path.realpath(path) == record['path']
+                      else 'prepare-target-mismatch')
+            return prepare_blocked(reason, prepared)
         try:
             record = confirm_successor(root, request_id, session, None, prepared['delivery_receipt'])
         except (OSError, ValueError, TypeError, KeyError) as exc:

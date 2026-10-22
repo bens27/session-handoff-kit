@@ -481,6 +481,17 @@ identity, refuses a pending intent older than 7 days (as does the stepwise
 checkpoint's restart), prepares internally, records
 the durable receipt, stops with `outcome: held` under a dispatcher hold, then
 resumes, emitting the body once; a failed resume is `blocked` at stage `resume`.
+If preparation blocks, return the recorded checkpoint `path`, the exact adopt
+`command`, and available retrieval-only output under `preparation`, excluding
+the delivery receipt. Preserve objective/next-step context, continuity and
+predecessor when retrieved; otherwise direct inspection to the recorded path.
+Use `prepare-<outcome>` for an unsuccessful retrieval, `prepare-path-alias` for
+an equivalent canonical path with different spelling, and
+`prepare-target-mismatch` for a different checkpoint. Both path refusals retain
+the pending intent without confirming a successor, claiming or executing work.
+Resolve the cause before rerunning; explicitly running the command authorizes
+only the recorded checkpoint under existing identity, trust, ownership and hold
+gates. Switching to different work requires a separate user decision.
 The retrieved intent keeps `retrieval_receipt` (`token_sha256`, `path`,
 `fingerprint`, `created`, `references`, `confirmed_at`), so the confirmed
 delivery stays verifiable after a later resume rewrites the live `.delivery`
