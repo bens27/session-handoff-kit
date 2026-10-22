@@ -13,7 +13,9 @@ import tempfile
 import time
 from datetime import datetime
 
+import handoff_identity
 import handoff_ledger as ledger
+from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
 
 # A native CLI can parse a bare "resume" positional as its own subcommand.
 AGENTSROOM_RESTART_PROMPT = 'continue the handoff'
@@ -44,61 +46,19 @@ def hooks_dir():
     return installed if os.path.isdir(installed) and os.path.realpath(installed) == here else here
 
 
-def terminal_id():
-    """Wrapper identity that survives /clear: one terminal, one current handoff.
-
-    A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID. Ids over
-    120 characters keep a readable prefix plus a digest of the whole value, so
-    two long ids sharing a prefix never name the same terminal."""
-    for name in ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
-        value = (os.environ.get(name) or '').strip()
-        if value:
-            value = value.splitlines()[0].strip()
-            if len(value) > 120:
-                value = value[:100] + '-' + hashlib.sha256(value.encode('utf-8', 'replace')).hexdigest()[:16]
-            return value
-    return ''
-
-
-def terminal_session(root):
-    """Session id the hooks recorded for this terminal in this project, or ''."""
-    import time
-    terminal = terminal_id()
-    if not terminal:
-        return ''
-    key = os.path.realpath(ledger.project_root(root)) + '\0' + terminal
-    path = os.path.join(tempfile.gettempdir(), 'context-watch-terminal-%s.json'
-                        % hashlib.sha1(key.encode('utf-8', 'replace')).hexdigest()[:20])
-    try:
-        data = load_state_json(path, 4096)
-        if 0 <= time.time() - float(data['ts']) <= 86400 and isinstance(data['session_id'], str):
-            host = (os.environ.get('CODEX_THREAD_ID') or '').strip()
-            # A terminal survives restarts; its cached hook session may not.
-            if host and host != (data.get('host_session_id') or data['session_id']):
-                return ''
-            return data['session_id'].strip()[:200]
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return ''
-
-
-def default_session(root):
-    return terminal_session(root) or (os.environ.get('CODEX_THREAD_ID') or os.environ.get('HANDOFF_SESSION_ID') or '').strip()
-
-
 def session_info(root):
     """Read live hook facts without scanning transcripts or changing identity."""
     recorded = terminal_session(root)
     session = default_session(root)
     note = ledger.read_session_note(root, session=session)
     return dict(outcome='recorded' if recorded else 'unrecorded',
-                project=ledger.project_root(root), terminal=terminal_id(),
-                session_id=session, identity_source='hook' if recorded else ('host' if os.environ.get('CODEX_THREAD_ID') else ('environment' if session else 'none')),
-                host_session_id=(os.environ.get('CODEX_THREAD_ID') or '').strip(),
+                project=handoff_identity.project_root(root), terminal=terminal_id(),
+                session_id=session, identity_source='hook' if recorded else ('host' if handoff_identity.host_session() else ('environment' if session else 'none')),
+                host_session_id=handoff_identity.host_session(),
                 transcript_path=note.get('transcript_path') or '',
                 pressure_fired=bool(note.get('fired')),
                 action=('Use the recorded session; omit --session for save/resume.' if recorded else
-                        'Use the current host session; omit --session for save/resume.' if os.environ.get('CODEX_THREAD_ID') else
+                        'Use the current host session; omit --session for save/resume.' if handoff_identity.host_session() else
                         'No hook-recorded identity. Use --session with this session\'s actual id; '
                         'generate one UUID only if the host supplies none. Transcript location is unavailable unless recorded by a hook.'))
 
@@ -115,7 +75,7 @@ def paused_reasons(value, limit=120):
 
 def hook_opening_note(event):
     """Read-only selection for the bounded hook worker; never adopt foreign work."""
-    root = ledger.project_root(event.get('cwd') or os.getcwd())
+    root = handoff_identity.project_root(event.get('cwd') or os.getcwd())
     session = str(event.get('session_id') or '')
     terminal = terminal_id()
     errors = []
@@ -249,10 +209,6 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
 
 
 RECOMMENDED_DOCUMENT_BYTES = 24_000
-
-
-def _truthy(value):
-    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def project_setting(root, key, kind, user_only=False):
@@ -429,7 +385,7 @@ def _transition(root, guard=None):
             '"%s"; then end the turn. Blocked means manual fresh-session continuation; pending intent requires '
             'reconciliation, never redispatch. Preserve human holds and worker results.')
             % (shlex.quote(os.path.join(hooks_dir(), 'restart_preflight.py')),
-               shlex.quote(os.path.realpath(ledger.project_root(root))),
+               shlex.quote(os.path.realpath(handoff_identity.project_root(root))),
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
@@ -552,7 +508,7 @@ def original_retry_session(root, session, request_id):
     if not session or not request_id or not terminal:
         return False
     try:
-        root = ledger.project_root(root)
+        root = handoff_identity.project_root(root)
         identity = hashlib.sha256((os.path.realpath(root) + '\0' + session + '\0' + request_id).encode()).hexdigest()
         return any(r['fm'].get('checkpoint_id') == identity and r['fm'].get('status') == 'unpublished'
                    and r['fm'].get('session_id') == session and r['fm'].get('terminal') == terminal
@@ -602,7 +558,7 @@ def inbox_document(root, document):
 
 
 def save(root, session, request_id, document):
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     prune_publication_intents(root)
     if not isinstance(document, dict):
         raise ValueError('Draft must be a JSON object.')
@@ -628,7 +584,7 @@ def save(root, session, request_id, document):
     fingerprint = hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
     from contextlib import ExitStack
     with ExitStack() as locks:
-        locks.enter_context(ledger.locked(ledger.session_note_path(root, 'publisher')))
+        locks.enter_context(ledger.locked(handoff_identity.publisher_lock_path(root)))
         errors = []
         records = ledger._records(root, errors)
         if errors:
@@ -819,13 +775,13 @@ def snapshot(path):
 
 
 def recover_transfer(path, root, session, previous_session, resumed_at, fingerprint, confirm=False):
-    root, path = ledger.project_root(root), os.path.realpath(path)
+    root, path = handoff_identity.project_root(root), os.path.realpath(path)
     if not confirm:
         return dict(outcome='needs-confirmation', path=path,
                     action='Ask the user to confirm that this terminal actually performed the legacy transfer, using its transcript and exact holder/time. Only then rerun with --confirm-holder. The saver terminal is not evidence.')
     if not terminal_id():
         raise ValueError('Legacy recovery requires the current stable terminal identity.')
-    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(path):
+    with ledger.locked(handoff_identity.publisher_lock_path(root)), ledger.locked(path):
         fm = ledger._read_fm(path)
         ledger._check_owner(path, session)
         if (ledger.resolve(path, root)['authoritative'] != path or fm.get('status') != 'resumed'
@@ -852,7 +808,7 @@ INTENT_TTL = 30 * 86400
 
 def prune_publication_intents(root):
     from pathlib import Path
-    with ledger.locked(ledger.session_note_path(root, 'publisher')):
+    with ledger.locked(handoff_identity.publisher_lock_path(root)):
         directory = Path(os.path.expanduser('~/.local/state/session-handoff/publications'))
         for item in directory.glob('*.json'):
             try:
@@ -864,15 +820,15 @@ def prune_publication_intents(root):
                 pass
 
 def recovery_path(root, path):
-    key = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + os.path.realpath(path)).encode()).hexdigest()
+    key = hashlib.sha256((os.path.realpath(handoff_identity.project_root(root)) + '\0' + os.path.realpath(path)).encode()).hexdigest()
     return os.path.expanduser('~/.local/state/session-handoff/publications/' + key + '.json')
 
 
 def repair(path, root, session):
-    root, path = ledger.project_root(root), os.path.realpath(path)
+    root, path = handoff_identity.project_root(root), os.path.realpath(path)
     if not os.path.exists(path):
         return dict(outcome='none', path=path, action='No checkpoint exists at this path; nothing to repair. Use lookup to find the intended checkpoint. If a save was interrupted before the document was written, retry the original save request ID and draft.')
-    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(path):
+    with ledger.locked(handoff_identity.publisher_lock_path(root)), ledger.locked(path):
         try:
             recovery = load_state_json(recovery_path(root, path))
         except FileNotFoundError:
@@ -902,14 +858,14 @@ def repair(path, root, session):
 
 def receipt_path(root, session, path=None):
     if path is None:
-        return ledger.session_note_path(root, session) + '.prepared'
-    key = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + session + '\0'
+        return handoff_identity.prepared_receipt_path(root, session)
+    key = hashlib.sha256((os.path.realpath(handoff_identity.project_root(root)) + '\0' + session + '\0'
                           + os.path.realpath(path)).encode()).hexdigest()
     return os.path.expanduser('~/.local/state/session-handoff/transfers/' + key + '.json')
 
 
 def transfer_seal_fields(root, session, path, receipt):
-    identity = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + session
+    identity = hashlib.sha256((os.path.realpath(handoff_identity.project_root(root)) + '\0' + session
                                + '\0' + os.path.realpath(path)).encode()).hexdigest()
     payload = {k: v for k, v in receipt.items() if k != 'seal'}
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -927,7 +883,7 @@ def valid_transfer_receipt(root, session, path, receipt):
 
 
 def write_receipt(root, session, path, receipt):
-    receipt.update(session_id=session, project=os.path.realpath(ledger.project_root(root)))
+    receipt.update(session_id=session, project=os.path.realpath(handoff_identity.project_root(root)))
     identity, fingerprint = transfer_seal_fields(root, session, path, receipt)
     receipt['seal'] = ledger.seal(identity, fingerprint)
     write_json(receipt_path(root, session, path), receipt)
@@ -1011,7 +967,7 @@ def installed_catalog():
 
 def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None):
     import time
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     errors = []
     ledger._records(root, errors)
     if errors:
@@ -1059,7 +1015,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         # A server-stored receipt plus possession of its opaque token binds reuse
         # to a previous delivery, this session, and unchanged content.
         reference_fingerprints = dict(dependencies)
-        delivery_file = receipt_path(root, session) + '.delivery'
+        delivery_file = handoff_identity.delivery_receipt_path(root, session)
         reused_bytes = 0
         if reuse_receipt:
             try:
@@ -1182,7 +1138,7 @@ def prepared_receipt(path, root, session):
 
 
 def acknowledge(path, root, session):
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     if not os.path.exists(path):
         raise FileNotFoundError(errno.ENOENT, 'No such file or directory', path)  # before locked(): no stray .lock
     with ledger.locked(path):
@@ -1205,7 +1161,7 @@ def acknowledge(path, root, session):
         note = ledger.read_session_note(root, session=session)
         note.update(session_id=session, ts=time.time(), resumed_at=time.time(), resumed_topic=fm.get('topic'))
         try:
-            write_json(ledger.session_note_path(root, session), note)
+            write_json(handoff_identity.session_note_path(root, session), note)
         except OSError:
             pass  # Transfer succeeded; optional diagnostics must not turn it into a failed resume.
     return dict(outcome='resumed', path=path, action='Transfer acknowledged. Continue the authorized next step.')
@@ -1219,7 +1175,7 @@ def needs_confirmation(path, command):
 def verify(path, root, session, timeout=60, confirm=False):
     import subprocess
     import signal
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     receipt = prepared_receipt(path, root, session)
     fm = ledger._read_fm(path)
     command, baseline = fm.get('verify'), ledger._split_csv(fm.get('verify_baseline', ''))
@@ -1403,7 +1359,7 @@ def replay_transfer(root, session, target):
 def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
            catalog=None, reuse_receipt=None, legacy_next_step=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     prune_transfer_payloads(root)
     prune_publication_intents(root)
     errors = []
@@ -1514,7 +1470,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
 def wait(root, target, status, timeout=600, interval=2):
     """Poll until the newest handoff matching a topic or path reaches status (saved/open, or resumed)."""
     import time
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     deadline = time.monotonic() + max(0, timeout)
     real = os.path.realpath(os.path.expanduser(target))
     while True:
@@ -1578,7 +1534,7 @@ def opening_action(prompt, result, session, auto=False, newest=False):
 
 
 def history(root, topic=None, offset=0, limit=10):
-    records = ledger._records(ledger.project_root(root))
+    records = ledger._records(handoff_identity.project_root(root))
     records = sorted((r for r in records if topic is None or r['topic'] == topic),
                      key=lambda r: (r['ended'], r['path']), reverse=True)
     limit = max(1, min(20, limit))
@@ -1648,7 +1604,7 @@ def telemetry(operation, root, session, result):
     note = ledger.read_session_note(root, session=session)
     record = dict(operation=operation, outcome=result['outcome'], timestamp=time.time(),
                   origin=os.environ.get('CONTEXT_WATCH_ORIGIN', 'live'), version=protocol_version(),
-                  project_id=hashlib.sha256(ledger.project_root(root).encode()).hexdigest()[:16],
+                  project_id=hashlib.sha256(handoff_identity.project_root(root).encode()).hexdigest()[:16],
                   session_id=session, metrics=result.get('metrics', {}),
                   startup_input_tokens=note.get('startup_input_tokens'),
                   observed_input_tokens=note.get('observed_input_tokens'))
@@ -1693,7 +1649,7 @@ def delivery_metrics(result, root, session, fields=None):
     if result['outcome'] == 'resumed':
         note.update(resume_delivery_tokens=metrics['estimated_delivery_tokens'])
         try:
-            write_json(ledger.session_note_path(root, session), note)
+            write_json(handoff_identity.session_note_path(root, session), note)
         except OSError:
             pass
 
@@ -1729,9 +1685,9 @@ def save_draft(a):
     recorded = predecessor_project(draft['predecessor']) if draft.get('predecessor') else ''
     if a.root is None:
         a.root = recorded or '.'
-    elif recorded and os.path.realpath(ledger.project_root(a.root)) != os.path.realpath(recorded):
+    elif recorded and os.path.realpath(handoff_identity.project_root(a.root)) != os.path.realpath(recorded):
         return dict(outcome='conflict', action='Predecessor belongs to project %s but save targets %s. Drop the root argument to save into the predecessor project, or use a distinct topic without predecessor.'
-                    % (recorded, os.path.realpath(ledger.project_root(a.root))))
+                    % (recorded, os.path.realpath(handoff_identity.project_root(a.root))))
     return draft
 
 
@@ -1746,7 +1702,7 @@ def redirect_save_root(a, explicit):
     if explicit:
         return None, ''
     start = os.path.realpath('.')
-    root = os.path.realpath(ledger.project_root(a.root))
+    root = os.path.realpath(handoff_identity.project_root(a.root))
     if not (ledger.under_temp_base(root) or (a.root == '.' and ledger.under_temp_base(start))):
         return None, ''
     recorded = ledger.read_project_pointer(getattr(a, 'session', None))
@@ -1872,7 +1828,7 @@ def cli(argv):
             return 1
     if hasattr(a, 'session'):
         recorded = terminal_session(getattr(a, 'root', '.'))
-        host = (os.environ.get('CODEX_THREAD_ID') or '').strip()
+        host = handoff_identity.host_session()
         chosen = recorded or host or a.session or default_session(getattr(a, 'root', '.'))
         retry = False
         if a.command == 'save' and a.session and chosen != a.session:
@@ -1926,7 +1882,7 @@ def cli(argv):
             result = lookup(a.root, a.max_age_days, a.offset, a.topic, session=a.session)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
-    result.setdefault('project', ledger.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
+    result.setdefault('project', handoff_identity.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
     if a.command == 'resume' and result['outcome'] == 'resumed':
         delivery_metrics(result, a.root, a.session, a.fields)
     telemetry(a.command, a.root, getattr(a, 'session', None), result)

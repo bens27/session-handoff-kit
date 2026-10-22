@@ -91,7 +91,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 
 TAIL_BYTES = 2_000_000   # only scan the tail of large transcripts
@@ -125,6 +124,15 @@ LEDGER = canonical_ledger()
 # handoff_protocol prints paths from its own __file__: import it from the same directory.
 if os.path.dirname(LEDGER) not in sys.path:
     sys.path.insert(0, os.path.dirname(LEDGER))
+try:
+    import handoff_identity  # noqa: E402
+    from handoff_identity import (  # noqa: E402,F401
+        auto_count_path, latch_path, session_key, terminal_pointer_path, truthy as _truthy)
+except ImportError:
+    # A hook copied without its siblings is a missing installation: stay silent.
+    if __name__ == "__main__":
+        sys.exit(0)
+    raise
 REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
 DEFAULT_RESERVE = 20_000     # room kept free for writing the handoff (reported windows only)
 STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
@@ -136,10 +144,6 @@ LABEL = {"claude": "[context-watch]",
 
 def env(name, default=""):
     return os.environ.get(name, default)
-
-
-def _truthy(value):
-    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 def config_setting(name, key, cwd=None):
@@ -177,22 +181,6 @@ def _ledger():
     return handoff_ledger
 
 
-def session_key(evt):
-    """The session id, else a hash of the transcript path, so sessions whose
-    host omits the id never share one latch; None when neither is known."""
-    sid = str(evt.get("session_id") or "").strip()
-    if sid:
-        return sid
-    tp = evt.get("transcript_path") or ""
-    return "t-" + hashlib.sha1(tp.encode("utf-8", "replace")).hexdigest()[:16] if tp else None
-
-
-def latch_path(session_id, stage=1):
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(session_id))
-    return os.path.join(tempfile.gettempdir(),
-                        "context-watch-%s.fired%s" % (safe, "" if stage == 1 else stage))
-
-
 def open_private(path, temp=False):
     """Text-mode write handle that never follows a symlink planted at `path` in a
     shared temp dir. A temp file (always `<final>.<pid>`) is created exclusively,
@@ -216,7 +204,7 @@ def write_session_note(cwd, evt, fired, context=None):
             return
         note = {"session_id": sid, "cwd": cwd,
                 "transcript_path": evt.get("transcript_path") or "", "ts": time.time()}
-        path = _ledger().session_note_path(cwd, sid)
+        path = handoff_identity.session_note_path(cwd, sid)
         previous = _ledger().read_session_note(cwd, session=sid)
         note.update({k: v for k, v in previous.items() if k.startswith('resume')})
         note.update({k: previous[k] for k in ('observed_occupancy_tokens', 'threshold', 'threshold_source',
@@ -259,11 +247,11 @@ def write_project_pointer(cwd, sid):
     """Record this session's project for saves run from a temp cwd. A temp project is
     never recorded (save ignores one), and an unchanged pointer under an hour old is
     left alone instead of being rewritten on every event."""
-    ledger = _ledger()
-    project = os.path.realpath(ledger.project_root(cwd))
-    if ledger.under_temp_base(project) or ledger.read_project_pointer(sid, max_age_s=3600) == project:
+    project = handoff_identity.canonical_root(cwd)
+    if (handoff_identity.under_temp_base(project)
+            or handoff_identity.read_project_pointer(sid, max_age_s=3600) == project):
         return
-    pointer = ledger.project_pointer_path(sid)
+    pointer = handoff_identity.project_pointer_path(sid)
     ptmp = "%s.%d" % (pointer, os.getpid())
     try:
         with open_private(ptmp, temp=True) as f:
@@ -279,17 +267,10 @@ def write_project_pointer(cwd, sid):
             pass
 
 
-def terminal_pointer_path(cwd, terminal):
-    root = os.path.realpath(_ledger().project_root(cwd))
-    digest = hashlib.sha1((root + "\0" + terminal).encode("utf-8", "replace")).hexdigest()[:20]
-    return os.path.join(tempfile.gettempdir(), "context-watch-terminal-%s.json" % digest)
-
-
 def write_terminal_pointer(cwd, sid):
     """This terminal's current session, so a shell command can find it without hook stdin."""
     try:
-        from handoff_protocol import terminal_id
-        terminal = terminal_id()
+        terminal = handoff_identity.terminal_id()
         if not terminal:
             return
         path = terminal_pointer_path(cwd, terminal)
@@ -309,15 +290,6 @@ def read_first_latch(path):
         return occ, base
     except Exception:
         return 0, None
-
-
-def auto_count_path(cwd):
-    try:
-        root = _ledger().project_root(cwd)
-    except Exception:
-        root = cwd
-    digest = hashlib.sha1(os.path.realpath(root).encode("utf-8", "replace")).hexdigest()[:20]
-    return os.path.join(tempfile.gettempdir(), "context-watch-auto-%s.count" % digest)
 
 
 # ---------------------------------------------------------------- transcript
@@ -390,7 +362,7 @@ def claim_once(evt, suffix):
     if not key:
         return True
     try:
-        os.close(os.open(latch_path(key) + suffix, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        os.close(os.open(handoff_identity.latch_claim_path(key, suffix), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
         return True
     except FileExistsError:
         return False
@@ -574,7 +546,7 @@ def handoff_written_since(cwd, session=None, require_open=False):
             r['fm'].get('session_id') == session and r['fm'].get('trigger_id') == trigger
             and r['fm'].get('checkpoint_id') and not r['problems']
             and (not require_open or r['fm'].get('status') == 'open')
-            for r in ledger._records(ledger.project_root(cwd)))
+            for r in ledger._records(handoff_identity.project_root(cwd)))
     except OSError:
         return False
 
@@ -850,7 +822,7 @@ def reserve_handoff_status(evt):
     if not sid:
         return True  # No reliable identity: avoid silencing another session.
     cwd = evt.get('cwd') or os.getcwd()
-    path = _ledger().session_note_path(cwd, sid) + '.status'
+    path = handoff_identity.session_status_path(cwd, sid)
     try:
         os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     except FileExistsError:
@@ -864,11 +836,10 @@ def handle_session_start(evt, agent):
     """Keep startup quiet except for owned publication repair or compaction recovery."""
     source = evt.get("source") or ""
     if source == "compact":
-        from handoff_protocol import receipt_path
         sid = session_key(evt)
         if sid:
             try:
-                os.unlink(receipt_path(_ledger().project_root(evt.get('cwd') or os.getcwd()), sid) + '.delivery')
+                os.unlink(handoff_identity.delivery_receipt_path(handoff_identity.project_root(evt.get('cwd') or os.getcwd()), sid))
             except FileNotFoundError:
                 pass
         note = ("handoff-status: Context was just compacted in this "
@@ -917,7 +888,7 @@ def nudge_unwritten_handoff(evt):
         "If blocked, report the failed location and keep this session; do not clear. "
         "Searched project: %s."
         % (shlex.quote(LEDGER), shlex.quote(LEDGER), shlex.quote(key),
-           _ledger().project_root(cwd)))}))
+           handoff_identity.project_root(cwd)))}))
     sys.exit(0)
 
 
@@ -984,7 +955,7 @@ def route_opening_prompt(evt, agent):
                 or not _truthy(env('CONTEXT_WATCH_JEV', '0')) or not env('TYPESAFE_API_KEY')):
             return
         try:
-            os.close(os.open(_ledger().session_note_path(cwd, sid) + '.routed',
+            os.close(os.open(handoff_identity.session_routed_path(cwd, sid),
                              os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         except OSError:
             return  # Cannot reserve a unique attempt: stay local, without retries.
@@ -1113,10 +1084,8 @@ def auto_cli(argv):
     if max_runs < 1:
         print("[auto] --max must be a positive run limit", file=sys.stderr)
         return 2
-    child_env = dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1")
     # Each child starts a new host session; it must not inherit the caller's id.
-    child_env.pop("CODEX_THREAD_ID", None)
-    child_env.pop("HANDOFF_SESSION_ID", None)
+    child_env = handoff_identity.without_session_identity(dict(os.environ, HANDOFF_AUTO="1", HANDOFF_AUTO_RUNNER="1"))
     rc = 0
     for run in range(1, max_runs + 1):
         import uuid
@@ -1313,7 +1282,7 @@ def main():
                        threshold=limit, threshold_source=source, window=window,
                        window_source=window_source, model=model))
     fired = os.path.exists(first)
-    floor_latch = first + ".floor"
+    floor_latch = handoff_identity.latch_floor_path(session_id)
     floored = os.path.exists(floor_latch)
     rearm_limit = limit
     if floored:

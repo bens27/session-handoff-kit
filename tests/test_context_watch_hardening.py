@@ -24,7 +24,7 @@ def load_hook(tmp):
     spec = importlib.util.spec_from_file_location("cw_under_test", HOOK)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.tempfile.tempdir = tmp  # gettempdir() -> the isolated dir
+    tempfile.tempdir = tmp  # gettempdir() -> the isolated dir
     return mod
 
 
@@ -41,7 +41,7 @@ class PlantedSymlinks(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.cw = load_hook(self.tmp)
-        self.addCleanup(setattr, self.cw.tempfile, "tempdir", None)
+        self.addCleanup(setattr, tempfile, "tempdir", None)
 
     def plant(self, path):
         os.symlink(self.victim, path)

@@ -48,12 +48,20 @@ import fcntl
 from contextlib import contextmanager
 import os
 import re
-import stat
 import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime, timedelta
+
+# Identity, project root and temp-state paths live in the identity module;
+# these names stay importable from the ledger for existing callers.
+from handoff_identity import (  # noqa: F401
+    parse_front_matter, read_front_matter as _read_fm, same_dir as _same_dir,
+    fallback_dir as _fallback_dir, fallback_claims as _fallback_claims,
+    linked_worktree_root as _linked_worktree_root, project_root,
+    session_note_path, project_pointer_path, read_project_pointer,
+    temp_bases, under_temp_base)
 
 # 20260811-1902-pantry-cli(.md) -> ended 2026-08-11T19:02, topic pantry-cli
 DATED_NAME = re.compile(r"^(\d{8})-(\d{4}|\d{6})-(.+)$")
@@ -97,25 +105,6 @@ def locked(path):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def parse_front_matter(text):
-    """Very small line-based front matter parser: key: value between --- fences."""
-    fm = {}
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return fm
-    try:
-        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
-    except StopIteration:
-        return {}
-    for line in lines[1:end]:
-        if line.strip() == "---":
-            break
-        if ":" in line:
-            key, _, value = line.partition(":")
-            fm[key.strip().lower()] = value.strip()
-    return fm
-
-
 def _name_parts(path):
     """(ended_iso_or_None, topic_from_name) from a dated or undated basename."""
     base = os.path.splitext(os.path.basename(path))[0]
@@ -127,93 +116,6 @@ def _name_parts(path):
     if len(t) == 6:
         iso += ":" + t[4:6]
     return iso, topic
-
-
-def _same_dir(a, b):
-    return os.path.normcase(os.path.realpath(os.path.expanduser(a))) == \
-        os.path.normcase(os.path.realpath(os.path.expanduser(b)))
-
-
-def _fallback_dir(root):
-    """The per-project directory save_path() writes to when a project has no
-    local .handoffs convention."""
-    return os.path.expanduser(os.path.join("~", ".claude", "handoffs",
-                                           os.path.basename(os.path.abspath(root))))
-
-
-def _read_fm(path):
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return parse_front_matter(f.read())
-
-
-def _fallback_claims(d):
-    """True when d's fallback directory holds a handoff recording d as its project."""
-    fdir = _fallback_dir(d)
-    try:
-        for name in os.listdir(fdir):
-            if name.endswith(".md"):
-                project = _read_fm(os.path.join(fdir, name)).get("project")
-                if project and _same_dir(project, d):
-                    return True
-    except Exception:
-        pass
-    return False
-
-
-def _linked_worktree_root(start):
-    """Nearest linked-worktree boundary; submodules retain ancestor discovery.
-
-    Inspect the marker directly: a missing/slow Git executable must never make
-    discovery fall through to the main checkout's checkpoint directory.
-    """
-    current = os.path.abspath(start)
-    while True:
-        marker = os.path.join(current, '.git')
-        if os.path.isfile(marker):
-            # Submodules also use a Git-file marker, but must still inherit the
-            # superproject convention. A linked worktree has common metadata
-            # (or its reciprocal gitdir marker when common metadata is lost).
-            try:
-                with open(marker, encoding='utf-8') as stream:
-                    pointer = stream.read(8192).strip()
-                if pointer.startswith('gitdir: ') and pointer[8:].strip():
-                    gitdir = os.path.realpath(os.path.join(current, pointer[8:].strip()))
-                    if (os.path.lexists(os.path.join(gitdir, 'commondir'))
-                            or os.path.isfile(os.path.join(gitdir, 'gitdir'))
-                            or os.path.basename(os.path.dirname(gitdir)) == 'worktrees'):
-                        return current
-                else:
-                    return current  # malformed metadata must not fall into main
-            except (OSError, ValueError):
-                return current  # preserve a fail-closed boundary on unreadable metadata
-        if os.path.isdir(marker):
-            return None
-        parent = os.path.dirname(current)
-        if parent == current:
-            return None
-        current = parent
-
-
-def project_root(start):
-    """Nearest ancestor (inclusive) with a .handoffs/ dir or a fallback-dir handoff
-    naming it as project, stopping at $HOME; else start. A linked Git worktree
-    is a boundary: use its root if no nearer handoff convention exists, and
-    never discover its main checkout's ledger. Other Git repositories retain
-    convention-based discovery: a folder of projects can itself be a repo."""
-    start = os.path.abspath(start)
-    worktree = _linked_worktree_root(start)
-    home = os.path.abspath(os.path.expanduser("~"))
-    d = start
-    while d != home:
-        if os.path.isdir(os.path.join(d, ".handoffs")) or ((d != start or worktree is not None) and _fallback_claims(d)):
-            return d
-        if worktree and _same_dir(d, worktree):
-            return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return start
 
 
 def _handoff_paths(root, errors=None):
@@ -540,66 +442,6 @@ def _git_position(root):
         return "%s@%s" % (git("rev-parse", "--abbrev-ref", "HEAD"), sha) if sha else ""
     except Exception:
         return ""
-
-
-def session_note_path(root, session=None):
-    """Where context_watch.py leaves this project's live session facts
-    (session id, transcript, whether the trigger fired), so ledger commands
-    run from the agent's shell can read them without hook stdin."""
-    import hashlib
-    import tempfile
-    key = hashlib.sha1((os.path.realpath(project_root(root)) + "\0" + (session or "unidentified")).encode("utf-8", "replace")).hexdigest()[:20]
-    return os.path.join(tempfile.gettempdir(), "context-watch-session-%s.json" % key)
-
-
-def project_pointer_path(session):
-    """Root-independent record of the project a session's hooks ran in: a save run
-    from another cwd (for example a scratch dir holding the draft) cannot find the
-    cwd-keyed session note, but it can find this."""
-    import hashlib
-    import tempfile
-    return os.path.join(tempfile.gettempdir(),
-                        "context-watch-project-%s.json" % hashlib.sha1(str(session).encode("utf-8", "replace")).hexdigest()[:20])
-
-
-def temp_bases():
-    return {os.path.realpath(p) for p in (tempfile.gettempdir(), '/tmp', '/var/tmp') if p}
-
-
-def under_temp_base(path):
-    path = os.path.realpath(path)
-    return any(path == b or path.startswith(b + os.sep) for b in temp_bases())
-
-
-def read_project_pointer(session, max_age_s=86400):
-    """The recorded project, or '' unless the pointer is trustworthy. It lives at a
-    predictable path in a shared temp dir, so accept only a bounded regular file
-    (never a symlink) owned by this user with no group/other bits, naming a
-    directory this user owns outside every temp base."""
-    if not session:
-        return ""
-    try:
-        fd = os.open(project_pointer_path(session), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077 or info.st_size > 4096):
-                return ""
-            raw = stream.read(4097)
-            if len(raw) > 4096:
-                return ""
-            note = json.loads(raw.decode("utf-8"))
-        project = note.get("project")
-        if not (note.get("session_id") == session and isinstance(project, str)
-                and time.time() - float(note.get("ts") or 0) <= max_age_s):
-            return ""
-        project = os.path.realpath(project)
-        owner = os.stat(project)
-        if stat.S_ISDIR(owner.st_mode) and owner.st_uid == os.getuid() and not under_temp_base(project):
-            return project
-    except Exception:
-        pass
-    return ""
 
 
 def read_session_note(root, max_age_s=86400, session=None):

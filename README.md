@@ -422,6 +422,7 @@ Other variables:
 | `HANDOFF_AUTO` | on in AgentsRoom, else off | Requests automatic transition (`0` opts out). AgentsRoom requires authoritative preflight and falls back to manual continuation when unavailable; outside AgentsRoom, tmux Stop or the headless runner performs the configured transition. |
 | `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only) | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked). A blank value falls through to the next; ids over 120 characters keep 100 plus a 16-hex SHA-256 suffix |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
+| `HANDOFF_STATE_DIR` | system temp dir (`$TMPDIR`) | Directory for per-session temp state (latches, session notes, receipts, pointers, auto counts). Blank falls back to the system temp dir; file names are unchanged |
 
 ## How automated does it get
 

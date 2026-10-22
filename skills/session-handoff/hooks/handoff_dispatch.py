@@ -10,6 +10,7 @@ import re
 import shlex
 import sys
 
+import handoff_identity
 import handoff_ledger as ledger
 import handoff_protocol as protocol
 
@@ -168,8 +169,8 @@ def resolve_identity(root, request):
         return None, 'session must be a nonempty string.'
     explicit = (explicit or '').strip()
     authoritative = [(source, value) for source, value in (
-        ('hook', protocol.terminal_session(root)), ('host', (os.environ.get('CODEX_THREAD_ID') or '').strip())) if value]
-    environment = (os.environ.get('HANDOFF_SESSION_ID') or '').strip()
+        ('hook', handoff_identity.terminal_session(root)), ('host', handoff_identity.host_session())) if value]
+    environment = handoff_identity.environment_session()
     identity = dict(session='', source='none', provenance='', conflict=None)
     if authoritative:
         source, value = authoritative[0]
@@ -308,8 +309,8 @@ def _holds_dir(root):
 
 def _hold_roots(root):
     """Main controls are shared; worker controls are additional, never overrides."""
-    local = ledger.project_root(root)
-    worktree = ledger._linked_worktree_root(local)
+    local = handoff_identity.project_root(root)
+    worktree = handoff_identity.linked_worktree_root(local)
     if not worktree:
         return [local]
     try:
@@ -335,7 +336,7 @@ def _hold_roots(root):
     common = os.path.realpath(os.path.join(gitdir, relative))
     if not os.path.isdir(common):
         raise OSError('Common Git directory unavailable; shared holds cannot be checked')
-    if ledger._same_dir(common, gitdir):
+    if handoff_identity.same_dir(common, gitdir):
         return [local]
     main = os.path.dirname(common)
     return list(dict.fromkeys([os.path.realpath(main), os.path.realpath(local)]))
@@ -507,7 +508,7 @@ def delivery_mode(root, session, path, fingerprint, reuse):
     import time
     try:
         # prepare deletes nothing here; compaction removes this file, ending the context generation
-        delivered = protocol.load_state_json(protocol.receipt_path(root, session) + '.delivery', 65536)
+        delivered = protocol.load_state_json(handoff_identity.delivery_receipt_path(root, session), 65536)
         live = (delivered.get('token') == reuse['receipt'] and delivered.get('path') == path
                 and delivered.get('fingerprint') == fingerprint and 0 <= time.time() - float(delivered['created']) < protocol.REPLAY_TTL)
     except (OSError, ValueError, KeyError, TypeError):
@@ -598,7 +599,7 @@ def restart_eligibility(host, holds, pending, checkpoint):
 
 def route(request, root):
     operation = request['_operation']
-    root = ledger.project_root(root)
+    root = handoff_identity.project_root(root)
     host = request.get('host') or {}
     if not isinstance(host, dict) or set(host) - HOST_KEYS:
         return blocked(request, 'invalid_request', 'host accepts only: %s.' % ', '.join(sorted(HOST_KEYS)))
@@ -761,7 +762,7 @@ def cli(argv):
             print(json.dumps(dict(outcome='blocked', code='invalid_request', retryable=False,
                                   action='Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.')))
             return 1
-        print(json.dumps(set_hold(ledger.project_root(a.root), a.scope, reason and reason.strip()[:300]), indent=2 if a.pretty else None))
+        print(json.dumps(set_hold(handoff_identity.project_root(a.root), a.scope, reason and reason.strip()[:300]), indent=2 if a.pretty else None))
         return 0
     print('unknown subcommand: %s' % cmd, file=sys.stderr)
     return 1

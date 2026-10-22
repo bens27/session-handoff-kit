@@ -19,6 +19,7 @@ import math
 import stat
 from datetime import datetime
 
+import handoff_identity
 import handoff_ledger as ledger
 import handoff_pointers as pointers
 import handoff_protocol as protocol
@@ -350,7 +351,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     # The durable registry lock also covers different checkpoints and callers
     # with different TMPDIRs; the publisher lock alone is temp-directory scoped.
     registry = str(Path(location).parent / 'registry')
-    with ledger.locked(ledger.session_note_path(root, 'publisher')), ledger.locked(registry), ledger.locked(path), ledger.locked(location):
+    with ledger.locked(handoff_identity.publisher_lock_path(root)), ledger.locked(registry), ledger.locked(path), ledger.locked(location):
         try:
             pointers.prune(root, prune_settled(root, held=(location,)))
             previous = status(root, request_id)
@@ -674,7 +675,7 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
             return record
         if intent_expired(record):
             raise ValueError('Restart intent expired.')
-        receipt = protocol.load_state_json(protocol.receipt_path(record['root'], session) + '.delivery')
+        receipt = protocol.load_state_json(handoff_identity.delivery_receipt_path(record['root'], session))
         token = receipt.get('token')
         if (not isinstance(token, str) or not isinstance(delivery_receipt, str)
                 or not hmac.compare_digest(token.encode(), delivery_receipt.encode()) or not delivery_receipt

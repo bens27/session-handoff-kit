@@ -1303,6 +1303,7 @@ thresholds must be compensated downward — roughly 90–110k estimated for a
 | `HANDOFF_AUTO` | on in AgentsRoom, else off | `1` = fully automatic (`0` turns the AgentsRoom default off): implies `AUTORESUME`, the newest open handoff is resumed even when several are open, and the session is cleared for you (tmux Stop hook, or the `context_watch.py auto` runner) |
 | `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked). Each value is stripped and its first line used; a blank one falls through to the next. Over 120 characters it becomes the first 100 plus `-` and 16 hex of its SHA-256, so long ids sharing a prefix stay distinct |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
+| `HANDOFF_STATE_DIR` | system temp dir (`$TMPDIR`) | Directory for per-session temp state (latches, session notes, receipts, pointers, auto counts). Blank falls back to the system temp dir; file names are unchanged |
 
 ## 12. Surface compatibility
 
