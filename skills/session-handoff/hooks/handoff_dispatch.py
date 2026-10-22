@@ -12,6 +12,7 @@ import sys
 
 import handoff_identity
 import handoff_ledger as ledger
+import handoff_workspace as workspace
 from handoff_record import Record
 import handoff_protocol as protocol
 
@@ -314,29 +315,9 @@ def _hold_roots(root):
     worktree = handoff_identity.linked_worktree_root(local)
     if not worktree:
         return [local]
-    try:
-        with open(os.path.join(worktree, '.git'), encoding='utf-8') as stream:
-            pointer = stream.read(8192).strip()
-    except ValueError as exc:
-        raise OSError('Invalid Git worktree metadata; shared holds cannot be checked') from exc
-    if not pointer.startswith('gitdir: ') or not pointer[8:].strip():
-        raise OSError('Invalid Git worktree metadata; shared holds cannot be checked')
-    gitdir = os.path.realpath(os.path.join(worktree, pointer[8:].strip()))
-    if not os.path.isdir(gitdir):
-        raise OSError('Git worktree metadata unavailable; shared holds cannot be checked')
-    try:
-        with open(os.path.join(gitdir, 'commondir'), encoding='utf-8') as stream:
-            relative = stream.read(8192).strip()
-    except FileNotFoundError:
-        # A submodule/separate-git-dir marker has no linked-worktree control plane.
-        if os.path.isfile(os.path.join(gitdir, 'gitdir')) or os.path.basename(os.path.dirname(gitdir)) == 'worktrees':
-            raise OSError('Linked-worktree common metadata missing; shared holds cannot be checked')
+    gitdir, common = workspace.linked_common(worktree)
+    if common is None:
         return [local]
-    if not relative:
-        raise OSError('Invalid common Git directory; shared holds cannot be checked')
-    common = os.path.realpath(os.path.join(gitdir, relative))
-    if not os.path.isdir(common):
-        raise OSError('Common Git directory unavailable; shared holds cannot be checked')
     if handoff_identity.same_dir(common, gitdir):
         return [local]
     main = os.path.dirname(common)
@@ -520,17 +501,12 @@ def delivery_mode(root, session, path, fingerprint, reuse):
 
 
 def workspace_state(root):
-    import subprocess
-    try:
-        head = subprocess.run(['git', '-C', root, 'rev-parse', '-q', '--verify', 'HEAD'], capture_output=True, text=True, timeout=10)
-        status = subprocess.run(['git', '-C', root, 'status', '--porcelain=v1', '-uall', '--', '.', ':(exclude).handoffs'],
-                                capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+    snapshot = workspace.snapshot(root)
+    if snapshot is None:
         return dict(kind='workspace', git=False)
-    if status.returncode:
-        return dict(kind='workspace', git=False)
-    return dict(kind='workspace', git=True, head=head.stdout.strip(),
-                status=hashlib.sha256(status.stdout.encode()).hexdigest()[:16])
+    head, status = snapshot
+    return dict(kind='workspace', git=True, head=head,
+                status=hashlib.sha256(status.encode()).hexdigest()[:16])
 
 
 def recheck_state(root, authorization, holds):

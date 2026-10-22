@@ -15,6 +15,7 @@ from datetime import datetime
 
 import handoff_identity
 import handoff_ledger as ledger
+import handoff_workspace as workspace
 from handoff_record import Record
 from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
 
@@ -230,11 +231,10 @@ def project_setting(root, key, kind, user_only=False):
 
 def workspace_changes_hash(root):
     """Bounded Git working-file evidence; unknown evidence never proves progress."""
-    import subprocess
+    listed = workspace.changed_files(root)
+    if listed is None:
+        return ''
     try:
-        listed = subprocess.run(['git', '-C', root, 'ls-files', '--modified', '--deleted',
-                                 '--others', '--exclude-standard', '-z'],
-                                capture_output=True, timeout=5, check=True).stdout
         if len(listed) > 200_000:
             return ''
         digest = hashlib.sha256()
@@ -256,7 +256,7 @@ def workspace_changes_hash(root):
                 return ''
             digest.update(raw + b'\0' + hashlib.sha256(data).digest())
         return digest.hexdigest()
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         return ''
 
 
@@ -278,15 +278,10 @@ def save_progress(root, current, continuity, previous):
     files_changed = eligible and bool(before) and bool(after) and before != after
     commits = False
     if eligible:
-        import subprocess
         old = previous.get('git', '').rsplit('@', 1)[-1]
         new = current.get('git', '').rsplit('@', 1)[-1]
         if old != new and re.fullmatch(r'[0-9a-f]{7,64}', old) and re.fullmatch(r'[0-9a-f]{7,64}', new):
-            try:
-                commits = subprocess.run(['git', '-C', root, 'merge-base', '--is-ancestor', old, new],
-                                         capture_output=True, timeout=5).returncode == 0
-            except (OSError, subprocess.SubprocessError):
-                pass
+            commits = workspace.is_ancestor(root, old, new)
     return dict(present=bool(changed and (register_changed or commits or files_changed)),
                 predecessor_known=bool(eligible), content_changed=bool(changed),
                 continuity_changed=bool(register_changed), new_commits=commits,

@@ -34,3 +34,15 @@ checkpoint eligible to adopt". A `Record` is a checkpoint file read once
 
 It imports only `handoff_identity` (the ledger lazily, for the chain), and the
 ledger re-exports its names for existing callers.
+
+## Workspace probe
+
+`skills/session-handoff/hooks/handoff_workspace.py`, the one module that asks
+Git about a workspace and the one owner of Git error handling. `GitWorkspace`
+runs `git -C root ...`; `MemoryWorkspace` answers from dicts so tests describe
+a workspace instead of building a repository. Callers (protocol, dispatch,
+ledger, pointers, lane) use the module functions; `use(adapter)` swaps the
+adapter for a block. Each probe keeps its callers' failure contract: unknown
+status is `None`/`False`/`''`, pointer tracking fails closed with
+`git-check-indeterminate`, and bad worktree metadata raises `OSError`.
+Linked-worktree root detection in `handoff_identity` stays file-based by design.

@@ -28,6 +28,10 @@ import subprocess
 import sys
 import tempfile
 
+# Git error handling lives in the workspace seam, installed beside this script.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks"))
+import handoff_workspace as workspace  # noqa: E402
+
 
 class Usage(Exception):
     pass
@@ -40,10 +44,7 @@ def emit(code, outcome, **fields):
 
 
 def git(*args, check=True):
-    p = subprocess.run(["git"] + list(args), capture_output=True, text=True)
-    if check and p.returncode:
-        raise RuntimeError("git %s failed: %s" % (" ".join(args), p.stderr.strip()))
-    return p.stdout.rstrip("\n") if check else p
+    return workspace.run(args, check)
 
 
 def is_ancestor(a, b):

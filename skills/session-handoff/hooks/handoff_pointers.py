@@ -11,11 +11,11 @@ import json
 import os
 import re
 import stat
-import subprocess
 import time
 from pathlib import Path
 
 import handoff_ledger as ledger
+import handoff_workspace as workspace
 from handoff_record import Record
 import handoff_protocol as protocol
 
@@ -125,19 +125,7 @@ def read_pointer(location):
 
 def git_tracked(path):
     """True/False; raises RuntimeError when Git cannot decide (fail closed)."""
-    directory = os.path.dirname(os.path.realpath(path))
-    try:
-        result = subprocess.run(['git', '-C', directory, 'ls-files', '--error-unmatch', '--',
-                                 os.path.realpath(path)], capture_output=True, timeout=5,
-                                env=dict(os.environ, LC_ALL='C', LANG='C'))
-    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
-        raise RuntimeError('git-check-indeterminate') from exc
-    if result.returncode == 0:
-        return True
-    err = result.stderr.decode('utf-8', 'replace').lower()
-    if 'not a git repository' in err or 'did not match' in err:
-        return False
-    raise RuntimeError('git-check-indeterminate')
+    return workspace.tracked(path)
 
 
 def user_continuation_authorized():

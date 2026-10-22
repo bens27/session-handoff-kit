@@ -48,7 +48,6 @@ import fcntl
 from contextlib import contextmanager
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
@@ -64,6 +63,7 @@ from handoff_identity import (  # noqa: F401
     temp_bases, under_temp_base)
 # The checkpoint record owns status, fingerprint, publication and seal; these
 # names stay importable from the ledger for existing callers.
+import handoff_workspace as workspace
 from handoff_record import (  # noqa: F401
     CLOSED_STATUSES, Record, is_open, content_fingerprint, publication_valid,
     _receipt_key, _mac, seal, valid_seal, trusted)
@@ -346,14 +346,7 @@ def save_path(root):
 
 def _git_position(root):
     """'branch@shortsha' for root, or '' when it is not a git work tree."""
-    def git(*args):
-        return subprocess.run(["git", "-C", root] + list(args), capture_output=True,
-                              text=True, timeout=5).stdout.strip()
-    try:
-        sha = git("rev-parse", "--short", "HEAD")
-        return "%s@%s" % (git("rev-parse", "--abbrev-ref", "HEAD"), sha) if sha else ""
-    except Exception:
-        return ""
+    return workspace.position(root)
 
 
 def read_session_note(root, max_age_s=86400, session=None):
@@ -528,14 +521,11 @@ def claim_report(path):
     sha = fm.get("git", "").rpartition("@")[2]
     root = fm.get("project") or project_root(os.path.dirname(path))
     if sha and os.path.isdir(root):
-        def git(*args):
-            return subprocess.run(["git", "-C", root] + list(args), capture_output=True,
-                                  text=True, timeout=5).stdout
-        try:
-            out.append("commits_since: %s" % git("rev-list", "--count", "%s..HEAD" % sha).strip())
-            out.append("dirty: %d" % len(git("status", "--short").splitlines()))
-        except Exception:
-            pass
+        commits, dirty = workspace.movement(root, sha)
+        if commits is not None:
+            out.append("commits_since: %s" % commits)
+        if dirty is not None:
+            out.append("dirty: %d" % dirty)
     return out
 
 

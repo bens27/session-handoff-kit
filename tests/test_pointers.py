@@ -1,7 +1,6 @@
 """v3-2 project pointer index (SPEC 7.3d): provenance, ordering and dispatch marker."""
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -12,6 +11,8 @@ from unittest.mock import patch
 HOOKS = Path(__file__).resolve().parents[1] / 'skills/session-handoff/hooks'
 sys.path.insert(0, str(HOOKS))
 import handoff_pointers as pointers
+import handoff_workspace as workspace
+from handoff_workspace import MemoryWorkspace
 import handoff_protocol as protocol
 import restart_preflight as restart
 
@@ -188,27 +189,24 @@ class PointerTests(unittest.TestCase):
         self.assertEqual(scan['candidates'], [])
         self.assertEqual(scan['diagnostics'][0]['reason'], 'incomplete-index')
 
-    def git(self, *args):
-        subprocess.run(['git', '-C', self.root, *args], check=True, capture_output=True,
-                       env=dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t',
-                                GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t'))
-
     def test_git_tracked_pointer_intent_or_checkpoint_is_refused(self):
         ready = self.preflight()
         self.authorize()
-        self.git('init', '-q')
-        self.assertEqual(len(pointers.scan(self.root)['candidates']), 1)
-        for tracked in (self.pointer_file(ready), self.intent_file(), Path(self.path)):
-            self.git('add', '-f', str(tracked))
-            scan = pointers.scan(self.root)
+        files = (self.pointer_file(ready), self.intent_file(), Path(self.path))
+        untracked = {os.path.realpath(str(f)): False for f in files}
+        with workspace.use(MemoryWorkspace(tracked=untracked)):
+            self.assertEqual(len(pointers.scan(self.root)['candidates']), 1)
+        for tracked in files:
+            state = dict(untracked, **{os.path.realpath(str(tracked)): True})
+            with workspace.use(MemoryWorkspace(tracked=state)):
+                scan = pointers.scan(self.root)
             self.assertEqual(scan['candidates'], [], tracked)
             self.assertEqual(scan['diagnostics'][0]['reason'], 'git-tracked')
-            self.git('rm', '-q', '--cached', str(tracked))
 
     def test_indeterminate_git_check_fails_closed(self):
         self.preflight()
         self.authorize()
-        with patch.object(pointers.subprocess, 'run', side_effect=subprocess.TimeoutExpired('git', 5)):
+        with workspace.use(MemoryWorkspace()):  # Git cannot decide
             scan = pointers.scan(self.root)
         self.assertEqual(scan['diagnostics'][0]['reason'], 'git-check-indeterminate')
 
@@ -299,10 +297,9 @@ class PointerTests(unittest.TestCase):
     def test_unrecognised_git_stderr_fails_closed(self):
         self.preflight()
         self.authorize()
-        dubious = subprocess.CompletedProcess([], 128, b'', b'fatal: detected dubious ownership')
-        with patch.object(pointers.subprocess, 'run', return_value=dubious) as run:
+        # Stderr classification is the real adapter's (tests/test_workspace.py); here: any undecided answer fails closed.
+        with workspace.use(MemoryWorkspace()):
             self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'git-check-indeterminate')
-        self.assertEqual(run.call_args.kwargs['env']['LC_ALL'], 'C')
 
     def test_symlinked_pointer_directory_is_refused(self):
         ready = self.preflight()
