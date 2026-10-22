@@ -896,6 +896,7 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    the environment's. `authorized_to_execute` stays false until the successor
    receipt makes the intent `retrieved`. `restart_preflight` itself still refuses a conflicting
    second intent.
+   `authorization_source` is informational on every outcome and never execution authority; only `authorized_to_execute` gates execution.
 10. An exact target never falls back. Closed history is reached only by an
     explicit target.
 11. Delivery is fresh by default. A `reuse` receipt is honored only when its

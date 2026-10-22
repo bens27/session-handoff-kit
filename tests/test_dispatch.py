@@ -1241,6 +1241,18 @@ class StoppedAuthorizationSourceTests(Base):
                 self.assertEqual(r['authorization_source'], 'user', r)
                 self.assertFalse(r['authorized_to_execute'], r)
 
+    def test_route_level_hold_keeps_user_authorization_without_executing(self):
+        self.record_hook_session('sess-a')
+        self.save()
+        self.assertEqual(self.cli('hold', '--scope', 'project', '--reason', 'user paused')['outcome'], 'held')
+        for request in (dict(prompt='continue the handoff'),
+                        dict(operation='resume', authorization={'source': 'user'})):
+            with self.subTest(request=request):
+                r = self.dispatch(request)
+                self.assertEqual((r['outcome'], r['code']), ('blocked', 'held'), r)
+                self.assertEqual(r['authorization_source'], 'user', r)
+                self.assertFalse(r['authorized_to_execute'], r)
+
     def test_no_open_handoff_keeps_user_authorization_without_executing(self):
         self.record_hook_session('sess-a')
         r = self.dispatch(operation='resume', authorization={'source': 'user'})
