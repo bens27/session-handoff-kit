@@ -11,6 +11,9 @@ import shlex
 import sys
 
 import handoff_identity
+from handoff_holds import (  # noqa: F401  (re-exported for existing callers)
+    SCOPE, _holds_dir, _hold_roots, read_holds, applicable_holds, set_hold)
+import handoff_intents as intents
 import handoff_ledger as ledger
 import handoff_workspace as workspace
 from handoff_record import Record
@@ -37,7 +40,6 @@ CODES = {
 }
 RETRY = dict(max_attempts=3, backoff_seconds=[1, 4, 16], same_request=True)
 HOST_KEYS = frozenset(('restart_capable', 'workers', 'hold', 'restart_request_id'))
-SCOPE = re.compile(r'project|topic:[a-z0-9]+(?:-[a-z0-9]+)*|terminal:[\w.:-]{1,120}')
 
 NEUTRAL = re.compile(r'^\s*(handoff-status:|\[context-watch\]\s*handoff saved\b)', re.I)
 PRESSURE = re.compile(r'^\s*(\[context-watch\]|context-watch:).*\b(write|publish|save)\b.{0,40}\bhandoff\b', re.I | re.S)
@@ -209,13 +211,12 @@ def intent_target_request(root, request, host):
     request_id = host.get('restart_request_id')
     if request.get('target') is not None or not isinstance(request_id, str):
         return request
-    import restart_preflight
     try:
-        record = restart_preflight.status(root, request_id)
+        record = intents.status(root, request_id)
     except (OSError, ValueError):
         return request
     terminal = protocol.terminal_id()
-    if (not record or record['state'] != 'pending' or restart_preflight.intent_expired(record)
+    if (not record or record['state'] != 'pending' or intents.expired(record)
             or not terminal or record['terminal'] != terminal):
         return request
     return dict(request, target=record['path'])
@@ -305,72 +306,6 @@ def override_action(root, request, session):
                           '--fingerprint', override['fingerprint'], '--confirm-holder')
 
 
-def _holds_dir(root):
-    return os.path.join(root, '.handoffs', 'holds')
-
-
-def _hold_roots(root):
-    """Main controls are shared; worker controls are additional, never overrides."""
-    local = handoff_identity.project_root(root)
-    worktree = handoff_identity.linked_worktree_root(local)
-    if not worktree:
-        return [local]
-    gitdir, common = workspace.linked_common(worktree)
-    if common is None:
-        return [local]
-    if handoff_identity.same_dir(common, gitdir):
-        return [local]
-    main = os.path.dirname(common)
-    return list(dict.fromkeys([os.path.realpath(main), os.path.realpath(local)]))
-
-
-def read_holds(root):
-    """Union of shared-main and local holds; unreadable/corrupt state fails closed."""
-    holds, seen = [], set()
-    for origin in _hold_roots(root):
-        try:
-            names = sorted(os.listdir(_holds_dir(origin)))
-        except FileNotFoundError:
-            continue
-        for name in names:
-            if not name.endswith('.json'):
-                continue
-            try:
-                record = protocol.load_state_json(os.path.join(_holds_dir(origin), name), 8192)
-                if not (isinstance(record.get('scope'), str) and SCOPE.fullmatch(record['scope'])):
-                    raise ValueError
-            except ValueError:
-                record = dict(scope='project', reason='unreadable hold record %s; inspect it before releasing' % name)
-            hold = dict(scope=record['scope'], reason=str(record.get('reason', ''))[:300],
-                        created=record.get('created'), source='explicit')
-            identity = json.dumps(hold, sort_keys=True)
-            if identity not in seen:
-                seen.add(identity)
-                holds.append(dict(hold, root=origin))
-    return holds
-
-
-def applicable_holds(holds, topic):
-    terminal = protocol.terminal_id()
-    return [h for h in holds if h['scope'] == 'project' or (topic and h['scope'] == 'topic:' + topic)
-            or (terminal and h['scope'] == 'terminal:' + terminal)]
-
-
-def set_hold(root, scope, reason=None):
-    path = os.path.join(_holds_dir(root), hashlib.sha256(scope.encode()).hexdigest()[:24] + '.json')
-    if reason is None:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            return dict(outcome='none', code='no_hold', scope=scope, action='No hold for %s; nothing to release.' % scope)
-        return dict(outcome='released', code='released', scope=scope, action='Released %s. Re-dispatch before acting.' % scope)
-    import time
-    os.makedirs(_holds_dir(root), exist_ok=True)
-    protocol.write_json(path, dict(scope=scope, reason=reason, created=time.time(), terminal=protocol.terminal_id()))
-    return dict(outcome='held', code='held', scope=scope, path=path,
-                action='Held %s. Lifecycle execution and restarts stay blocked until an explicit release.' % scope)
-
-
 def pending_dispatch(root, host, session, path=None, saving=False):
     """Durable restart intent for this session, terminal or checkpoint; never confirmed by us.
 
@@ -380,7 +315,6 @@ def pending_dispatch(root, host, session, path=None, saving=False):
     session, terminal or target) can fail a dispatch, and save or pressure never
     fails on intent state: an unattributable, foreign or stale record is a warning.
     """
-    import restart_preflight
     warnings = []
     terminal = protocol.terminal_id()
     target = os.path.realpath(path) if path else None
@@ -401,37 +335,31 @@ def pending_dispatch(root, host, session, path=None, saving=False):
             reported.add(record['request_id'])
             warnings.append('Stale restart intent %s (session %s) expired after %d days; it is preserved but not '
                             'routed. Save a new checkpoint to restart.'
-                            % (record['request_id'], record['session'], restart_preflight.INTENT_MAX_AGE // 86400))
+                            % (record['request_id'], record['session'], intents.TTL['pending'] // intents.DAY))
 
     request_id = host.get('restart_request_id')
     if request_id is not None:
         try:
-            record = restart_preflight.status(root, request_id)
+            record = intents.status(root, request_id)
         except ValueError as exc:
             failure = invalid('for request %s' % request_id, exc, True)
             if failure:
                 return None, failure, warnings
             record = None
-        if record is not None and restart_preflight.intent_expired(record):
+        if record is not None and intents.expired(record):
             expired(record)
             record = None
         if record is not None and record['session'] == session:
             return record, None, warnings
-    directory = os.path.join(root, '.handoffs', 'restart')
     try:
-        names = sorted(os.listdir(directory))
-    except FileNotFoundError:
-        return None, None, warnings
+        locations = intents.entries(root)
     except OSError as exc:
         text = 'Restart intents are unreadable (%s); restore access.' % exc
         if saving:
             return None, None, warnings + [text]
         return None, ('blocked', 'dispatch_state_invalid', text), warnings
     matches = []
-    for name in names:
-        if not name.endswith('.json'):
-            continue
-        where = os.path.join(directory, name)
+    for where in locations:
         try:
             raw = protocol.load_state_json(where, 65536)
         except (OSError, ValueError) as exc:
@@ -449,7 +377,7 @@ def pending_dispatch(root, host, session, path=None, saving=False):
             failure = invalid(where, error, False)
             continue
         try:  # status() validates strictly; the directory exists, so it creates nothing
-            record = restart_preflight.status(root, fields.get('request_id'))
+            record = intents.status(root, fields.get('request_id'))
             if record is None:
                 raise ValueError('it does not match its request ID')
         except (OSError, ValueError) as exc:
@@ -458,7 +386,7 @@ def pending_dispatch(root, host, session, path=None, saving=False):
                 return None, failure, warnings
             continue
         if record['state'] == 'pending' and relevant:
-            if restart_preflight.intent_expired(record):
+            if intents.expired(record):
                 expired(record)
                 continue
             matches.append(record)
@@ -469,8 +397,7 @@ def pending_dispatch(root, host, session, path=None, saving=False):
 
 def successor_action(root, record, session):
     """A successor session runs one atomic adopt: identity, retrieval, receipt, resume."""
-    import restart_preflight
-    command = restart_preflight.adopt_command(record['root'], record['request_id'])
+    command = intents.adopt_command(record['root'], record['request_id'])
     return dict(kind='run', command=command, text=(
         'A restart intent (%s) from session %s is pending for this checkpoint; this session is its successor. '
         'Run this command exactly as given (no pipe or clipping); it verifies identity, retrieves, records the '

@@ -14,6 +14,7 @@ import stat
 import time
 from pathlib import Path
 
+import handoff_intents as intents
 import handoff_ledger as ledger
 import handoff_workspace as workspace
 from handoff_record import Record
@@ -138,7 +139,6 @@ def user_continuation_authorized():
 
 def evaluate(root, location, session=None):
     """One pointer's eligibility: dict(status=candidate|ineligible|incomplete|settled, ...)."""
-    import restart_preflight as restart
 
     def out(status, reason=None, **extra):
         result = dict(status=status, pointer=str(location), **extra)
@@ -152,7 +152,7 @@ def evaluate(root, location, session=None):
     if data['root'] != os.path.realpath(root):
         return out('ineligible', 'foreign-root')
     try:
-        record = restart.status(root, data['request_id'])
+        record = intents.status(root, data['request_id'])
     except ValueError:
         return out('ineligible', 'invalid-intent')
     if record is None:
@@ -162,19 +162,19 @@ def evaluate(root, location, session=None):
     if record['state'] == 'retrieved' and record.get('successor_session') != session:
         return out('settled')
     try:
-        locator = restart._read_locator(restart._handle_location(data['handle']))
+        locator = intents.read_locator(intents.handle_location(data['handle']))
     except (OSError, ValueError, UnicodeDecodeError):
         return out('ineligible', 'locator-unresolved')
-    digest = restart.binding_digest(record)
+    digest = intents.binding_digest(record)
     if (locator != dict(root=record['root'], request_id=record['request_id'], binding_sha256=digest)
             or record.get('binding_sha256') != digest or data['binding_sha256'] != digest
             or any(data[k] != record[k] for k in ('checkpoint_id', 'session', 'terminal', 'request_id'))
             or data['checkpoint_path'] != record['path']):
         return out('ineligible', 'binding-mismatch')
-    if restart.intent_expired(record):
+    if intents.expired(record):
         return out('ineligible', 'intent-expired')
     try:
-        if any(git_tracked(p) for p in (location, restart._location(root, record['request_id']),
+        if any(git_tracked(p) for p in (location, intents.location(root, record['request_id']),
                                         record['path'])):
             return out('ineligible', 'git-tracked')
     except RuntimeError:

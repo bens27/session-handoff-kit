@@ -46,3 +46,17 @@ adapter for a block. Each probe keeps its callers' failure contract: unknown
 status is `None`/`False`/`''`, pointer tracking fails closed with
 `git-check-indeterminate`, and bad worktree metadata raises `OSError`.
 Linked-worktree root detection in `handoff_identity` stays file-based by design.
+
+## Restart-intent store
+
+`skills/session-handoff/hooks/handoff_intents.py`, the one owner of durable
+restart intents: layout (`.handoffs/restart/<sha256(request_id)>.json` under the
+canonical root, `.lock` sidecars, `registry`, `.observations`), the `TTL` table
+(`pending` adoption window, `settled` retention, `delivery_receipt` age), the
+states (`pending -> refused | retrieved`, a refusal may be re-recorded), strict
+record validation (`status`), retention (`prune_settled`), and the successor
+commands (`adopt_command`, the short restart handle). `restart_preflight`
+decides when an intent is created or moved; `handoff_dispatch` and
+`handoff_pointers` only read. The store imports neither caller, and preflight
+and dispatch do not import each other: dispatcher holds live in
+`handoff_holds.py`, which both read.

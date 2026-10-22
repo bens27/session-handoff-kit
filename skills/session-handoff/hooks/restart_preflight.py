@@ -9,91 +9,52 @@ import hashlib
 import json
 import os
 import re
-import shlex
 from pathlib import Path
 import sys
 import time
-import fcntl
 import hmac
 import math
 import stat
-from datetime import datetime
 
+import handoff_holds as holds_store
 import handoff_identity
+import handoff_intents as intents
 import handoff_ledger as ledger
-from handoff_record import Record, live as _checkpoint_live
+from handoff_record import Record, live as _checkpoint_live  # noqa: F401  (tests read it here)
 import handoff_pointers as pointers
 import handoff_protocol as protocol
 
 
-def _location(root, request_id):
-    if not isinstance(request_id, str) or not request_id.strip():
-        raise ValueError('A nonempty restart request ID is required.')
-    directory = Path(root).resolve() / '.handoffs' / 'restart'
-    directory.mkdir(parents=True, exist_ok=True)
-    return str(directory / (hashlib.sha256(request_id.encode()).hexdigest() + '.json'))
+# The intent store owns layout, TTLs, states, validation and the adopt command;
+# these names stay importable from here for existing callers.
+_location = intents.location
+status = intents.status
+prune_settled = intents.prune_settled
+intent_expired = intents.expired
+INTENT_MAX_AGE = intents.TTL['pending']
+SETTLED_RETENTION = intents.TTL['settled']
+_accepted_event = intents.accepted_event
+_acceptance_valid = intents.acceptance_valid
+_confined_transcript = intents.confined_transcript
+_transcript_roots = intents.transcript_roots
+_worker_record_valid = intents.worker_record_valid
+_in_flight_mailbox = intents.in_flight_mailbox
 
 
 def adopt_command(root, request_id):
     """The one successor command a restart prompt or dispatcher hands over."""
-    return 'python3 %s adopt --root %s --request-id %s' % (
-        shlex.quote(os.path.realpath(__file__)), shlex.quote(os.path.realpath(root)),
-        shlex.quote(request_id))
+    return intents.adopt_command(root, request_id, __file__)
 
 
-INTENT_MAX_AGE = 7 * 86400  # a pending restart older than this is not adopted
-SETTLED_RETENTION = 30 * 86400  # retrieved/refused intents kept at least this long
-
-
-def intent_expired(record, now=None):
-    """A pending intent older than INTENT_MAX_AGE is never adopted, by any path."""
-    if not isinstance(record, dict) or record.get('state') != 'pending':
-        return False
-    try:
-        age = (time.time() if now is None else now) - float(record.get('intent_at') or 0)
-    except (TypeError, ValueError):
-        return True
-    return not math.isfinite(age) or age > INTENT_MAX_AGE
-BINDING_KEYS = ('checkpoint_id', 'path', 'request_id', 'root', 'session', 'terminal')
-
-
-def binding_digest(binding):
-    return hashlib.sha256(json.dumps({k: binding[k] for k in BINDING_KEYS},
-                                    sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-
-
-def _handle_location(handle):
-    if not isinstance(handle, str) or re.fullmatch(r'h-[0-9a-f]{24}', handle) is None:
-        raise ValueError('invalid-restart-handle')
-    return Path.home() / '.local/state/session-handoff/restart-handles' / (handle + '.json')
-
-
-def _read_locator(location):
-    fd = os.open(location, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
-            raise ValueError('Restart locator must be a bounded regular file.')
-        raw = stream.read(16385)
-        if len(raw) > 16384:
-            raise ValueError('Restart locator exceeds read bounds.')
-        return protocol.decode_state_json(raw.decode('utf-8'))
+BINDING_KEYS = intents.BINDING_KEYS
+binding_digest = intents.binding_digest
+_handle_location = intents.handle_location
+_read_locator = intents.read_locator
 
 
 def binding_command(binding):
     """Publish a hash-bound locator, independent of cwd and the hooks installation."""
-    digest = binding_digest(binding)
-    handle = 'h-' + digest[:24]
-    location = _handle_location(handle)
-    locator = dict(root=binding['root'], request_id=binding['request_id'], binding_sha256=digest)
-    location.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with ledger.locked(str(location)):
-        if location.exists():
-            if _read_locator(location) != locator:
-                raise ValueError('restart-handle-collision')
-        else:
-            protocol.write_json(str(location), locator)
-    return 'python3 %s adopt %s' % (shlex.quote(os.path.realpath(__file__)), handle)
+    return intents.handle_command(intents.publish_handle(binding), __file__)
 
 
 def adopt_handle(handle):
@@ -110,164 +71,6 @@ def adopt_handle(handle):
         return dict(outcome='blocked', stage='binding', reason=str(exc)[:500], host_confirmed=False,
                     action='Preserve state and report; never restart, dispatch another intent or pick another checkpoint.')
     return adopt(binding['root'], binding['request_id'], binding)
-
-
-def _accepted_event(record, event):
-    """Validate the external native event against an already validated binding."""
-    try:
-        if event.get('type') == 'claude-native-pair':
-            call, reply = event['call'], event['reply']
-            if call.get('sessionId') != record['session'] or reply.get('sessionId') != record['session']:
-                return False
-            uses = [c for c in call['message']['content'] if c.get('type') == 'tool_use'
-                    and c.get('name') in ('mcp__AgentsRoom-MCP__agents_restart', 'mcp__AgentsRoom_MCP__agents_restart')]
-            results = reply['message']['content']
-            completed = datetime.fromisoformat(reply['timestamp'].replace('Z', '+00:00')).timestamp()
-            for use in uses:
-                for result in results:
-                    if (result.get('type') != 'tool_result' or result.get('tool_use_id') != use.get('id')
-                            or result.get('is_error', False) is not False):
-                        continue
-                    content = result.get('content')
-                    if isinstance(content, str):
-                        content = [dict(type='text', text=content)]
-                    native = dict(type='event_msg', payload=dict(type='item_completed',
-                        thread_id=record['session'], completed_at_ms=completed * 1000,
-                        item=dict(type='McpToolCall', server='AgentsRoom-MCP', tool='agents_restart',
-                                  status='completed', arguments=use.get('input'),
-                                  result=dict(isError=False, content=content))))
-                    if _accepted_event(record, native):
-                        return True
-            return False
-        payload = event['payload']
-        item = payload['item']
-        completed = payload['completed_at_ms']
-        prompt = record.get('restart_prompt')
-        if (not isinstance(prompt, str) or not prompt
-                or event.get('type') != 'event_msg' or payload.get('type') != 'item_completed'
-                or payload.get('thread_id') != record['session']
-                or item.get('type') != 'McpToolCall' or item.get('server') != 'AgentsRoom-MCP'
-                or item.get('tool') != 'agents_restart' or item.get('status') != 'completed'
-                or item.get('arguments', {}).get('prompt') != prompt
-                or not isinstance(completed, (int, float)) or isinstance(completed, bool)
-                or not math.isfinite(completed) or not record['intent_at'] <= completed / 1000 <= time.time()):
-            return False
-        result = item['result']
-        if result.get('isError') is not False:
-            return False
-        replies = [json.loads(c['text']) for c in result.get('content', []) if c.get('type') == 'text']
-        return any(r.get('ok') is True and r.get('scheduled') is True
-                   and r.get('agent', {}).get('id') == record['terminal'] for r in replies)
-    except (ValueError, TypeError, AttributeError, KeyError, RecursionError):
-        return False
-
-
-def _acceptance_valid(record):
-    proof = record.get('host_acceptance')
-    try:
-        return (isinstance(proof, dict) and proof.get('source') in ('codex-native-transcript', 'claude-native-transcript')
-                and proof.get('request_id') == record['request_id']
-                and isinstance(proof.get('transcript'), str) and bool(proof['transcript'])
-                and _confined_transcript(record, proof['transcript'])[1] == proof['source']
-                and isinstance(proof.get('native_line_sha256'), str)
-                and re.fullmatch(r'[0-9a-f]{64}', proof['native_line_sha256']) is not None
-                and proof.get('event_sha256') == hashlib.sha256(
-                    json.dumps(proof['event'], sort_keys=True).encode()).hexdigest()
-                and _accepted_event(record, proof['event']))
-    except (ValueError, TypeError, KeyError, RecursionError):
-        return False
-
-
-def status(root, request_id):
-    """Read validated durable state; only FileNotFound means no intent.
-
-    Existing invalid records raise ValueError and are preserved for recovery.
-    """
-    try:
-        record = protocol.load_state_json(_location(root, request_id))
-    except FileNotFoundError:
-        return None
-    required_strings = ('root', 'path', 'session', 'terminal', 'request_id',
-                        'checkpoint_id', 'fingerprint')
-    valid = (isinstance(record, dict)
-             and all(isinstance(record.get(k), str) and record[k].strip()
-                     for k in required_strings)
-             and record.get('state') in ('pending', 'refused', 'retrieved')
-             and (record.get('host_confirmed') is False
-                  or (record.get('host_confirmed') is True and _acceptance_valid(record)))
-             and isinstance(record.get('workers'), list)
-             and isinstance(record.get('intent_at'), (int, float))
-             and not isinstance(record.get('intent_at'), bool)
-             and math.isfinite(record['intent_at']) and record['intent_at'] > 0)
-    if valid:
-        valid = (record['root'] == os.path.realpath(root)
-                 and record['path'] == os.path.realpath(record['path'])
-                 and record['request_id'] == request_id)
-    if valid:
-        valid = all(len(record[k]) == 64 and all(c in '0123456789abcdef' for c in record[k])
-                    for k in ('checkpoint_id', 'fingerprint'))
-    if valid:
-        workers = record['workers']
-        valid = all(isinstance(w, dict) and isinstance(w.get('id'), str)
-                    and bool(w['id'].strip()) and _worker_record_valid(w)
-                    for w in workers)
-        if valid:
-            valid = len({w['id'] for w in workers}) == len(workers)
-    if valid and 'restart_prompt' in record:
-        valid = (isinstance(record['restart_prompt'], str)
-                 and 0 < len(record['restart_prompt']) <= 20000)
-    if valid and record['state'] == 'refused':
-        valid = isinstance(record.get('refusal'), str)
-    if valid and record['state'] == 'retrieved':
-        valid = (isinstance(record.get('successor_session'), str)
-                 and bool(record['successor_session'].strip())
-                 and record['successor_session'] != record['session']
-                 and isinstance(record.get('retrieval_fingerprint'), str)
-                 and bool(record['retrieval_fingerprint']))
-    if not valid:
-        raise ValueError('Invalid persisted restart intent; preserve it and reconcile with the host.')
-    return record
-
-
-def prune_settled(root, now=None, held=()):
-    """Delete retrieved/refused intents older than SETTLED_RETENTION whose checkpoint is done.
-
-    Pending intents (expired or not) and invalid records are never touched. Call with
-    the registry lock held; each candidate is re-read under its own lock before deletion
-    (``held`` names locations the caller already holds; they are skipped, never re-locked).
-    Returns the pruned request IDs.
-    """
-    now = time.time() if now is None else now
-    pruned = []
-    def eligible(record):
-        return (record is not None and record['state'] in ('retrieved', 'refused')
-                and now - record['intent_at'] > SETTLED_RETENTION
-                and not _checkpoint_live(root, record['path']))
-
-    held = {os.path.realpath(h) for h in held}
-    for entry in sorted(Path(_location(root, 'x')).parent.glob('*.json')):
-        if os.path.realpath(entry) in held:
-            continue
-        try:
-            request_id = protocol.load_state_json(str(entry)).get('request_id')
-            if os.path.realpath(entry) != _location(root, request_id) or not eligible(status(root, request_id)):
-                continue
-            with open(str(entry) + '.lock', 'a') as lock:
-                # Never wait under the registry lock: a busy record is kept for a later prune.
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                try:
-                    if not eligible(status(root, request_id)):
-                        continue
-                    entry.unlink()
-                    # Intent writers hold the registry lock this caller holds, so no
-                    # new record can be created at this location against the old sidecar.
-                    os.unlink(str(entry) + '.lock')
-                    pruned.append(request_id)
-                finally:
-                    fcntl.flock(lock, fcntl.LOCK_UN)
-        except (OSError, ValueError, TypeError, AttributeError):
-            continue  # unreadable, invalid or busy: preserve it
-    return pruned
 
 
 HOOK_DRIFT_POLICIES = ('warn', 'block')
@@ -296,23 +99,6 @@ def hook_drift_policy(root):
     return 'block' if 'block' in policies else 'warn'
 
 
-def _worker_record_valid(worker):
-    """A persisted worker is a durable report, a settled worker without one, or a
-    mailbox delegation still in flight (its reply reaches the restarted agent)."""
-    report = worker.get('report')
-    if isinstance(report, dict) and report:
-        return (isinstance(report.get('path'), str) and bool(report['path'])
-                and isinstance(report.get('sha256'), str) and len(report['sha256']) == 64
-                and all(c in '0123456789abcdef' for c in report['sha256']))
-    if report not in (None, {}):
-        return False
-    return worker.get('settled') is True or _in_flight_mailbox(worker)
-
-
-def _in_flight_mailbox(worker):
-    return worker.get('state') == 'in_flight' and worker.get('via') == 'mailbox'
-
-
 def preflight(root, path, session, terminal, request_id, workers=None,
               host_capable=False, hold=False, observations=None):
     """Persist intent before returning dispatch=True exactly once per request.
@@ -337,8 +123,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                    request_id=request_id)
     # The durable registry lock also covers different checkpoints and callers
     # with different TMPDIRs; the publisher lock alone is temp-directory scoped.
-    registry = str(Path(location).parent / 'registry')
-    with ledger.locked(handoff_identity.publisher_lock_path(root)), ledger.locked(registry), ledger.locked(path), ledger.locked(location):
+    registry = intents.registry(location)
+    with ledger.locked(handoff_identity.publisher_lock_path(root)), ledger.locked(registry), ledger.locked(path), intents.locked(location):
         try:
             pointers.prune(root, prune_settled(root, held=(location,)))
             previous = status(root, request_id)
@@ -412,13 +198,10 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # Validate every persisted intent, including legacy request IDs. A
         # different request name must not turn uncertain dispatch into permission.
         try:
-            for entry in Path(location).parent.glob('*.json'):
+            for entry in intents.entries(root):
                 if reentry is not None and os.path.realpath(entry) == location:
                     continue
-                raw = protocol.load_state_json(entry)
-                other = status(root, raw.get('request_id'))
-                if other is None or os.path.realpath(entry) != _location(root, other['request_id']):
-                    raise ValueError('Noncanonical restart intent.')
+                other = intents.canonical(root, entry)
                 same_checkpoint = (other['path'] == path or
                                    other['checkpoint_id'] == checkpoint.checkpoint_id)
                 # An expired intent is never adopted: it only still guards its own checkpoint
@@ -503,12 +286,12 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         if observations is not None and reentry is None:
             # Under the intent lock and only with a new intent, so the evidence
             # always describes the attempt that produced the dispatchable prompt.
-            protocol.write_json(location[:-len('.json')] + '.observations', observations)
+            intents.write(intents.observations(location), observations)
         if reentry is None:
-            protocol.write_json(location, record)
+            intents.write(location, record)
         # Durable single-attempt reservation, written before any host call is returned.
         record['dispatch_started_at'] = time.time()
-        protocol.write_json(location, record)
+        intents.write(location, record)
         result = dict(record, outcome='ready', dispatch=True)
         if warnings:
             result['warnings'] = warnings
@@ -517,29 +300,6 @@ def preflight(root, path, session, terminal, request_id, workers=None,
 
 TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
 TRANSCRIPT_MAX_LINE = 2 * 1024 * 1024
-
-
-def _transcript_roots():
-    home = Path.home()
-    roots = [(home / '.claude/projects', 'claude-native-transcript')]
-    roots.extend((p / 'sessions', 'codex-native-transcript')
-                 for p in (home / '.agentsroom/codex').glob('*'))
-    roots.append((Path(os.environ.get('CODEX_HOME') or home / '.codex') / 'sessions',
-                  'codex-native-transcript'))
-    return [(p.resolve(), source) for p, source in roots]
-
-
-def _confined_transcript(record, transcript):
-    path = Path(transcript)
-    real = path.resolve()
-    source = next((source for root, source in _transcript_roots()
-                   if real.is_relative_to(root)), None)
-    session = record['session']
-    if (not source or not re.search(r'(?<![a-zA-Z0-9])' + re.escape(session)
-                                   + r'(?![a-zA-Z0-9])', real.stem)
-            or real.suffix != '.jsonl'):
-        raise ValueError('Transcript must be a predecessor session file under a native sessions root.')
-    return real, source
 
 
 def _transcript_evidence(record, transcript):
@@ -610,7 +370,7 @@ def _import_automatic(record):
 def record_acceptance(root, request_id, transcript):
     """Import bounded native scheduling evidence; never dispatch a restart."""
     location = _location(root, request_id)
-    with ledger.locked(location):
+    with intents.locked(location):
         record = status(root, request_id)
         if not record or record['state'] == 'refused' or intent_expired(record):
             raise ValueError('No unexpired pending or retrieved restart intent.')
@@ -618,14 +378,14 @@ def record_acceptance(root, request_id, transcript):
         if evidence is None:
             raise ValueError('No matching native host acceptance; preserve the intent and reconcile without redispatch.')
         record.update(host_confirmed=True, host_acceptance=evidence)
-        protocol.write_json(location, record)
+        intents.write(location, record)
         return record
 
 
 def record_refusal(root, request_id, reason):
     """Record a returned host refusal/error. Never closes the checkpoint."""
     location = _location(root, request_id)
-    with ledger.locked(location):
+    with intents.locked(location):
         record = status(root, request_id)
         if not record:
             raise ValueError('No restart intent.')
@@ -633,8 +393,8 @@ def record_refusal(root, request_id, reason):
             raise ValueError('Successor receipt already recorded.')
         if record['host_confirmed']:
             raise ValueError('Host acceptance already recorded; reconcile without marking a refusal.')
-        record.update(state='refused', refusal=str(reason), host_confirmed=False)
-        protocol.write_json(location, record)
+        intents.settle(record, 'refused', refusal=str(reason), host_confirmed=False)
+        intents.write(location, record)
         return record
 
 
@@ -646,7 +406,7 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
     Call after read-only prepare; this never claims or acknowledges work.
     """
     location = _location(root, request_id)
-    with ledger.locked(location):
+    with intents.locked(location):
         record = status(root, request_id)
         if not record or record['state'] == 'refused':
             raise ValueError('No pending restart intent.')
@@ -672,7 +432,7 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
         now = time.time()
         if (not isinstance(created, (int, float)) or not math.isfinite(created)
                 or not record.get('intent_at') or created <= record['intent_at']
-                or created > now or now - created > 7200):
+                or created > now or now - created > intents.TTL['delivery_receipt']):
             raise ValueError('Successor receipt must follow intent and be at most two hours old.')
         references = receipt.get('references')
         if (not isinstance(references, dict) or not all(isinstance(spec, str)
@@ -688,12 +448,12 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
         # Keep the receipt proven here: a later resume rewrites the live .delivery
         # file. Only the token's digest is kept; the token itself grants reuse.
         record = _import_automatic(record)
-        record.update(state='retrieved', successor_session=session,
+        intents.settle(record, 'retrieved', successor_session=session,
                       retrieval_fingerprint=receipt['fingerprint'],
                       retrieval_receipt=dict(token_sha256=hashlib.sha256(delivery_receipt.encode()).hexdigest(),
                                              path=record['path'], fingerprint=receipt['fingerprint'],
                                              created=created, references=dict(references), confirmed_at=now))
-        protocol.write_json(location, record)
+        intents.write(location, record)
         return record
 
 
@@ -797,13 +557,12 @@ def adopt(root, request_id, binding=None):
         'Native transcript records host acceptance/scheduling: host_confirmed=true; replacement is a separate observation.'
         if record['host_confirmed'] else 'Host request acceptance is not observed: host_confirmed=false.'))
     # Dispatcher holds gate execution, not retrieval: the receipt above stays recorded.
-    import handoff_dispatch as dispatch
     try:
         topic = Record.load(record['path']).topic
     except (OSError, ValueError):
         topic = None
     try:
-        holds = dispatch.applicable_holds(dispatch.read_holds(root), topic)
+        holds = holds_store.applicable_holds(holds_store.read_holds(root), topic)
     except OSError as exc:
         return dict(blocked('hold', exc), restart=identity, report=report)
     if holds:
@@ -836,8 +595,6 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
     inventory (None = unknown, blocks) and the restart capability. Holds are the
     union of the caller's observation and durable dispatcher holds.
     """
-    import handoff_dispatch as dispatch
-
     def blocked(reason):
         return dict(outcome='blocked', dispatch=False, reason=reason, host_confirmed=False,
                     action='Do not call agents_restart. Keep the checkpoint open and report; '
@@ -868,7 +625,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         return blocked('publication-not-ready')
     request_id = request_id_for(terminal, checkpoint_id)
     try:
-        holds = dispatch.applicable_holds(dispatch.read_holds(root), checkpoint.topic)
+        holds = holds_store.applicable_holds(holds_store.read_holds(root), checkpoint.topic)
     except OSError as exc:
         return dict(blocked('hold'), stage='hold', detail=str(exc))
     hold = bool(hold) or bool(holds)
