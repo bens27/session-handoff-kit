@@ -58,6 +58,13 @@ class OneTerminalPointerRecipe(Case):
         for module in (context_watch, handoff_protocol, handoff_ledger, handoff_dispatch, restart_preflight):
             with open(module.__file__.replace('.pyc', '.py'), encoding='utf-8') as f:
                 source = f.read()
+            if module is context_watch:
+                # Sole exception: the missing-install notice marker, which by
+                # definition cannot reach handoff_identity.
+                start = source.index('def _claim_lone_notice(')
+                end = source.index('\ndef ', start + 1)
+                self.assertEqual(source.count('gettempdir'), source[start:end].count('gettempdir'))
+                source = source[:start] + source[end:]
             with self.subTest(module=module.__name__):
                 self.assertNotIn('gettempdir', source)
                 self.assertNotIn('context-watch-terminal-', source)

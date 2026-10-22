@@ -187,3 +187,60 @@ class LoneHookFailsVisible(unittest.TestCase):
         p = self.run_lone({"hook_event_name": "Stop"})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("Context-watch failed (ModuleNotFoundError)", json.loads(p.stdout)["systemMessage"])
+
+
+class LoneHookNoticeOncePerSession(unittest.TestCase):
+    """Missing install: one notice per session, not one per tool call or turn."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = os.path.realpath(self._tmp.name)
+        self.hook = os.path.join(self.tmp, "context_watch.py")
+        with open(HOOK) as src, open(self.hook, "w") as dst:
+            dst.write(src.read())
+
+    def run_lone(self, event, tmpdir=None):
+        env = dict(os.environ, HOME=self.tmp, TMPDIR=tmpdir or self.tmp, PYTHONPATH="",
+                   CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0")
+        return subprocess.run([sys.executable, "-I", self.hook], input=json.dumps(event),
+                              capture_output=True, text=True, cwd=self.tmp, env=env, timeout=30)
+
+    def test_second_event_of_a_session_is_quiet(self):
+        for name in ("UserPromptSubmit", "PostToolUse", "Stop"):
+            evt = {"hook_event_name": name, "session_id": "once-" + name, "cwd": self.tmp,
+                   "transcript_path": os.path.join(self.tmp, "t.jsonl"), "prompt": "x"}
+            first, second = self.run_lone(evt), self.run_lone(evt)
+            self.assertEqual((first.returncode, second.returncode), (0, 0), name)
+            self.assertIn("Context-watch failed", first.stdout, name)
+            self.assertEqual(second.stdout.strip(), "", name)
+
+    def test_one_claim_covers_every_event_of_the_session(self):
+        base = {"session_id": "shared", "cwd": self.tmp, "prompt": "x"}
+        self.assertIn("Context-watch failed", self.run_lone(dict(base, hook_event_name="UserPromptSubmit")).stdout)
+        self.assertEqual(self.run_lone(dict(base, hook_event_name="Stop")).stdout.strip(), "")
+
+    def test_other_session_still_hears_it(self):
+        self.run_lone({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "x"})
+        p = self.run_lone({"hook_event_name": "UserPromptSubmit", "session_id": "s2", "prompt": "x"})
+        self.assertIn("Context-watch failed", p.stdout)
+
+    def test_planted_symlink_is_not_followed(self):
+        victim = os.path.join(self.tmp, "victim")
+        with open(victim, "w") as f:
+            f.write("KEEP")
+        key = hashlib.sha1(b"planted").hexdigest()[:20]
+        os.symlink(victim, os.path.join(self.tmp, "context-watch-lone-%s.error" % key))
+        p = self.run_lone({"hook_event_name": "UserPromptSubmit", "session_id": "planted", "prompt": "x"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(victim) as f:
+            self.assertEqual(f.read(), "KEEP")
+
+    def test_unclaimable_marker_falls_back_to_every_event(self):
+        cw = load_hook(self.tmp)
+        self.addCleanup(setattr, tempfile, "tempdir", None)
+        with mock.patch.object(cw.os, "open", side_effect=PermissionError):
+            self.assertTrue(cw._claim_lone_notice({"session_id": "x"}))
+            self.assertTrue(cw._claim_lone_notice({"session_id": "x"}))
+        self.assertTrue(cw._claim_lone_notice({"session_id": "y"}))
+        self.assertFalse(cw._claim_lone_notice({"session_id": "y"}))

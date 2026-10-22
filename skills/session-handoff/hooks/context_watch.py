@@ -407,9 +407,30 @@ def flush_diag(agent):
         print(diag_envelope(agent, event_name, message))
 
 
+def _claim_lone_notice(evt):
+    """Once-per-session claim for a hook installed without handoff_identity, so
+    its own temp-state paths are unavailable: a 0600 marker made with
+    O_CREAT|O_EXCL|O_NOFOLLOW in the system temp dir. True means "say it";
+    a marker that cannot be made (other than already existing) says it again."""
+    import tempfile  # only here: every other temp path comes from handoff_identity
+    key = str((evt or {}).get("session_id") or (evt or {}).get("transcript_path") or "")
+    if not key:
+        return True
+    path = os.path.join(tempfile.gettempdir(), "context-watch-lone-%s.error"
+                        % hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:20])
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600))
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def fail_open(exc, evt, once=True):
     """Report an unexpected failure under the event that triggered it, once per
-    session (every time when `once` is false), with the exception type only.
+    session (via a module-free marker when `once` is false: a missing install),
+    with the exception type only.
     Always exits 0."""
     event_name = (evt or {}).get("hook_event_name") or "SessionStart"
     if event_name == "SessionStart":
@@ -417,7 +438,7 @@ def fail_open(exc, evt, once=True):
                    'is blocked. Restore the installed skill files/access; do not infer that no handoff exists.'
                    % type(exc).__name__)
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': message}}))
-    elif not once or claim_once(evt, ".error"):
+    elif claim_once(evt, ".error") if once else _claim_lone_notice(evt):
         message = ("handoff-status: Context-watch failed (%s); context telemetry is unavailable for this hook. "
                    "Continue the current task." % type(exc).__name__)
         if event_name in ("PostToolUse", "UserPromptSubmit"):
