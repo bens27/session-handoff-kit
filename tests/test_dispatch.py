@@ -134,6 +134,104 @@ class TriggerClassificationTests(Base):
                 self.assertIn(handoff_dispatch.classify(prompt), ('none', 'maintenance', 'neutral'))
 
 
+    def test_session_handoff_wording_requests_save(self):
+        for prompt in ('Session handoff to yourself', 'session handoff',
+                       'session handoff to your successor', 'session handoff to successor',
+                       'session handoff to self', 'handoff', 'hand off', 'HANDOFF!',
+                       'hand off work', 'hand off the session', 'hand off my handoff',
+                       'hand off this handoff'):
+            with self.subTest(prompt=prompt):
+                r = self.dispatch(prompt=prompt)
+                self.assertEqual((r['operation'], r['classification']), ('save', 'save'))
+                self.assertEqual((r['outcome'], r['next_action']['kind']), ('proceed', 'run'))
+
+    def test_apostrophes_in_save_requests_are_not_quotes(self):
+        prompts = (
+            "save the work, I'm done and it's late",
+            "save a checkpoint, we're done and it's late",
+            "park the work, I'm off, it's late",
+            "save the session's work, it's late",
+            "save a handoff for Ben's review, he's next",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                r = self.dispatch(prompt=prompt)
+                self.assertEqual((r['operation'], r['outcome']), ('save', 'proceed'))
+
+    def test_actual_single_quoted_phrases_are_mentions(self):
+        for prompt in ("the 'resume' button", "say 'resume' now", "resume 'later'",
+                       "save the work 'now'", 'the ‘resume’ button', 'say ‘resume’ now',
+                       'resume ‘later’', 'save the work ‘now’'):
+            with self.subTest(prompt=prompt):
+                r = self.dispatch(prompt=prompt)
+                self.assertEqual((r['outcome'], r['classification']), ('none', 'none'))
+                self.assertIsNone(r['operation'])
+                self.assertFalse(r['authorized_to_execute'])
+
+    def test_apostrophes_in_target_descriptions_preserve_selection(self):
+        self.record_hook_session('sess-a')
+        description = "Ben's work when it's ready"
+        path = self.save(description=description)
+        for operation in ('resume', 'retrieve'):
+            with self.subTest(operation=operation):
+                r = self.dispatch(prompt=operation + ' ' + description)
+                self.assertEqual((r['operation'], r['outcome']), (operation, 'proceed'))
+                self.assertEqual(r['target']['path'], path)
+                self.assertEqual(r['authorized_to_execute'], operation == 'resume')
+
+    def test_unrecognised_lifecycle_asks_for_explicit_operation(self):
+        r = self.dispatch(prompt='resume later')
+        self.assertEqual((r['outcome'], r['code'], r['next_action']['kind']),
+                         ('ask', 'lifecycle_unrecognised', 'ask'))
+        self.assertIsNone(r['operation'])
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertFalse(r['retryable'])
+        self.assertEqual(r['next_action']['command'], '')
+        self.assertEqual(r['next_action']['text'],
+                         'Do you want to save a checkpoint, resume one, or retrieve one, or neither?')
+        self.assertEqual(r['next_action']['options'], [
+            dict(operation='save', label='Save a checkpoint', description='Save the current work for a later session.'),
+            dict(operation='resume', label='Resume a checkpoint', description='Continue work from a saved checkpoint.'),
+            dict(operation='retrieve', label='Retrieve a checkpoint', description='Read a saved checkpoint without continuing its work.'),
+            dict(operation='none', label='Neither', description='Continue the current request without a handoff action.'),
+        ])
+        self.assertFalse((self.root / '.handoffs' / 'dispatch').exists())
+        explicit = self.dispatch(prompt='resume later', operation='save')
+        self.assertEqual((explicit['outcome'], explicit['operation_source']), ('proceed', 'explicit'))
+
+    def test_clarification_choices_round_trip_as_explicit_operations(self):
+        self.record_hook_session('sess-a')
+        self.save()
+        for operation in ('save', 'resume', 'retrieve', 'none'):
+            with self.subTest(operation=operation):
+                fields = {'authorization': {'source': 'user'}} if operation == 'resume' else {}
+                r = self.dispatch(prompt='resume later', operation=operation, **fields)
+                self.assertEqual((r['operation'], r['operation_source']), (operation, 'explicit'))
+                if operation == 'none':
+                    self.assertEqual((r['outcome'], r['code'], r['next_action']['kind']),
+                                     ('none', 'no_operation', 'continue'))
+                    self.assertFalse(r['authorized_to_execute'])
+                else:
+                    self.assertEqual((r['outcome'], r['next_action']['kind']), ('proceed', 'run'))
+                    self.assertEqual(r['authorized_to_execute'], operation == 'resume')
+
+    def test_lifecycle_prose_questions_and_quotes_stay_none(self):
+        prompts = (
+            'What does the handoff output mean?', 'I read the handoff, looks good',
+            "I'll resume later", 'resume the build after lint passes',
+            'retrieve the user list from the API', 'load the model checkpoint',
+            'update my resume.pdf', 'can we checkpoint the training run every epoch',
+            'park the car', 'session handoff to yourself then keep working',
+            'resume later?', "'handoff'", '‘handoff’', "resume 'later'", 'resume ‘later’',
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                r = self.dispatch(prompt=prompt)
+                self.assertEqual((r['outcome'], r['code'], r['next_action']['kind']),
+                                 ('none', 'no_operation', 'continue'))
+                self.assertIsNone(r['operation'])
+                self.assertFalse(r['authorized_to_execute'])
+
     POSITIVE = {
         'continue the handoff': 'resume',
         'Resume the handoff!': 'resume',
@@ -160,6 +258,10 @@ class TriggerClassificationTests(Base):
         'Edit the session-handoff SKILL.md pointer description.': 'maintenance',
         'Fix the handoff hook tests for resume.': 'maintenance',
         'Hand this off to the Orca worktree for implementation.': 'none',
+        'What does "Session handoff to yourself" mean?': 'none',
+        '`handoff`': 'none',
+        'Edit session handoff to yourself docs': 'maintenance',
+        'handoff-status: session handoff to yourself': 'neutral',
     }
 
     def test_lifecycle_prompts_route_to_their_operation(self):
@@ -172,10 +274,13 @@ class TriggerClassificationTests(Base):
     def test_unmatched_opening_prose_does_not_route_to_a_target(self):
         self.record_hook_session('sess-a')
         self.save()
-        for prompt in ('resume now', 'resume later', 'resume it', 'retrieve everything'):
+        for prompt in ('resume now', 'resume later', 'resume it', 'retrieve everything',
+                       'handoff to another agent', 'hand off later', 'park', 'park it',
+                       'park that', 'park your checkpoint'):
             with self.subTest(prompt=prompt):
                 r = self.dispatch(prompt=prompt)
-                self.assertEqual((r['outcome'], r['code']), ('none', 'no_operation'))
+                self.assertEqual((r['outcome'], r['code']), ('ask', 'lifecycle_unrecognised'))
+                self.assertEqual(r['next_action']['kind'], 'ask')
                 self.assertFalse(r['authorized_to_execute'])
 
     def test_non_lifecycle_text_never_acts(self):

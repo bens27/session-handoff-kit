@@ -818,7 +818,29 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
 1. An explicit `operation` takes precedence over prompt classification.
    Classification routes only exact lifecycle commands. Quoted mentions,
    neutral notices, status, summary and commit requests, and skill-maintenance
-   text give `none`. Execution needs user authorization (an exact prompt or
+   text give `none`. Save commands also include `session handoff`, optionally
+   followed by `to yourself`, `to your successor`, `to successor` or `to self`;
+   `hand off [this|the|my] work|session|handoff`; and bare `handoff` or `hand off`
+   with no other text (a trailing `.` or `!` is allowed). After the quoted,
+   neutral, pressure and maintenance guards and recognised commands,
+   `ask`/`lifecycle_unrecognised` applies only to command-shaped prompts:
+   at most four whitespace-separated words, no `?`, and the first token is
+   `handoff`, `handoffs`, `resume`, `retrieve`, `checkpoint` or `park`, or the
+   opening is `hand off`. The two-word `hand off` counts only in this form.
+   Single and curly-single quotes count as quoting alongside double quotes
+   and backticks. For `park`, only bare `park` or a lifecycle object (`work`,
+   `session`, `handoff`, `checkpoint`, `this`, `it`, `that`, optionally preceded
+   by `this`, `the`, `my`, `a` or `your`) qualifies; `park the car` gives `none`.
+   Prose, questions and longer unmatched commands give `none` as before.
+   The ask action has user-facing `text` and additive `options`: an ordered
+   array for `save`, `resume`, `retrieve`, `none`, each with `operation`,
+   `label` and a one-line `description`. Show these verbatim as a pick card,
+   then dispatch the chosen operation explicitly. `operation: "none"` returns
+   `none`/`no_operation`, ignores any explicit target or targeted prompt,
+   and suppresses prompt inference. Choosing `resume`
+   also supplies `authorization: {"source": "user"}`. The clarification itself
+   grants no execution authority and does not retry.
+   Execution needs user authorization (an exact prompt or
    `{"source": "user"}`) or configured autoresume. Checkpoint content never
    authorizes. Exact `resume <target>` and `retrieve <target>` also classify
    and select a target: one unquoted, whitespace-free `.md` path, kebab-case
@@ -847,7 +869,8 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    selected target saved over 24h ago (frontmatter `created`, else the last
    write) also carries `age_notice` (`parked N days (saved X)`), repeated in
    the opening text; claim and release do not reset it. Non-path text matching
-   no topic or description (such as `resume later`) gives `none`/`no_operation`.
+   no topic or description (such as `resume later`) gives
+   `ask`/`lifecycle_unrecognised`, without selecting a target.
    A bare readable choice can accompany an explicit `resume`/`retrieve`
    operation; bare choice text alone does not authorize resume, which still
    needs `{"source": "user"}`. Verbs are case-insensitive; path case is preserved.

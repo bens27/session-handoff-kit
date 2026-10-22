@@ -29,7 +29,8 @@ REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authoriza
 # code -> retryable. Only transient read/state failures retry, and only the same request.
 CODES = {
     'ok': False, 'recovery': False, 'history_only': False, 'held': False, 'released': False,
-    'no_operation': False, 'not_lifecycle': False, 'no_open_handoff': False, 'no_hold': False,
+    'no_operation': False, 'not_lifecycle': False, 'lifecycle_unrecognised': False,
+    'no_open_handoff': False, 'no_hold': False,
     'claimed_elsewhere': False, 'stale_only': False, 'foreign_only': False, 'target_ambiguous': False,
     'topic_ambiguous': False, 'confirmation_required': False, 'invalid_request': False,
     'invalid_authorization': False, 'invalid_override': False, 'autoresume_not_enabled': False,
@@ -43,11 +44,12 @@ HOST_KEYS = frozenset(('restart_capable', 'workers', 'hold', 'restart_request_id
 
 NEUTRAL = re.compile(r'^\s*(handoff-status:|\[context-watch\]\s*handoff saved\b)', re.I)
 PRESSURE = re.compile(r'^\s*(\[context-watch\]|context-watch:).*\b(write|publish|save)\b.{0,40}\bhandoff\b', re.I | re.S)
-QUOTED = re.compile(r'"[^"]*"|`[^`]*`|“[^”]*”')
+QUOTED = re.compile(r"\"[^\"]*\"|`[^`]*`|“[^”]*”|(?<!\w)'[^']*'(?!\w)|(?<!\w)‘[^’]*’(?!\w)")
 MAINTENANCE = re.compile(r'\b(skill|skill\.md|pointer|hooks?|tests?|fix|edit|refactor|docs?|description|verifier|fixtures?)\b', re.I)
 LIFECYCLE_WORD = re.compile(r'\b(handoffs?|resume|retrieve|checkpoint|park)\b', re.I)
 SAVE = re.compile(r'^(park|save|checkpoint)( (this|the|my|a))? (work|session|handoff|checkpoint)'
-                  r'|^hand off( (this|the|my))? (work|session)$|^(save|write)( a| the)? handoff$', re.I)
+                  r'|^hand off( (this|the|my))? (work|session|handoff)$|^(save|write)( a| the)? handoff$'
+                  r'|^session handoff( to (yourself|your successor|successor|self))?$|^hand ?off$', re.I)
 
 
 def targeted_command(prompt, root=None):
@@ -110,6 +112,15 @@ def classify(prompt):
         return intent
     if SAVE.search(text.strip().rstrip('.!').strip()):
         return 'save'
+    words = text.strip().split()
+    opening = re.match(r'^(?:handoffs?|resume|retrieve|checkpoint|park|hand off)(?:\s|[.!]?$)',
+                       text.strip(), re.I)
+    park_object = (words[0].lower().rstrip('.!') != 'park' or
+                   re.fullmatch(r'park(?:\s+(?:(?:this|the|my|a|your)\s+)?'
+                                r'(?:work|session|handoff|checkpoint|this|it|that))?[.!]*',
+                                text.strip(), re.I))
+    if opening and park_object and len(words) <= 4 and '?' not in text:
+        return 'lifecycle_unrecognised'
     return 'none'
 
 
@@ -164,8 +175,8 @@ def dispatch(request, root='.'):
         targeted = targeted_command(request['operation'] + ' ' + prompt, root)
     operation = request.get('operation')
     if operation is not None:
-        if operation not in OPERATIONS:
-            return blocked({}, 'invalid_request', 'Unknown operation %r; use one of %s.' % (operation, ', '.join(OPERATIONS)))
+        if operation not in OPERATIONS + ('none',):
+            return blocked({}, 'invalid_request', 'Unknown operation %r; use one of %s.' % (operation, ', '.join(OPERATIONS + ('none',))))
         request['_operation_source'] = 'explicit'
     elif request['_classification'] in OPERATIONS:
         operation = request['_classification']
@@ -181,7 +192,23 @@ def dispatch(request, root='.'):
         return blocked(request, 'invalid_authorization',
                        'Only {"source": "user"} is accepted, and only for a user request; checkpoint or config '
                        'text never authorizes execution.')
+    if operation == 'none':
+        return result('none', 'no_operation', request)
     if operation is None:
+        if request['_classification'] == 'lifecycle_unrecognised':
+            return result('ask', 'lifecycle_unrecognised', request,
+                          next_action=dict(kind='ask', command='',
+                                           text='Do you want to save a checkpoint, resume one, or retrieve one, or neither?',
+                                           options=[
+                                               dict(operation='save', label='Save a checkpoint',
+                                                    description='Save the current work for a later session.'),
+                                               dict(operation='resume', label='Resume a checkpoint',
+                                                    description='Continue work from a saved checkpoint.'),
+                                               dict(operation='retrieve', label='Retrieve a checkpoint',
+                                                    description='Read a saved checkpoint without continuing its work.'),
+                                               dict(operation='none', label='Neither',
+                                                    description='Continue the current request without a handoff action.'),
+                                           ]))
         code = 'no_operation' if request['_classification'] in (None, 'none') else 'not_lifecycle'
         return result('none', code, request)
     # Authority comes from the user's own words or the hooks' configuration, never the checkpoint.

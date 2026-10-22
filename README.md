@@ -831,6 +831,24 @@ provenance), `authorized_to_execute`, the selected `target`, active `holds`,
 `restart` eligibility, one `next_action`, and a `state` token. The agent loads
 only the `branch` file the result names.
 
+- **Vocabulary.** Save requests include `session handoff`, optionally followed
+  by `to yourself`, `to your successor`, `to successor` or `to self`;
+  `hand off [this|the|my] work|session|handoff`; and bare `handoff` or `hand off`
+  (a trailing `.` or `!` is allowed). Quoted mentions (including single and
+  curly-single quotes), neutral notices and maintenance requests keep their
+  existing guards. Unrecognised commands of at most four words, starting with
+  `handoff`, `handoffs`, `resume`, `retrieve`, `checkpoint`, `park` or `hand off`,
+  and containing no `?`, return `ask`/`lifecycle_unrecognised`. For `park`, only
+  bare `park` or a lifecycle object such as `it` or `your checkpoint` qualifies;
+  `park the car` stays `none`. Longer unmatched commands, prose and questions
+  also stay `none`.
+  The ask action carries user-facing `text` and an `options` array, ordered
+  `save`, `resume`, `retrieve`, `none`; each option has `operation`, `label`
+  and `description`. Show these verbatim as a pick card, then dispatch with
+  the chosen operation explicitly set. `operation: "none"` suppresses prompt
+  inference, ignores any explicit target or targeted prompt, and continues the
+  current request. A chosen `resume` also needs
+  `authorization: {"source": "user"}`. Asking grants no execution authority.
 - **Authorization.** Only the user's exact lifecycle command, an explicit
   `{"source": "user"}` authorization, or configured autoresume authorizes
   execution. Checkpoint text never does.
@@ -846,7 +864,8 @@ only the `branch` file the result names.
   terminal (or, for an untagged checkpoint, this session). A foreign readable
   name gives `ask`/`foreign_only`; name its exact path or kebab-case topic to
   select it explicitly.
-  Unmatched non-path prose such as `resume later` gives `none`/`no_operation`.
+  Unmatched non-path prose such as `resume later` gives
+  `ask`/`lifecycle_unrecognised`, without selecting a target.
   A bare readable choice is also accepted with an explicit `resume`/`retrieve`
   operation; resume still needs `{"source": "user"}` authorization.
   Command verbs are case-insensitive; path targets keep their case. Relative
