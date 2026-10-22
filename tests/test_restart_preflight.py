@@ -1202,6 +1202,40 @@ class RestartCommandTests(unittest.TestCase):
         self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'pending', False), again)
         self.assertNotIn('restart_prompt', again)
 
+    def test_saved_restart_transition_binds_checkpoint_among_older_same_session_saves(self):
+        import shlex
+        document = {'topic': 'latest', 'description': 'Latest restart', 'body': self.BODY}
+        with patch.dict(os.environ, {'AGENTSROOM_AGENT_ID': 'term'}):
+            saved = protocol.save(self.root, 'old', 'save-latest', document)
+            retry = protocol.save(self.root, 'old', 'save-latest', document)
+        self.assertEqual(saved['transition']['kind'], 'agents_restart')
+        self.assertEqual(restart.Record.load(saved['path']).get('restart_intent'), 'agents_restart')
+        for result in (saved, retry):
+            self.assertIn('--path ' + shlex.quote(result['path']), result['transition']['action'])
+        code, out = self.restart_cli('--workers', '[]', '--host-capable', '--path', saved['path'])
+        self.assertEqual((code, out['outcome'], out['path']), (0, 'ready', saved['path']), out)
+        self.assertEqual(out['request_id'], restart.request_id_for('term', saved['checkpoint_id']))
+
+    def test_ambiguous_restart_returns_candidate_commands_without_bypassing_hold(self):
+        import shlex, subprocess
+        saved = protocol.save(self.root, 'old', 'save-2', {
+            'topic': 'second', 'description': 'Second open work', 'body': self.BODY})
+        workers = self.json.dumps([{'id': 'chief', 'state': 'in_flight', 'via': 'mailbox'}])
+        code, out = self.restart_cli('--workers', workers, '--host-capable', '--hold')
+        self.assertEqual((code, out['reason'], out['dispatch']), (1, 'ambiguous-checkpoint', False), out)
+        candidates = out.get('candidates', [])
+        self.assertEqual({c['path'] for c in candidates}, {self.path, saved['path']}, out)
+        self.assertEqual(out['total'], 2)
+        chosen = next(c for c in candidates if c['path'] == saved['path'])
+        self.assertEqual(chosen['checkpoint_id'], saved['checkpoint_id'])
+        argv = shlex.split(chosen['command'])
+        argv[0] = sys.executable
+        run = subprocess.run(argv, env=self.env, text=True, capture_output=True)
+        blocked = self.json.loads(run.stdout)
+        self.assertEqual((run.returncode, blocked['reason']), (1, 'human-hold'), blocked)
+        self.assertEqual(blocked['path'], saved['path'])
+        self.assertEqual(list(Path(self.root).glob('.handoffs/restart/*.json')), [])
+
     def test_observations_are_written_only_with_a_new_ready_intent(self):
         import hashlib
         report = Path(self.root) / 'w2.txt'

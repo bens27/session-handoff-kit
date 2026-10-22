@@ -364,7 +364,7 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
                 resume_delivery_tokens=note.get('resume_delivery_tokens'))
 
 
-def _transition(root, guard=None):
+def _transition(root, guard=None, path=None):
     """What ends this session after a save, deduced from the environment and config."""
     if (os.environ.get('HANDOFF_AUTO') or '').strip():
         auto = _truthy(os.environ.get('HANDOFF_AUTO'))
@@ -385,7 +385,7 @@ def _transition(root, guard=None):
         return dict(kind='agents_restart', requires_preflight=True, action=(
             'Settle and inventory every worker you delegated (agents_spawned_list includeClosed:true, mailbox '
             'and continuity delegations; each as {id, report:{path,sha256}}), check live holds/needsInput, then run '
-            'python3 %s restart --root %s --workers \'<JSON list>\' --host-capable [--hold]. Pass '
+            'python3 %s restart --root %s%s --workers \'<JSON list>\' --host-capable [--hold]. Pass '
             '--workers \'[]\' when nothing is outstanding; a settled worker with no report file is '
             '{id, settled: true, report: null}; a mailbox delegation still in flight is '
             '{"id": "<name>", "state": "in_flight", "via": "mailbox"}. Omitting --workers blocks with worker-inventory-unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
@@ -394,6 +394,7 @@ def _transition(root, guard=None):
             'reconciliation, never redispatch. Preserve human holds and worker results.')
             % (shlex.quote(os.path.join(hooks_dir(), 'restart_preflight.py')),
                shlex.quote(os.path.realpath(handoff_identity.project_root(root))),
+               ' --path ' + shlex.quote(os.path.realpath(path)) if path is not None else '',
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
@@ -406,8 +407,8 @@ def _transition(root, guard=None):
     return dict(kind='new-session', action='Tell the user to start a new session in this project and ask it to resume.' + off)
 
 
-def transition(root, guard=None):
-    result = _transition(root, guard)
+def transition(root, guard=None, path=None):
+    result = _transition(root, guard, path=path)
     if guard and guard['reasons']:
         result['diagnostics'] = guard
         if not guard['pause_reasons']:
@@ -616,7 +617,7 @@ def save(root, session, request_id, document):
                     guard['pause_reasons'] = ledger._split_csv(record['record'].paused)
                     guard['reasons'] = list(dict.fromkeys(guard['reasons'] + guard['pause_reasons']))
                 next_transition = (dict(kind='none', action='Checkpoint is already transferred or closed; continue current work without restarting.')
-                                   if not record['record'].open_strict else transition(root, guard))
+                                   if not record['record'].open_strict else transition(root, guard, path=record['path']))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
                             transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
         predecessor = document.get('predecessor')
@@ -765,7 +766,7 @@ def save(root, session, request_id, document):
                     excerpt = re.search(r'#L(\d+)-L(\d+)$', spec)
                     if excerpt and int(excerpt[2]) - int(excerpt[1]) + 1 > 80:
                         warnings.append('Required excerpt exceeds the recommended 80 lines: %s; keep necessary content and defer background to optional_references.' % spec)
-                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=next_transition,
+                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=transition(root, guard, path=path),
                             action='Checkpoint is published and discoverable; follow transition.action, then stop.')
             except OSError as exc:
                 if os.path.exists(path):

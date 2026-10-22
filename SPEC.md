@@ -453,8 +453,13 @@ AgentsRoom save transition candidates include `requires_preflight: true`.
 Dispatch requires the standalone preflight module to return ready/dispatch from
 current authoritative host observations; unknown capability, identity, inventory
 or hold state requires manual continuation. The predecessor runs one command,
-`restart_preflight.py restart --root R --workers '<JSON>' --host-capable [--hold]`,
-which reads hook/host identity, selects its single open checkpoint, derives the
+`restart_preflight.py restart --root R --path P --workers '<JSON>' --host-capable [--hold]`,
+where save supplies its exact published path (including on an idempotent retry).
+Without `--path`, one owned open checkpoint is selected; several return blocked
+`ambiguous-checkpoint` with up to ten path/ID/command candidates and a total count,
+never an implicit latest choice. Candidate commands preserve caller observations
+and rerun all preflight gates; match the successful save path or ask the user.
+The command reads hook/host identity, validates the checkpoint and derives the
 deterministic request ID, adds durable holds and preflights; observations are
 stored under the intent lock only with a new ready intent. A rerun after a host
 refusal returns `refused` (a retry needs a new save). Inventory shapes: `[]` is a

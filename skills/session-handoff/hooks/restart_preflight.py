@@ -15,6 +15,7 @@ import time
 import hmac
 import math
 import stat
+import shlex
 
 import handoff_holds as holds_store
 import handoff_identity
@@ -612,8 +613,27 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
                and r['record'].get('terminal', terminal) == terminal]
         if errors:
             return blocked('checkpoints-unreadable')
-        if len(own) != 1:
-            return blocked('no-open-checkpoint' if not own else 'ambiguous-checkpoint')
+        if not own:
+            return blocked('no-open-checkpoint')
+        if len(own) > 1:
+            candidates = []
+            for item in sorted(own, key=lambda r: r['path'])[:10]:
+                checkpoint_id = item['record'].checkpoint_id or ''
+                argv = ['python3', os.path.realpath(__file__), 'restart', '--root', root,
+                        '--path', item['path']]
+                if workers is not None:
+                    argv += ['--workers', json.dumps(workers)]
+                if host_capable is True:
+                    argv.append('--host-capable')
+                if hold:
+                    argv.append('--hold')
+                candidates.append(dict(path=item['path'], checkpoint_id=checkpoint_id,
+                                       command=shlex.join(argv)))
+            return dict(blocked('ambiguous-checkpoint'), candidates=candidates, total=len(own),
+                        action='Do not call agents_restart or select by recency. Match the successful save path '
+                               'to a candidate and run its command; otherwise ask which checkpoint to continue. '
+                               'Each command rechecks identity, ownership, publication, workers and holds. '
+                               'Candidates are capped at ten; an exact known save path can be passed with --path.')
         path = own[0]['path']
     path = os.path.realpath(path)
     try:

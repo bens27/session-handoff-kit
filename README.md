@@ -574,7 +574,11 @@ native cycle in one command with compact output:
 
 - `restart --root R [--workers '<JSON list>'] [--host-capable] [--hold] [--path P]`
   (predecessor, callable `restart`) reads hook/host identity, selects this
-  session's single open checkpoint (several block unless `--path` names one),
+  session's single open checkpoint. Save output supplies `--path` for the exact
+  published checkpoint, including retries. Without it, several checkpoints block
+  with `ambiguous-checkpoint`, up to ten path/ID/command candidates and a total
+  count. Match the successful save path or ask the user; never pick by recency.
+  Candidate commands preserve caller observations and recheck all gates. It
   derives the deterministic request ID, unions `--hold` with durable dispatcher
   holds, runs `preflight` and, only when it creates a ready intent, stores the
   observations in `.handoffs/restart/<sha256-request-id>.observations` under the
