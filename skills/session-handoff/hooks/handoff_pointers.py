@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import handoff_ledger as ledger
+from handoff_record import Record
 import handoff_protocol as protocol
 
 VERSION = 1
@@ -193,15 +194,13 @@ def evaluate(root, location, session=None):
     # Read the checkpoint once: the trust check and the task/workspace binding
     # must describe the same bytes.
     try:
-        with open(record['path'], encoding='utf-8', errors='replace') as f:
-            text = f.read()
-        fm = ledger.parse_front_matter(text)
+        checkpoint = Record.load(record['path'])
     except (OSError, ValueError):
         return out('ineligible', 'publication-untrusted')
-    if not ledger.trusted(record['path'], text, fm):
+    if not checkpoint.trusted():
         return out('ineligible', 'publication-untrusted')
-    workspace = os.path.realpath(fm.get('workspace') or record['root'])
-    if data['workspace'] != workspace or data.get('task_id') != (fm.get('task_id') or None):
+    workspace = os.path.realpath(checkpoint.get('workspace') or record['root'])
+    if data['workspace'] != workspace or data.get('task_id') != (checkpoint.get('task_id') or None):
         return out('ineligible', 'binding-mismatch')
     if not _workspace_exists(workspace):
         return out('ineligible', 'workspace-missing')

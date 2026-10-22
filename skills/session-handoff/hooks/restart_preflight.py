@@ -21,6 +21,7 @@ from datetime import datetime
 
 import handoff_identity
 import handoff_ledger as ledger
+from handoff_record import Record, live as _checkpoint_live
 import handoff_pointers as pointers
 import handoff_protocol as protocol
 
@@ -228,20 +229,6 @@ def status(root, request_id):
     return record
 
 
-def _checkpoint_live(root, path):
-    """True while a checkpoint is open and authoritative, i.e. an intent still guards it."""
-    try:
-        if ledger._read_fm(path).get('status') != 'open':
-            return False
-        # resolve() keeps the caller's root spelling; compare canonical paths, or
-        # an open checkpoint under a symlinked root reads as done and loses its guard.
-        authoritative = ledger.resolve(path, root).get('authoritative')
-        return (authoritative is not None
-                and os.path.realpath(authoritative) == os.path.realpath(path))
-    except (OSError, ValueError):
-        return os.path.exists(path)  # unreadable but present: keep the guard
-
-
 def prune_settled(root, now=None, held=()):
     """Delete retrieved/refused intents older than SETTLED_RETENTION whose checkpoint is done.
 
@@ -382,25 +369,24 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             ledger._check_owner(path, session)
         except ledger.ConflictError:
             return blocked('checkpoint-owned-by-another-session')
-        text = Path(path).read_text()
-        fm = ledger.parse_front_matter(text)
-        if (os.path.realpath(fm.get('project', '')) != root or fm.get('session_id') != session
-                or (fm.get('terminal') and fm['terminal'] != terminal)):
+        checkpoint = Record(path, Path(path).read_text())
+        if (os.path.realpath(checkpoint.get('project', '')) != root or checkpoint.session_id != session
+                or (checkpoint.terminal and checkpoint.terminal != terminal)):
             return blocked('stale-identity')
-        if hold or fm.get('waiting_input') or fm.get('automatic_paused'):
+        if hold or checkpoint.held:
             return blocked('human-hold')
-        if fm.get('status') != 'open' or not ledger.publication_valid(path, text, fm):
+        if not checkpoint.open_strict or not checkpoint.published():
             return blocked('publication-not-ready')
         warnings = []
-        if fm.get('project_hooks'):
-            workspace = fm.get('workspace') or root
+        if checkpoint.get('project_hooks'):
+            workspace = checkpoint.get('workspace') or root
             policy = hook_drift_policy(root)
             if policy is None:
                 return dict(blocked('invalid-hook-drift-policy'),
                             action='Make .context-watch.json and ~/.context-watch/thresholds.json '
                                    'readable JSON, with hook_drift absent, "warn" or "block".')
             try:
-                baseline = json.loads(fm['project_hooks'])
+                baseline = json.loads(checkpoint.get('project_hooks'))
                 current = protocol.project_hook_snapshot(workspace)
                 if not isinstance(baseline, dict) or set(baseline) != set(current):
                     return blocked('invalid-hook-baseline')
@@ -434,7 +420,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                 if other is None or os.path.realpath(entry) != _location(root, other['request_id']):
                     raise ValueError('Noncanonical restart intent.')
                 same_checkpoint = (other['path'] == path or
-                                   other['checkpoint_id'] == fm.get('checkpoint_id'))
+                                   other['checkpoint_id'] == checkpoint.checkpoint_id)
                 # An expired intent is never adopted: it only still guards its own checkpoint
                 if ((other['state'] == 'pending' and (other['path'] == path or (
                         other['terminal'] == terminal and not intent_expired(other))))
@@ -478,16 +464,16 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         if host_capable is not True:
             return blocked('host-capability-absent')
         if reentry is not None:
-            if (reentry.get('fingerprint') != ledger.content_fingerprint(text)
-                    or reentry.get('checkpoint_id') != fm.get('checkpoint_id')
+            if (reentry.get('fingerprint') != checkpoint.fingerprint
+                    or reentry.get('checkpoint_id') != checkpoint.checkpoint_id
                     or reentry.get('workers') != workers
                     or reentry.get('binding_sha256') != binding_digest(reentry)
                     or not isinstance(reentry.get('restart_prompt'), str)):
                 return blocked('request-identity-conflict')
             record = dict(reentry)
         else:
-            record = dict(binding, checkpoint_id=fm.get('checkpoint_id'),
-                          fingerprint=ledger.content_fingerprint(text), state='pending',
+            record = dict(binding, checkpoint_id=checkpoint.checkpoint_id,
+                          fingerprint=checkpoint.fingerprint, state='pending',
                           host_confirmed=False, workers=workers, intent_at=time.time())
             # Bind the compact successor handle to this exact intent.
             record['binding_sha256'] = binding_digest(record)
@@ -495,7 +481,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # Pointer before any pending intent: a failed write leaves nothing to block.
         try:
             pointers.write_pointer(root, pointers.build(
-                record, fm.get('workspace') or root, fm.get('task_id')))
+                record, checkpoint.get('workspace') or root, checkpoint.get('task_id')))
         except pointers.PointerConflict:
             return dict(blocked('pointer-conflict'), stage='pointer',
                         action='Preserve the checkpoint; a different pointer already holds this binding.')
@@ -741,7 +727,7 @@ def adopt(root, request_id, binding=None):
         observed=dict(session=session, terminal=terminal, host_session=info['host_session_id'],
                       source=info['identity_source']))
     try:
-        fm = ledger._read_fm(record['path'])
+        fm = Record.load(record['path']).fm
     except FileNotFoundError:
         fm = {}  # Let prepare/resume report a missing checkpoint at its established stage.
     except (OSError, ValueError) as exc:
@@ -785,7 +771,7 @@ def adopt(root, request_id, binding=None):
     # Dispatcher holds gate execution, not retrieval: the receipt above stays recorded.
     import handoff_dispatch as dispatch
     try:
-        topic = ledger._read_fm(record['path']).get('topic')
+        topic = Record.load(record['path']).topic
     except (OSError, ValueError):
         topic = None
     try:
@@ -836,9 +822,9 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         return blocked('identity-not-recorded-by-hook-or-host')
     if path is None:
         errors = []
-        own = [r for r in ledger._records(root, errors) if ledger._is_open(r['fm'])
-               and r['fm'].get('session_id') == session
-               and r['fm'].get('terminal', terminal) == terminal]
+        own = [r for r in ledger._records(root, errors) if r['record'].is_open
+               and r['record'].session_id == session
+               and r['record'].get('terminal', terminal) == terminal]
         if errors:
             return blocked('checkpoints-unreadable')
         if len(own) != 1:
@@ -846,15 +832,15 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         path = own[0]['path']
     path = os.path.realpath(path)
     try:
-        fm = ledger._read_fm(path)
+        checkpoint = Record.load(path)
     except OSError:
         return blocked('checkpoint-unreadable')
-    checkpoint_id = fm.get('checkpoint_id') or ''
+    checkpoint_id = checkpoint.checkpoint_id or ''
     if not checkpoint_id:
         return blocked('publication-not-ready')
     request_id = request_id_for(terminal, checkpoint_id)
     try:
-        holds = dispatch.applicable_holds(dispatch.read_holds(root), fm.get('topic'))
+        holds = dispatch.applicable_holds(dispatch.read_holds(root), checkpoint.topic)
     except OSError as exc:
         return dict(blocked('hold'), stage='hold', detail=str(exc))
     hold = bool(hold) or bool(holds)

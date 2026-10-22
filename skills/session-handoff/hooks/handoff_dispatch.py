@@ -12,6 +12,7 @@ import sys
 
 import handoff_identity
 import handoff_ledger as ledger
+from handoff_record import Record
 import handoff_protocol as protocol
 
 LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'handoff_ledger.py')
@@ -558,11 +559,14 @@ DEFINITE = ('restart_unsupported', 'hold', 'dispatch_pending', 'dispatch_refused
 
 
 def delegated_items(path):
-    if not path or not os.path.isfile(path) or not ledger.trusted(path):
+    if not path or not os.path.isfile(path):
         return []
     try:
-        items = json.loads(ledger._read_fm(path).get('continuity') or '[]')
-    except ValueError:
+        checkpoint = Record.load(path)
+        if not checkpoint.trusted():
+            return []
+        items = checkpoint.continuity
+    except (OSError, ValueError):
         return []
     return [i for i in items if isinstance(i, dict) and i.get('status') == 'delegated']
 
@@ -646,8 +650,7 @@ def route(request, root):
     if host.get('hold') is True:
         active.append(dict(scope='host', reason='host reported a hold', created=None, source='host'))
     if target and target.get('path') and operation == 'autoresume':
-        fm = ledger._read_fm(target['path'])
-        if fm.get('waiting_input') or fm.get('automatic_paused'):
+        if Record.load(target['path']).held:
             active.append(dict(scope='checkpoint', reason='checkpoint is waiting for input or paused', created=None, source='checkpoint'))
     authorized = request.get('_authorization')
     recheck, state = recheck_state(root, authorized, holds)

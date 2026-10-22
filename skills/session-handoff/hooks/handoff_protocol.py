@@ -15,6 +15,7 @@ from datetime import datetime
 
 import handoff_identity
 import handoff_ledger as ledger
+from handoff_record import Record
 from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
 
 # A native CLI can parse a bare "resume" positional as its own subcommand.
@@ -88,11 +89,11 @@ def hook_opening_note(event):
             return bool(terminal) and fm['terminal'] == terminal
         return bool(session) and fm.get('session_id') == session
     own = [r for r in records if owned(r) and
-           (ledger._is_open(r['fm']) or r['fm'].get('status') == 'unpublished'
+           (r['record'].is_open or r['record'].status == 'unpublished'
             or pending_delivery(root, r['path'], r['fm'], session))]
     if event.get('hook_event_name') == 'SessionStart':
         # Ordinary open topics must not hide publication repair for this terminal.
-        own = [r for r in own if r['fm'].get('status') == 'unpublished']
+        own = [r for r in own if r['record'].status == 'unpublished']
         own.sort(key=lambda r: r['mtime'], reverse=True)
         own = own[:1]
     if not own:
@@ -101,8 +102,8 @@ def hook_opening_note(event):
     if len(own) != 1:
         return '' if event.get('hook_event_name') == 'SessionStart' else pointer
     record = own[0]
-    fm, path = record['fm'], record['path']
-    if fm.get('status') == 'unpublished':
+    checkpoint, path = record['record'], record['path']
+    if checkpoint.status == 'unpublished':
         recovery = publication_recovery(root, path)
         return 'handoff-status: ' + recovery['text']
     if event.get('hook_event_name') == 'SessionStart':
@@ -110,13 +111,13 @@ def hook_opening_note(event):
     # resolve() follows a topic's newest successor, even when a path was supplied.
     # Only advertise the shortcut when that authoritative record is also owned.
     authoritative = ledger.resolve(path, root)['authoritative']
-    if fm.get('automatic_paused') and not record['problems'] and ledger.trusted(path, record['text'], fm):
+    if checkpoint.paused and not record['problems'] and checkpoint.trusted():
         # A host-injected restart prompt reads like a typed one, so paused state never gets the lean command
         return ('handoff-status: Owned handoff %s is paused (%s); load the session-handoff skill and ask the user '
-                'before continuing it.' % (json.dumps(path), paused_reasons(fm['automatic_paused']) or 'guard'))
-    if (record['problems'] or fm.get('automatic_paused')
-            or ledger._claimed_recently(fm, datetime.now())
-            or authoritative != path or not ledger.trusted(path, record['text'], fm)):
+                'before continuing it.' % (json.dumps(path), paused_reasons(checkpoint.paused) or 'guard'))
+    if (record['problems'] or checkpoint.paused
+            or ledger._claimed_recently(checkpoint.fm, datetime.now())
+            or authoritative != path or not checkpoint.trusted()):
         return pointer
     command = 'python3 %s resume %s --session %s --fields path,body' % (
         shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
@@ -134,10 +135,11 @@ def publication_recovery(root, path):
     fm = {}
     try:
         text = read_text(path)
-        fm = ledger.parse_front_matter(text)
+        checkpoint = Record(path, text)
+        fm = checkpoint.fm
         intent = load_state_json(recovery_path(root, path))
         key = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + os.path.realpath(path)).encode()).hexdigest()
-        repairable = (fm.get('status') == 'open' and intent.get('path') == os.path.realpath(path)
+        repairable = (checkpoint.open_strict and intent.get('path') == os.path.realpath(path)
                       and os.path.realpath(intent.get('root', '')) == os.path.realpath(ledger.project_root(root))
                       and ledger.valid_seal(intent.get('seal'), key, hashlib.sha256(text.encode()).hexdigest()))
     except (OSError, ValueError, TypeError):
@@ -293,7 +295,8 @@ def save_progress(root, current, continuity, previous):
 
 def predecessor_progress(root, fields, continuity):
     predecessor = fields.get('predecessor')
-    previous = ledger._read_fm(predecessor) if predecessor and ledger.trusted(predecessor) else {}
+    prior = Record.load_trusted(predecessor) if predecessor else None
+    previous = prior.fm if prior else {}
     return save_progress(root, fields, continuity, previous)
 
 
@@ -310,7 +313,7 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
     rows = records if records is not None else ledger._records(root)
     own = [r for r in rows if (r['fm'].get('terminal') == terminal if terminal else
                               r['fm'].get('session_id') == session)
-           and ledger.trusted(r['path'], r['text'], r['fm'])]
+           and r['record'].trusted()]
     def age(value):
         try:
             return now - datetime.fromisoformat(value).timestamp()
@@ -319,9 +322,9 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
     recent = [r for r in own if 0 <= age(r['fm'].get('created')) < 3600]
     intents = [r for r in recent if r['fm'].get('restart_intent') == 'agents_restart'
                or ('restart_intent' not in r['fm'] and r['fm'].get('reason') == 'context-pressure'
-                   and not r['fm'].get('automatic_paused'))]
+                   and not r['record'].paused)]
     transfers = [r for r in rows if r['fm'].get('resumed_by') == session
-                 and ledger.trusted(r['path'], r['text'], r['fm'])]
+                 and r['record'].trusted()]
     last_transfer = min(transfers, key=lambda r: age(r['fm'].get('resumed')), default=None)
     latest_pressure = min((r for r in recent if r['fm'].get('reason') == 'context-pressure'),
                           key=lambda r: age(r['fm'].get('created')), default=None)
@@ -414,7 +417,7 @@ def predecessor_project(predecessor):
         text = read_text(os.path.expanduser(predecessor))
     except (OSError, ValueError):
         return ''
-    return ledger.parse_front_matter(text).get('project', '')
+    return Record(predecessor, text).get('project', '')
 
 
 def publish(path, text):
@@ -447,9 +450,8 @@ def _front_matter_matches(root, document, record):
     """True when the stored metadata is what save would write for this document.
     A verify the document omitted may only be the user-level default or the trusted predecessor's."""
     fm = record['fm']
-    prior = {}
-    if fm.get('predecessor') and ledger.trusted(fm['predecessor']):
-        prior = ledger._read_fm(fm['predecessor'])
+    held = Record.load_trusted(fm['predecessor']) if fm.get('predecessor') else None
+    prior = held.fm if held else {}
     effective = continuation_document(document, prior)
     for key in ('skills', 'references', 'optional_references', 'verify_baseline'):
         if fm.get(key, '') != _listed(effective.get(key, '')):
@@ -462,7 +464,7 @@ def _front_matter_matches(root, document, record):
         predecessor = fm.get('predecessor')
         if predecessor:
             prior = next((r for r in ledger._records(root, []) if os.path.realpath(r['path']) == os.path.realpath(predecessor)), None)
-            if prior and ledger.trusted(prior['path'], prior['text'], prior['fm']):
+            if prior and prior['record'].trusted():
                 allowed.add(prior['fm'].get('verify', ''))
     return fm.get('verify', '') in allowed
 
@@ -593,7 +595,7 @@ def save(root, session, request_id, document):
             if record['fm'].get('checkpoint_id') == identity:
                 if record['fm'].get('content_hash') != fingerprint:
                     return dict(outcome='conflict', action='This request ID was already saved with different content. Use a new request ID.')
-                if os.path.exists(record['path'] + '.published') and not ledger.publication_valid(record['path'], record['text'], record['fm']):
+                if record['record'].has_receipt() and not record['record'].published():
                     return dict(outcome='conflict', action='Published checkpoint changed; reconcile it and use a new request ID.')
                 # Reconstruct expected content before repairing an interrupted receipt.
                 if record['text'].split('\n---\n', 1)[-1] != body:
@@ -605,11 +607,11 @@ def save(root, session, request_id, document):
                 guard = restart_guard(root, session, topic, [r for r in records if r['path'] != record['path']],
                                       pressure=record['fm'].get('reason') == 'context-pressure',
                                       progress=predecessor_progress(root, record['fm'], json.loads(record['fm'].get('continuity', '[]'))))
-                if record['fm'].get('automatic_paused'):
-                    guard['pause_reasons'] = ledger._split_csv(record['fm']['automatic_paused'])
+                if record['record'].paused:
+                    guard['pause_reasons'] = ledger._split_csv(record['record'].paused)
                     guard['reasons'] = list(dict.fromkeys(guard['reasons'] + guard['pause_reasons']))
                 next_transition = (dict(kind='none', action='Checkpoint is already transferred or closed; continue current work without restarting.')
-                                   if record['fm'].get('status') != 'open' else transition(root, guard))
+                                   if not record['record'].open_strict else transition(root, guard))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
                             transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
         predecessor = document.get('predecessor')
@@ -645,7 +647,7 @@ def save(root, session, request_id, document):
             locks.enter_context(ledger.locked(predecessor))
             ledger._check_owner(predecessor, session)
             # Re-read under the lock: another session may have resumed it; only the resumer may continue it.
-            held = ledger._read_fm(predecessor)
+            held = Record.load(predecessor).fm
             if held.get('status') == 'resumed' and not owns_transfer(root, predecessor, held, session):
                 holder = resumed_holder(root, predecessor, held)
                 ledger_cli = shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
@@ -670,9 +672,10 @@ def save(root, session, request_id, document):
                                         runner_id=holder.get('runner_id'), resumed=held.get('resumed')),
                             recovery=recovery, action=action)
             # Only a command this machine saved is inherited; an untrusted predecessor's would be laundered into a trusted successor.
-            if not document.get('verify') and ledger.trusted(record['path'], record['text'], record['fm']):
-                document = dict(document, verify=record['fm'].get('verify', ''))
-        prior = ledger._read_fm(predecessor) if predecessor and ledger.trusted(predecessor) else {}
+            if not document.get('verify') and record['record'].trusted():
+                document = dict(document, verify=record['record'].get('verify', ''))
+        inherited = Record.load_trusted(predecessor) if predecessor else None
+        prior = inherited.fm if inherited else {}
         lineage_warning = ([] if not predecessor or prior else
                            ['Predecessor is untrusted (for example abandoned before publication); no skills, references, verify or continuity were inherited. Supply any still-required ones explicitly.'])
         document = continuation_document(document, prior)
@@ -782,7 +785,7 @@ def recover_transfer(path, root, session, previous_session, resumed_at, fingerpr
     if not terminal_id():
         raise ValueError('Legacy recovery requires the current stable terminal identity.')
     with ledger.locked(handoff_identity.publisher_lock_path(root)), ledger.locked(path):
-        fm = ledger._read_fm(path)
+        fm = Record.load(path).fm
         ledger._check_owner(path, session)
         if (ledger.resolve(path, root)['authoritative'] != path or fm.get('status') != 'resumed'
                 or fm.get('resumed_by') != previous_session or fm.get('resumed') != resumed_at
@@ -838,9 +841,10 @@ def repair(path, root, session):
         text = read_text(path)
         if not ledger.valid_seal(recovery['seal'], key, hashlib.sha256(text.encode()).hexdigest()):
             raise ValueError('Publication recovery intent is not authenticated; keep the checkpoint and original draft.')
-        fm = ledger.parse_front_matter(text)
+        checkpoint = Record(path, text)
+        fm = checkpoint.fm
         if (recovery['path'] != path or os.path.realpath(recovery['root']) != os.path.realpath(root)
-                or fm.get('status') != 'open'):
+                or not checkpoint.open_strict):
             raise ValueError('Checkpoint changed since publication intent; preserve it and reconcile before repair.')
         if fm.get('terminal'):
             owned = terminal_id() == fm['terminal']
@@ -991,7 +995,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
     try:
         fingerprint = snapshot(path)
         text = read_text(path)
-        fm = ledger.parse_front_matter(text)
+        checkpoint = Record(path, text)
+        fm = checkpoint.fm
         problems = ledger._problems(text, fm)
         if problems or not fm:
             raise ValueError('Repair the checkpoint before preparation: ' + '; '.join(problems))
@@ -999,7 +1004,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         body = text.split('\n---\n', 1)[-1]
         refs, skills, all_skills, seen, dependencies = [], [], [], set(), {}
         required = ledger._split_csv(fm.get('references', ''))
-        own = ledger.trusted(path, text, fm)
+        own = checkpoint.trusted()
         real_root = os.path.realpath(root)
         withheld = []
         for spec in required:
@@ -1125,8 +1130,8 @@ def prepared_receipt(path, root, session):
     if not resolved['chain'] or resolved['chain'][-1]['status'] != 'open' or os.path.realpath(resolved['authoritative']) != os.path.realpath(path):
         raise ValueError('Checkpoint is no longer authoritative open work; refresh lookup.')
     ledger._check_owner(path, session)
-    fm = ledger._read_fm(path)
-    if fm.get('claim_owner') != session or not ledger._claimed_recently(fm, datetime.now()):
+    checkpoint = Record.load(path)
+    if checkpoint.claim_owner != session or not ledger._claimed_recently(checkpoint.fm, datetime.now()):
         raise ValueError('Preparation no longer holds a live claim; prepare again.')
     if snapshot(path) != receipt['fingerprint']:
         raise ValueError('Checkpoint changed after preparation; prepare again.')
@@ -1142,7 +1147,7 @@ def acknowledge(path, root, session):
     if not os.path.exists(path):
         raise FileNotFoundError(errno.ENOENT, 'No such file or directory', path)  # before locked(): no stray .lock
     with ledger.locked(path):
-        fm = ledger._read_fm(path)
+        fm = Record.load(path).fm
         ledger._check_owner(path, session)
         if fm.get('status') == 'resumed' and fm.get('resumed_by') == session:
             if not owns_transfer(root, path, fm, session):
@@ -1177,11 +1182,11 @@ def verify(path, root, session, timeout=60, confirm=False):
     import signal
     root = handoff_identity.project_root(root)
     receipt = prepared_receipt(path, root, session)
-    fm = ledger._read_fm(path)
-    command, baseline = fm.get('verify'), ledger._split_csv(fm.get('verify_baseline', ''))
+    checkpoint = Record.load(path)
+    command, baseline = checkpoint.verify, ledger._split_csv(checkpoint.get('verify_baseline', ''))
     if not command:
         return dict(outcome='verified', exit_code=0, action='No recorded verification command; no speculative suite is required.')
-    if not confirm and not ledger.trusted(path):
+    if not confirm and not checkpoint.trusted():
         return needs_confirmation(path, command)
     log_dir = os.path.join(os.path.dirname(path), '.verification')
     os.makedirs(log_dir, exist_ok=True)
@@ -1318,7 +1323,7 @@ def delivered(root, path, session):
     # A successful flush is transport evidence only, not proof the host consumed
     # the response. Explicit holder replay remains available afterward.
     with ledger.locked(path):
-        fm = ledger._read_fm(path)
+        fm = Record.load(path).fm
         if owns_transfer(root, path, fm, session):
             receipt = resumed_holder(root, path, fm)
             if receipt.get('delivery'):
@@ -1334,7 +1339,7 @@ def replay_transfer(root, session, target):
     with ledger.locked(path):
         if ledger.resolve(path, root)['authoritative'] != path:
             return None  # A successor may have published while waiting for this lock.
-        fm = ledger._read_fm(path)
+        fm = Record.load(path).fm
         if fm.get('status') != 'resumed' or not owns_transfer(root, path, fm, session):
             return None
         ledger._check_owner(path, session)
@@ -1372,7 +1377,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         for record in records:
             if pending_delivery(root, record['path'], record['fm'], session):
                 pending.append(record['path'])
-        current_open = [r['path'] for r in records if ledger._is_open(r['fm'])
+        current_open = [r['path'] for r in records if r['record'].is_open
                         and ((terminal_id() and r['fm'].get('terminal') == terminal_id())
                              or r['fm'].get('session_id') == session)]
         if pending and current_open:
@@ -1402,8 +1407,9 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         try:
             resolved = ledger.resolve(target, root)
             if resolved['chain'] and resolved['chain'][-1]['status'] == 'open':
-                command = ledger._read_fm(resolved['authoritative']).get('verify')
-                if command and not ledger.trusted(resolved['authoritative']):
+                checkpoint = Record.load(resolved['authoritative'])
+                command = checkpoint.verify
+                if command and not checkpoint.trusted():
                     return needs_confirmation(resolved['authoritative'], command)
         except OSError:
             pass  # prepare reports unreadable state
@@ -1520,7 +1526,7 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     if not selected and result['total'] > 1 and not newest:
         return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (ended %s, %.0fd old): %s' % (i+1,h['topic'][:80],h['ended'][:32],h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'
     selected = selected or items[0]
-    if not prompt and ledger._read_fm(selected['path']).get('automatic_paused'):
+    if not prompt and Record.load(selected['path']).paused:
         return ('Automatic handoff paused; checkpoint remains open at %s. Reduce re-entry context '
                 'or wait for the restart budget, then explicitly ask to continue the handoff.' % selected['path'])
     if not session:

@@ -273,9 +273,9 @@ urllib.request.urlopen=fake_urlopen
         p.write_text(text)
         sys.path.insert(0,str(LEDGER.parent))
         try:
-            import handoff_ledger as ledger
-            fm=ledger.parse_front_matter(text)
-            Path(str(p)+'.published').write_text(json.dumps(dict(checkpoint_id=fm['checkpoint_id'],fingerprint=ledger.content_fingerprint(text))))
+            from handoff_record import Record
+            record=Record(str(p),text)
+            Path(str(p)+'.published').write_text(json.dumps(dict(checkpoint_id=record.checkpoint_id,fingerprint=record.fingerprint)))
         finally:
             sys.path.pop(0)
         out=self.cli('resume','--session','s1')

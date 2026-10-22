@@ -487,7 +487,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.preflight()
         restart.record_refusal(self.root, 'restart-1', 'host unavailable')
         self.assertEqual(self.preflight()['outcome'], 'refused')
-        self.assertEqual(protocol.ledger._read_fm(self.path)['status'], 'open')
+        self.assertEqual(protocol.ledger.Record.load(self.path).status, 'open')
 
     def test_interrupted_handover_is_pending_without_false_confirmation(self):
         self.preflight()
@@ -571,9 +571,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                          'retrieved')
 
     def test_waiting_input_marker_is_preserved(self):
-        protocol.ledger._set_fields(self.path, [('waiting_input', 'true')], ())
+        protocol.ledger.Record.set_fields(self.path, waiting_input='true')
         self.assertEqual(self.preflight()['reason'], 'human-hold')
-        self.assertEqual(protocol.ledger._read_fm(self.path)['waiting_input'], 'true')
+        self.assertEqual(protocol.ledger.Record.load(self.path).waiting_input, 'true')
 
     def test_cli_absent_host_is_blocked_without_dispatch(self):
         import json
@@ -1090,7 +1090,7 @@ class RestartCommandTests(unittest.TestCase):
 
     def test_restart_persists_observations_and_returns_prompt_once(self):
         import hashlib
-        checkpoint = protocol.ledger._read_fm(self.path)['checkpoint_id']
+        checkpoint = protocol.ledger.Record.load(self.path).checkpoint_id
         expected_id = 'agentsroom:' + hashlib.sha256(('term\0' + checkpoint).encode()).hexdigest()
         code, out = self.restart_cli('--workers', '[]', '--host-capable')
         self.assertEqual((code, out['outcome'], out['dispatch']), (0, 'ready', True), out)

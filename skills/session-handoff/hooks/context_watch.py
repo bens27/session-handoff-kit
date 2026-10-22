@@ -1046,9 +1046,9 @@ def handle_stop(evt):
     cwd = evt.get('cwd') or os.getcwd()
     key = session_key(evt)
     if auto_mode_on():
-        paused = [r for r in _ledger()._records(cwd) if r['fm'].get('session_id') == key
-                  and r['fm'].get('status') == 'open' and r['fm'].get('automatic_paused')
-                  and _ledger().trusted(r['path'], r['text'], r['fm'])]
+        paused = [r for r in _ledger()._records(cwd) if r['record'].session_id == key
+                  and r['record'].open_strict and r['record'].paused
+                  and r['record'].trusted()]
         if paused:
             if claim_once(evt, '.automatic-paused'):
                 print(json.dumps({'systemMessage': '[context-watch] Automatic handoff paused. Checkpoint remains open at %s. Report the diagnostics; a fresh session can explicitly continue the handoff after addressing re-entry overhead or the restart budget.' % paused[-1]['path']}))
@@ -1135,13 +1135,13 @@ def auto_cli(argv):
             print("[auto] child failed (exit %d); stopped without retry. Preserve this session's checkpoint and inspect the failure." % rc, file=sys.stderr)
             return rc if rc > 0 else 128 - rc
         fresh = [h for h in _ledger().scan(os.getcwd(), 1)
-                 if _ledger()._read_fm(h['path']).get('runner_id') == run_id
-                 and _ledger()._read_fm(h['path']).get('checkpoint_id')]
+                 for checkpoint in [_ledger().Record.load(h['path'])]
+                 if checkpoint.runner_id == run_id and checkpoint.checkpoint_id]
         if not fresh:
             print("[auto] run %d left no new open handoff; done (exit %d)" % (run, rc),
                   file=sys.stderr)
             return rc
-        if _ledger()._read_fm(fresh[0]['path']).get('automatic_paused'):
+        if _ledger().Record.load(fresh[0]['path']).paused:
             print('[auto] automatic handoff paused; checkpoint remains open at %s. Start a fresh session and explicitly continue the handoff after addressing re-entry overhead.' % fresh[0]['path'], file=sys.stderr)
             return 75
         print("[auto] handoff %s written; clearing and resuming" % fresh[0]["path"],
