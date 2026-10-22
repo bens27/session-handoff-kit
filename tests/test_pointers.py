@@ -316,6 +316,31 @@ class PointerTests(unittest.TestCase):
         result = self.preflight()
         self.assertEqual((result['stage'], result['reason']), ('pointer', 'pointer-write-failed'), result)
 
+    def test_group_writable_handoffs_under_umask_002_still_dispatches(self):
+        import shutil
+        shutil.rmtree(Path(self.root) / '.handoffs')
+        old = os.umask(0o002)
+        try:
+            for present in (False, True):
+                with self.subTest(handoffs_present=present), \
+                        patch.dict(os.environ, {'HANDOFF_TERMINAL_ID': 'term-u%d' % present}):
+                    if present:
+                        (Path(self.root) / '.handoffs').chmod(0o775)
+                    request = 'restart-umask-%d' % present
+                    saved = protocol.save(self.root, 'old', 'save-u%d' % present, {
+                        'topic': 'umask%d' % present, 'description': 'Continue work',
+                        'body': '## Objective\nFix it\n## Current state\nSaved\n## Next steps\nTest it\n'})
+                    result = self.preflight(path=saved['path'], request_id=request,
+                                            terminal='term-u%d' % present)
+                    self.assertTrue(result['dispatch'], result)
+        finally:
+            os.umask(old)
+
+    def test_other_writable_handoffs_is_refused(self):
+        (Path(self.root) / '.handoffs').chmod(0o777)
+        result = self.preflight()
+        self.assertEqual((result['stage'], result['reason']), ('pointer', 'pointer-write-failed'), result)
+
 
 if __name__ == '__main__':
     unittest.main()

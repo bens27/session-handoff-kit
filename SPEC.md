@@ -935,8 +935,9 @@ alongside the fields above. User-scope continuation authorization is
 HOME, a binding mismatch, expiry, a Git-tracked or indeterminate path, or a
 symlink/FIFO/non-private pointer is ineligible with a diagnostic; explicit adopt
 is the recovery. No second key exists. Pointer workspace and task_id must equal
-the sealed checkpoint's (missing workspace: `workspace-missing`); symlinked,
-foreign or loosely permissioned index directories are `unsafe-pointer-dir`.
+the sealed checkpoint's (missing workspace: `workspace-missing`); a symlinked
+or foreign index directory, an other-writable `.handoffs/` or a non-private
+`.handoffs/pointers/` is `unsafe-pointer-dir` (group write follows the umask).
 The marker re-entry below applies only to intents that record
 `pointer_version` and have a matching readable pointer; a pointer file alone is
 never authority, so legacy intents stay reconcile-only.

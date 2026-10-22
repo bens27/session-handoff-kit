@@ -36,10 +36,12 @@ def pointer_dir(root):
 
 
 def _safe_dir(path, private):
-    """Refuse a symlinked, foreign-owned or group/other-writable index directory."""
+    """Refuse a symlinked or foreign-owned index directory. ``.handoffs`` follows the
+    umask (0775 under user-private groups), so only other-write is refused there;
+    ``.handoffs/pointers`` is the trust anchor and must be private."""
     info = os.lstat(path)
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & (0o077 if private else 0o022)):
+            or info.st_mode & (0o077 if private else 0o002)):
         raise ValueError('unsafe-pointer-dir')
 
 
@@ -188,12 +190,15 @@ def evaluate(root, location, session=None):
             return out('ineligible', 'git-tracked')
     except RuntimeError:
         return out('ineligible', 'git-check-indeterminate')
-    if not ledger.trusted(record['path']):
-        return out('ineligible', 'publication-untrusted')
-    # Task and workspace are bound to the sealed checkpoint, not to the pointer.
+    # Read the checkpoint once: the trust check and the task/workspace binding
+    # must describe the same bytes.
     try:
-        fm = ledger._read_fm(record['path'])
+        with open(record['path'], encoding='utf-8', errors='replace') as f:
+            text = f.read()
+        fm = ledger.parse_front_matter(text)
     except (OSError, ValueError):
+        return out('ineligible', 'publication-untrusted')
+    if not ledger.trusted(record['path'], text, fm):
         return out('ineligible', 'publication-untrusted')
     workspace = os.path.realpath(fm.get('workspace') or record['root'])
     if data['workspace'] != workspace or data.get('task_id') != (fm.get('task_id') or None):

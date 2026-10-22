@@ -640,8 +640,8 @@ keep reconcile-only behavior even beside a matching pointer.
 resolves through this user's HOME locator, the binding matches the intent, the
 publication is sealed by the existing `~/.context-watch/receipt.key`, the
 pointer's workspace and task ID equal the sealed checkpoint's (a missing
-workspace is `workspace-missing`), the index directories are real, owned and
-not group/other-writable (else `unsafe-pointer-dir`), no
+workspace is `workspace-missing`), `.handoffs/` is a real, owned, not other-writable
+directory and `.handoffs/pointers/` is private (else `unsafe-pointer-dir`), no
 pointer, intent or checkpoint is tracked by Git (indeterminate checks fail
 closed) and continuation is authorized in user scope (`AUTORESUME` /
 `CONTEXT_WATCH_AUTORESUME` or `autoresume` in `~/.context-watch/thresholds.json`;
@@ -666,13 +666,14 @@ new identifiers are bounded ASCII tokens and the final prompt is checked against
 the host limit before intent persistence. A durable registry lock also prevents
 renaming requests from bypassing pending same-terminal/path or retrieved/refused
 same-checkpoint intents, including across different checkpoint paths. Invalid
-persisted records fail closed. Repeated requests never dispatch again, except that an intent recorded with a
-pointer (`pointer_version`) and without `dispatch_started_at` (a crash before the
-marker, so no host call was ever returned) may reserve dispatch once after every
-gate is rechecked; with the marker, reconcile. For intents without a pointer, a
-crash between intent and host response leaves `pending`; reconcile it with the
-host before creating a new request. `record_refusal(root, request_id, reason)` persists a
-returned failure without closing the checkpoint. `status(root, request_id)`
+persisted records fail closed. Repeated requests never dispatch again, except
+that an intent recorded with a pointer (`pointer_version`) and without
+`dispatch_started_at` (a crash before the marker, so no host call was ever
+returned) may reserve dispatch once after every gate is rechecked; with the
+marker, reconcile. For intents without a pointer, a crash between intent and
+host response leaves `pending`; reconcile it with the host before creating a
+new request. `record_refusal(root, request_id, reason)` persists a returned
+failure without closing the checkpoint. `status(root, request_id)`
 reads `.handoffs/restart/<sha256-request-id>.json`. Reusing an ID with another
 identity or checkpoint blocks. An existing malformed intent also blocks and is
 preserved for inspection; only a missing record permits a new intent.
