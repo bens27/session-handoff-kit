@@ -319,6 +319,22 @@ class TargetSelectionTests(Base):
         self.assertEqual(explicit['outcome'], 'proceed', explicit)
         self.assertEqual(explicit['target']['path'], foreign)
 
+    def test_foreign_readable_topic_requires_ownership_but_exact_topic_is_explicit(self):
+        self.record_hook_session('sess-a')
+        self.save(topic='parser')
+        foreign = self.save(topic='the-parser-fix', description='unrelated words',
+                            session='sess-b', terminal='term-b')
+        r = self.dispatch(prompt='Resume the parser fix')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'foreign_only'))
+        self.assertEqual([c['path'] for c in r['target']['candidates']], [foreign])
+        self.assertFalse(r['target']['candidates'][0]['mine'])
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertEqual(r['next_action']['command'], '')
+        explicit = self.dispatch(prompt='resume the-parser-fix')
+        self.assertEqual(explicit['outcome'], 'proceed', explicit)
+        self.assertEqual(explicit['target']['path'], foreign)
+        self.assertTrue(explicit['authorized_to_execute'])
+
     def test_description_ownership_uses_terminal_before_session(self):
         self.record_hook_session('successor')
         owned = self.save(topic='own-work', description='the owned parser fix', session='predecessor')

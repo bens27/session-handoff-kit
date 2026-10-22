@@ -837,9 +837,11 @@ only the `branch` file the result names.
   of an open checkpoint (case-insensitive, no partial matching). If topic and
   description name different checkpoints, both are offered and neither takes
   precedence. Multiple open topic heads or duplicate descriptions also ask.
-  A unique description match proceeds only when owned by this terminal (or,
-  for an untagged checkpoint, this session). A foreign description gives
-  `ask`/`foreign_only`; name its exact path or topic to select it explicitly.
+  Only exact kebab-case topic spelling selects explicitly. A slug-normalized
+  readable topic or unique description match proceeds only when owned by this
+  terminal (or, for an untagged checkpoint, this session). A foreign readable
+  name gives `ask`/`foreign_only`; name its exact path or kebab-case topic to
+  select it explicitly.
   Unmatched non-path prose such as `resume later` gives `none`/`no_operation`.
   A bare readable choice is also accepted with an explicit `resume`/`retrieve`
   operation; resume still needs `{"source": "user"}` authorization.

@@ -823,11 +823,13 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    description identify different checkpoints, neither takes precedence:
    return `ask`/`target_ambiguous` with both. Multiple open topic heads give
    `ask`/`topic_ambiguous`; multiple exact descriptions also give
-   `ask`/`target_ambiguous`, never execution authority. A unique description
-   match proceeds only if owned: a tagged checkpoint must match this terminal;
-   an untagged one must match the resolved session. A foreign description
-   returns `ask`/`foreign_only` with candidates and no execution authority;
-   the user must explicitly select its path or topic. Non-path text matching
+   `ask`/`target_ambiguous`, never execution authority. Only exact kebab-case
+   topic spelling selects explicitly. A slug-normalized readable topic or a
+   unique description match proceeds only if owned: a tagged checkpoint must
+   match this terminal; an untagged one must match the resolved session. A
+   foreign readable name returns `ask`/`foreign_only` with candidates and no
+   execution authority; the user must explicitly select its exact path or
+   kebab-case topic. Non-path text matching
    no topic or description (such as `resume later`) gives `none`/`no_operation`.
    A bare readable choice can accompany an explicit `resume`/`retrieve`
    operation; bare choice text alone does not authorize resume, which still

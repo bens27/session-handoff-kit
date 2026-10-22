@@ -75,13 +75,11 @@ def targeted_command(prompt, root=None):
     if topic_records:
         heads = [r for r in topic_records if r['fm'].get('status', 'open') == 'open']
         conflict = any(r['topic'] != topic for r in matches)
-        if not conflict and (target == topic or not matches or len(heads) > 1):
+        if not conflict and (target == topic or len(heads) > 1):
             return operation, topic
-        if conflict:
-            # A topic and a displayed description can name different work.
-            matches += heads or [max(topic_records, key=lambda r: (r['ended'], r['path']))]
-        # An overlapping readable description still needs its ownership check;
-        # spelling the canonical topic explicitly is a separate selection.
+        # Readable topics and descriptions share the ownership check. Conflicts
+        # retain all candidates; only canonical topic spelling selects explicitly.
+        matches += heads or [max(topic_records, key=lambda r: (r['ended'], r['path']))]
     if matches:
         unique = {r['path']: r for r in matches}
         return operation, [dict(path=r['path'], topic=r['topic'], ended=r['ended'],
@@ -292,7 +290,7 @@ def select_target(root, request, session):
                     'That name matches %d checkpoints (showing %d); ask the user which one.' % (total, len(candidates)))
         if not candidates[0]['mine']:
             return dict(candidates=candidates), ('ask', 'foreign_only',
-                                                'That description belongs to another session; ask the user to name its path or topic.')
+                                                'That readable name belongs to another session; ask the user to name its exact path or kebab-case topic.')
         target = candidates[0]['path']
     if target is not None:
         if not isinstance(target, str) or not target.strip():
