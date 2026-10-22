@@ -602,7 +602,9 @@ are not evidence of progress in the parent repository. Hashing is bounded to
 2 MB of content and 200 KB of paths. Git failures,
 missing legacy hashes, or exceeded bounds are unknown and do not prove progress.
 Body/description changes alone do not establish progress. An absent or untrusted
-same-topic pressure predecessor cannot prove progress. Only a newer commit
+same-topic pressure predecessor cannot prove progress on its own; the baseline then
+falls back to the newest trusted checkpoint this session resumed (any topic or reason),
+and the same changed-hash-plus-evidence rule applies against it. Only a newer commit
 descending from the recorded commit counts; a branch name change alone does not.
 Changing branches to a descendant commit does count; unrelated Git history does not.
 

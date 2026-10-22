@@ -226,6 +226,48 @@ with patch('time.time', return_value=stamp):
         self.assertEqual(out['transition']['kind'], 'paused')
         self.assertFalse(out['transition']['diagnostics']['progress']['present'])
 
+    def resumed_then_work(self, first_topic='slice-a', second_topic='slice-b', pressure_first=True, commit=True, dirty=True):
+        """Portskill shape: resume a checkpoint, commit and edit, then hit pressure within the rapid window."""
+        self.init_work()
+        self.clock = float(int(time.time()))
+        if pressure_first:
+            self.hook(140000)
+        first = self.save(topic=first_topic)
+        self.hook(31000, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 121  # past the independent 120-second cooldown, still inside the 600-second window
+        if commit:
+            (self.root / 'work.txt').write_text('committed after resume\n')
+            self.git('add', '.')
+            self.git('commit', '-qm', 'post-resume slice')
+        if dirty:
+            (self.root / 'next.txt').write_text('started the next slice\n')
+        self.hook(140000, session='s2')
+        return self.save(session='s2', topic=second_topic, body=BODY + 'Slice done; next slice started.\n')
+
+    def test_post_resume_commit_and_edits_count_as_progress_for_a_new_topic(self):
+        out = self.resumed_then_work()
+        diag = out['transition']['diagnostics']
+        self.assertIn('rapid-resume', diag['reasons'])
+        self.assertTrue(diag['progress']['predecessor_known'], diag)
+        self.assertTrue(diag['progress']['new_commits'], diag)
+        self.assertTrue(diag['progress']['files_changed'], diag)
+        self.assertTrue(diag['progress']['present'], diag)
+        self.assertEqual(out['transition']['kind'], 'agents_restart')
+
+    def test_post_resume_progress_counts_when_the_resumed_checkpoint_was_user_parked(self):
+        out = self.resumed_then_work(pressure_first=False, second_topic='slice-a')
+        diag = out['transition']['diagnostics']
+        self.assertTrue(diag['progress']['present'], diag)
+        self.assertEqual(out['transition']['kind'], 'agents_restart')
+
+    def test_resumed_new_topic_without_any_progress_is_still_paused(self):
+        out = self.resumed_then_work(commit=False, dirty=False)
+        diag = out['transition']['diagnostics']
+        self.assertTrue(diag['progress']['predecessor_known'], diag)
+        self.assertFalse(diag['progress']['present'], diag)
+        self.assertEqual(out['transition']['kind'], 'paused')
+
     def test_continuous_topic_opt_out_exempts_soft_thrash_reasons(self):
         (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['work'])))
         out = self.rapid_resume_save()
