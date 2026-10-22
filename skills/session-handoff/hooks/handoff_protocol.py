@@ -35,9 +35,9 @@ def decode_state_json(raw):
 
 
 def read_cli_input(path='-'):
-    """Read a complete CLI input file, or stdin for the conventional dash."""
+    """Read strict UTF-8 from a CLI input file, or stdin for the conventional dash."""
     if path == '-':
-        return sys.stdin.read()
+        return sys.stdin.buffer.read().decode('utf-8')
     with open(path, encoding='utf-8') as stream:
         return stream.read()
 

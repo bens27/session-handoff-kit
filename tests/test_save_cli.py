@@ -52,6 +52,36 @@ class SaveCliTests(unittest.TestCase):
         self.assertEqual(self.frontmatter(saved['path'])['topic'], 'work')
         self.assertTrue(Path(saved['path']).read_text().endswith(BODY))
 
+    def run_cli_bytes(self, *args, input, **env):
+        result = subprocess.run([sys.executable, str(LEDGER), *map(str, args)],
+                                cwd=self.root, env={**self.env, **env}, input=input,
+                                capture_output=True, timeout=30)
+        self.assertTrue(result.stdout.strip(), result.stderr)
+        return result.returncode, json.loads(result.stdout)
+
+    def test_stdin_utf8_ignores_process_encoding(self):
+        draft = dict(topic='work', description='Café naïve', body=BODY)
+        raw = json.dumps(draft, ensure_ascii=False).encode('utf-8')
+        code, saved = self.run_cli_bytes('save', '--session', 's1', '--input', '-',
+                                         input=raw, PYTHONIOENCODING='latin-1')
+        self.assertEqual((code, saved['outcome']), (0, 'saved'), saved)
+        self.assertEqual(self.frontmatter(saved['path'])['description'], 'Café naïve')
+        path = self.root / 'draft.json'
+        path.write_bytes(raw)
+        code, retried = self.run_cli('save', '--session', 's1', '--input', path)
+        self.assertEqual((code, retried['outcome']), (0, 'saved'), retried)
+        self.assertEqual(retried['path'], saved['path'])
+
+    def test_stdin_non_utf8_bytes_are_invalid(self):
+        raw = json.dumps(dict(topic='work', description='Café naïve', body=BODY),
+                         ensure_ascii=False).encode('latin-1')
+        code, out = self.run_cli_bytes('save', '--session', 's1', '--input', '-',
+                                       input=raw, PYTHONIOENCODING='latin-1')
+        self.assertEqual((code, out['outcome']), (1, 'invalid'), out)
+        self.assertIn('utf-8', out['action'])
+        self.assertIn('correct the input and retry', out['action'])
+        self.assertEqual(list((self.root / '.handoffs').glob('*.md')), [])
+
     def test_explicit_stdin_invalid_json_is_recoverable(self):
         for raw in ('', '{broken', '[]'):
             with self.subTest(raw=raw):
