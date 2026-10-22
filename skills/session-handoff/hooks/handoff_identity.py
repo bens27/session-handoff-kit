@@ -37,10 +37,13 @@ def truthy(value):
 # ------------------------------------------------------------------ state dir
 
 def state_dir(directory=None):
-    """Where temp state lives: `directory`, else $HANDOFF_STATE_DIR, else gettempdir()."""
+    """Where temp state lives: `directory`, else an absolute $HANDOFF_STATE_DIR,
+    else gettempdir(). A relative value is ignored: it would resolve against each
+    process's cwd and could land state inside the project tree."""
     if directory:
         return directory
-    return (os.environ.get(STATE_DIR_ENV) or '').strip() or tempfile.gettempdir()
+    value = (os.environ.get(STATE_DIR_ENV) or '').strip()
+    return value if os.path.isabs(value) else tempfile.gettempdir()
 
 
 def temp_bases():

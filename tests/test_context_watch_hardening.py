@@ -146,3 +146,44 @@ class StartupAutoresumeNote(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoneHookFailsVisible(unittest.TestCase):
+    """A context_watch.py copied without its sibling modules must still say the
+    handoff service is unavailable instead of exiting silently."""
+
+    def run_lone(self, event):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = os.path.join(tmp, "context_watch.py")
+            with open(HOOK) as src, open(hook, "w") as dst:
+                dst.write(src.read())
+            env = dict(os.environ, HOME=tmp, TMPDIR=tmp, PYTHONPATH="",
+                       CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0")
+            evt = dict(event, cwd=tmp, session_id="lone-hook")
+            return subprocess.run([sys.executable, "-I", hook], input=json.dumps(evt),
+                                  capture_output=True, text=True, cwd=tmp, env=env, timeout=30)
+
+    def test_session_start_compact_reports_service_unavailable(self):
+        p = self.run_lone({"hook_event_name": "SessionStart", "source": "compact"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "SessionStart")
+        self.assertIn("Handoff service unavailable (ModuleNotFoundError)", out["additionalContext"])
+        self.assertIn("do not infer that no handoff exists", out["additionalContext"])
+
+    def test_session_start_startup_stays_quiet(self):
+        # Matches 031292b and verify-watcher: plain startup announces nothing.
+        p = self.run_lone({"hook_event_name": "SessionStart", "source": "startup"})
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, ""), p.stderr)
+
+    def test_user_prompt_submit_reports_context_watch_failed(self):
+        p = self.run_lone({"hook_event_name": "UserPromptSubmit", "prompt": "hi"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "UserPromptSubmit")
+        self.assertIn("Context-watch failed (ModuleNotFoundError)", out["additionalContext"])
+
+    def test_stop_reports_context_watch_failed(self):
+        p = self.run_lone({"hook_event_name": "Stop"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Context-watch failed (ModuleNotFoundError)", json.loads(p.stdout)["systemMessage"])

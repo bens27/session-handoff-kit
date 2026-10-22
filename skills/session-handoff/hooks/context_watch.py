@@ -128,11 +128,27 @@ try:
     import handoff_identity  # noqa: E402
     from handoff_identity import (  # noqa: E402,F401
         auto_count_path, latch_path, session_key, terminal_pointer_path, truthy as _truthy)
-except ImportError:
-    # A hook copied without its siblings is a missing installation: stay silent.
-    if __name__ == "__main__":
-        sys.exit(0)
-    raise
+    _MISSING_INSTALL = None
+except ImportError as _exc:
+    # A hook copied without its siblings is a missing installation. Stand-ins
+    # re-raise the ImportError where the hook first needs identity, so main()
+    # reaches fail_open at the same point it did before this module existed.
+    if __name__ != "__main__":
+        raise
+    _MISSING_INSTALL = _exc
+
+    def _missing(*_args, **_kwargs):
+        raise _MISSING_INSTALL
+
+    class _MissingModule:
+        def __getattr__(self, _name):
+            return _missing
+
+    handoff_identity = _MissingModule()
+    auto_count_path = latch_path = session_key = terminal_pointer_path = _missing
+
+    def _truthy(value):  # module-free, as before the identity module
+        return value.strip().lower() in ("1", "true", "yes", "on")
 REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
 DEFAULT_RESERVE = 20_000     # room kept free for writing the handoff (reported windows only)
 STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
@@ -391,16 +407,17 @@ def flush_diag(agent):
         print(diag_envelope(agent, event_name, message))
 
 
-def fail_open(exc, evt):
+def fail_open(exc, evt, once=True):
     """Report an unexpected failure under the event that triggered it, once per
-    session, with the exception type only. Always exits 0."""
+    session (every time when `once` is false), with the exception type only.
+    Always exits 0."""
     event_name = (evt or {}).get("hook_event_name") or "SessionStart"
     if event_name == "SessionStart":
         message = ('handoff-status: Handoff service unavailable (%s). Continue the current task; explicit retrieval '
                    'is blocked. Restore the installed skill files/access; do not infer that no handoff exists.'
                    % type(exc).__name__)
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': message}}))
-    elif claim_once(evt, ".error"):
+    elif not once or claim_once(evt, ".error"):
         message = ("handoff-status: Context-watch failed (%s); context telemetry is unavailable for this hook. "
                    "Continue the current task." % type(exc).__name__)
         if event_name in ("PostToolUse", "UserPromptSubmit"):
@@ -1455,4 +1472,4 @@ if __name__ == "__main__":
         flush_diag(_AGENT)
         raise
     except Exception as exc:
-        fail_open(exc, _EVT)
+        fail_open(exc, _EVT, once=_MISSING_INSTALL is None)

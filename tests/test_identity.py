@@ -129,6 +129,25 @@ class PinnedDerivations(Case):
             self.assertEqual(identity.terminal_id(), 'agent-9')
 
 
+class GoldenFilenames(Case):
+    """Exact bytes, not the formula: a changed hash input or width breaks these."""
+    D = "/state"
+    ROOT = "/nonexistent/golden-root"
+
+    def test_project_pointer(self):
+        self.assertEqual(identity.project_pointer_path("sess-golden", self.D),
+                         "/state/context-watch-project-10dc10fd3575a49a083c.json")
+
+    def test_session_note(self):
+        self.assertEqual(identity.session_note_path(self.ROOT, "sess-golden", self.D),
+                         "/state/context-watch-session-2f0524095beba74dfa23.json")
+
+    def test_auto_count_and_latch(self):
+        self.assertEqual(identity.auto_count_path(self.ROOT, self.D),
+                         "/state/context-watch-auto-9a14a76da5025f149466.count")
+        self.assertEqual(identity.latch_path("a/b c", 2, self.D), "/state/context-watch-a_b_c.fired2")
+
+
 class StateDirectory(Case):
     def test_explicit_parameter_wins_over_environment(self):
         other = os.path.join(self.tmp, 'other')
@@ -145,6 +164,17 @@ class StateDirectory(Case):
                     with patch.object(tempfile, 'tempdir', self.tmp):
                         self.assertEqual(identity.state_dir(), self.tmp)
                         self.assertEqual(os.path.dirname(identity.project_pointer_path('s')), self.tmp)
+
+
+class StateDirectoryMustBeAbsolute(Case):
+    def test_relative_knob_falls_back_to_gettempdir(self):
+        for value in ("state", "./state", "../x"):
+            with patch.dict(os.environ, {"HANDOFF_STATE_DIR": value}):
+                self.assertEqual(identity.state_dir(), tempfile.gettempdir(), value)
+
+    def test_absolute_knob_is_used(self):
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {"HANDOFF_STATE_DIR": d}):
+            self.assertEqual(identity.state_dir(), d)
 
 
 class SessionFallbackOrder(Case):
