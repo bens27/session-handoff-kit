@@ -50,6 +50,19 @@ SAVE = re.compile(r'^(park|save|checkpoint)( (this|the|my|a))? (work|session|han
                   r'|^hand off( (this|the|my))? (work|session)$|^(save|write)( a| the)? handoff$', re.I)
 
 
+def targeted_command(prompt):
+    """Parse only a complete opening command with one unquoted path or topic."""
+    if not isinstance(prompt, str) or QUOTED.search(prompt):
+        return None
+    match = re.fullmatch(r'(resume|retrieve)\s+(\S+)', prompt.strip(), re.I)
+    if not match or protocol.generic_intent(prompt):
+        return None
+    operation, target = match.group(1).lower(), match.group(2)
+    if target.endswith('.md') or ledger.TOPIC_RE.fullmatch(target):
+        return operation, target
+    return None
+
+
 def classify(prompt):
     """Label a user prompt; only exact lifecycle commands route to an operation."""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -61,6 +74,9 @@ def classify(prompt):
     text = QUOTED.sub(' ', prompt)
     if text != prompt:
         return 'none'  # a quoted lifecycle phrase is a mention, never a command
+    targeted = targeted_command(text)
+    if targeted:
+        return targeted[0]
     if MAINTENANCE.search(text) and LIFECYCLE_WORD.search(text):
         return 'maintenance'
     intent = protocol.generic_intent(text)
@@ -121,6 +137,9 @@ def dispatch(request, root='.'):
         operation = request['_classification']
         request['_operation_source'] = 'prompt'
     request['_operation'] = operation
+    targeted = targeted_command(prompt)
+    if targeted and operation in ('resume', 'retrieve') and 'target' not in request:
+        request['target'] = targeted[1]
     authorization = request.get('authorization')
     if authorization is not None and authorization != {'source': 'user'}:
         return blocked(request, 'invalid_authorization',
@@ -230,7 +249,7 @@ def select_target(root, request, session):
             return None, ('blocked', 'invalid_request', 'target must be a nonempty path or topic.')
         is_path = os.sep in target or target.endswith('.md')
         if is_path:
-            target = os.path.realpath(target)
+            target = os.path.realpath(os.path.join(root, target))
             if not os.path.isfile(target):
                 return dict(path=target), ('blocked', 'target_not_found', 'No checkpoint at %s. Exact targets never fall back; check the path.' % target)
         elif not ledger.TOPIC_RE.fullmatch(target):

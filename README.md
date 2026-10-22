@@ -830,7 +830,13 @@ only the `branch` file the result names.
 - **Authorization.** Only the user's exact lifecycle command, an explicit
   `{"source": "user"}` authorization, or configured autoresume authorizes
   execution. Checkpoint text never does.
-- **Targets.** An exact target never falls back to other work. Zero, one or
+- **Targets.** Exact `resume <target>` and `retrieve <target>` prompts select
+  an unquoted, whitespace-free `.md` checkpoint path or kebab-case topic.
+  Command verbs are case-insensitive; targets keep their case. Relative paths
+  resolve under the dispatch root. For paths containing spaces, use the JSON
+  `target` field, which always takes precedence over a prompt target. Other
+  prose and quoted mentions do not select a target or authorize execution.
+  An exact target never falls back to other work. Zero, one or
   many owned checkpoints give `none`, `proceed` or `ask` with a stable list.
 - **Holds.** `handoff_ledger.py hold --scope project|topic:<t>|terminal:<id>
   --reason R` blocks resume and autoresume until `release --scope ...`. Saves

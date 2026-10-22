@@ -815,7 +815,13 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    neutral notices, status, summary and commit requests, and skill-maintenance
    text give `none`. Execution needs user authorization (an exact prompt or
    `{"source": "user"}`) or configured autoresume. Checkpoint content never
-   authorizes.
+   authorizes. Exact `resume <target>` and `retrieve <target>` also classify
+   and select a target: one unquoted, whitespace-free `.md` path or kebab-case
+   topic. Verbs are case-insensitive; targets are preserved. Relative paths
+   resolve under the dispatch root. An explicit JSON `target` wins; an
+   explicit `operation` still wins over the prompt verb.
+   Paths containing spaces require JSON `target`. Missing, superseded and
+   closed prompt targets follow the same exact-target rules with no fallback.
 2. Identity resolves in this order: hook record, then host
    (`CODEX_THREAD_ID`), then explicit, then `HANDOFF_SESSION_ID`, then a
    synthetic id. The synthetic id is persisted per terminal and only for save,

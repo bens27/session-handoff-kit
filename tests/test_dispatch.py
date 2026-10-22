@@ -224,6 +224,75 @@ class IdentityTests(Base):
 class TargetSelectionTests(Base):
     """Audits 5 and 12: exact targets never fall back; owned candidates are deterministic."""
 
+    def test_resume_prompt_path_selects_one_of_three_owned_checkpoints(self):
+        self.record_hook_session('sess-a')
+        paths = [self.save(topic=topic) for topic in ('alpha', 'beta', 'gamma')]
+        ambiguous = self.dispatch(prompt='Resume', operation='resume', authorization={'source': 'user'})
+        self.assertEqual((ambiguous['outcome'], ambiguous['code']), ('ask', 'target_ambiguous'))
+        self.assertEqual(len(ambiguous['target']['candidates']), 3)
+        self.assertTrue(all(c['mine'] for c in ambiguous['target']['candidates']))
+        relative = str(Path(paths[1]).relative_to(self.root))
+        selected = self.dispatch(prompt='Resume ' + relative, operation='resume', authorization={'source': 'user'})
+        self.assertEqual(selected['classification'], 'resume')
+        self.assertEqual(selected['outcome'], 'proceed', selected)
+        self.assertEqual(selected['target']['path'], paths[1])
+        self.assertTrue(selected['authorized_to_execute'])
+
+    def test_prompt_targets_preserve_exact_selection_and_authority(self):
+        self.record_hook_session('sess-a')
+        first = self.save(topic='hook-fix')
+        second = self.save(topic='other')
+        for target in (first, str(Path(first).relative_to(self.root)), 'hook-fix'):
+            for operation in ('resume', 'retrieve'):
+                with self.subTest(target=target, operation=operation):
+                    r = self.dispatch(prompt=operation.title() + ' ' + target)
+                    self.assertEqual(r['classification'], operation)
+                    self.assertEqual(r['outcome'], 'proceed', r)
+                    self.assertEqual(r['target']['path'], first)
+                    self.assertEqual(r['authorized_to_execute'], operation == 'resume')
+        r = self.dispatch(prompt='Resume ' + first, target=second)
+        self.assertEqual(r['target']['path'], second)
+        r = self.dispatch(prompt='Resume .handoffs/missing.md')
+        self.assertEqual(r['code'], 'target_not_found')
+        self.assertEqual(r['next_action']['command'], '')
+        r = self.dispatch(prompt='Resume ' + first, operation='retrieve')
+        self.assertEqual(r['target']['path'], first)
+        self.assertFalse(r['authorized_to_execute'])
+
+    def test_prompt_path_is_relative_to_dispatch_root(self):
+        self.record_hook_session('sess-a')
+        path = self.save()
+        request = dict(prompt='Resume ' + str(Path(path).relative_to(self.root)))
+        r = self.cli('dispatch', '--root', str(self.root), '--input', '-', input=json.dumps(request))
+        self.assertEqual(r['target']['path'], path)
+        # A different process cwd must not change resolution under the requested root.
+        request['prompt'] = 'Resume .handoffs/missing.md'
+        request['session'] = 'sess-a'
+        r = self.cli('dispatch', '--root', str(self.home), '--input', '-', input=json.dumps(request))
+        self.assertEqual(r['code'], 'target_not_found')
+        self.assertEqual(r['target']['path'], str(self.home / '.handoffs/missing.md'))
+
+    def test_closed_prompt_path_is_retrieval_only(self):
+        self.record_hook_session('sess-a')
+        path = self.save()
+        self.cli('resume', path, '--session', 'sess-a')
+        resumed = self.dispatch(prompt='Resume ' + path)
+        self.assertEqual(resumed['code'], 'target_closed')
+        self.assertFalse(resumed['authorized_to_execute'])
+        retrieved = self.dispatch(prompt='Retrieve ' + path)
+        self.assertEqual(retrieved['code'], 'history_only')
+        self.assertFalse(retrieved['authorized_to_execute'])
+
+    def test_prompt_path_mentions_do_not_authorize(self):
+        self.record_hook_session('sess-a')
+        path = self.save()
+        for prompt in ('"Resume ' + path + '"', 'Explain resume ' + path,
+                       'Resume ' + path + ' then edit tests', 'Status of ' + path):
+            with self.subTest(prompt=prompt):
+                r = self.dispatch(prompt=prompt)
+                self.assertIsNone(r['operation'])
+                self.assertFalse(r['authorized_to_execute'])
+
     def test_exact_missing_target_never_falls_back(self):
         self.record_hook_session('sess-a')
         self.save()
@@ -239,6 +308,9 @@ class TargetSelectionTests(Base):
         self.assertEqual((r['outcome'], r['code']), ('blocked', 'target_superseded'))
         self.assertEqual(r['target']['authoritative'], new)
         self.assertNotIn(new, r['next_action']['command'])
+        r = self.dispatch(prompt='Resume ' + old)
+        self.assertEqual(r['code'], 'target_superseded')
+        self.assertEqual(r['next_action']['command'], '')
 
     def test_topic_target_binds_authoritative_checkpoint(self):
         self.record_hook_session('sess-a')
