@@ -106,9 +106,6 @@ DATA_MEDIA_URL = re.compile(r"data:(?:image|audio)/[\w.+-]+(?:;[\w.+-]+)*;base64
 MEDIA_URL_KEYS = ("image_url", "audio_url")
 BASE64_MIN = 1_000
 NOT_IN_CONTEXT_KEYS = ("originalFile", "structuredPatch", "originalContent")
-SECOND_NOTICE_FACTOR = 1.25  # re-fire once at 125% of the threshold, and 25% past the first
-SECOND_NOTICE_MARGIN = 5_000  # the second notice is capped this far under the window
-FLOOR_MARGIN = 10_000        # a threshold within this (or 10%) of startup context is useless
 
 
 def canonical_ledger():
@@ -149,8 +146,6 @@ except ImportError as _exc:
 
     def _truthy(value):  # module-free, as before the identity module
         return value.strip().lower() in ("1", "true", "yes", "on")
-REARM_FACTOR = 0.5           # occupancy below 50% (a compaction) re-arms the latch
-DEFAULT_RESERVE = 20_000     # room kept free for writing the handoff (reported windows only)
 STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
 LABEL = {"claude": "[context-watch]",
          # Newer Codex parses stdout that starts with "[" or "{" as JSON, so the
@@ -1268,77 +1263,49 @@ def main():
         sys.exit(0)
     first, second = latch_path(session_id), latch_path(session_id, 2)
 
-    try:
-        window = int(env("CONTEXT_WATCH_WINDOW", "200000"))
-    except ValueError:
-        window = 200000
-    window_source = "assumed"
-
+    import watch_decision as wd
+    cfg = wd.WatchConfig.from_environ(os.environ)
     model = evt.get("model")  # Codex includes it in hook input; Claude Code does not
-    if agent == "claude":
-        breakdown, tmodel = claude_usage(entries)
-    else:
-        breakdown, reported, tmodel = codex_usage(entries)
-        if reported:
-            window, window_source = reported, "reported"
-    model = model or tmodel
-
-    if not breakdown or breakdown.get("occupancy", 0) <= 0:
+    usage = claude_usage(entries) if agent == "claude" else codex_usage(entries)
+    if not usage[0] or usage[0].get("occupancy", 0) <= 0:
         if event_name == "UserPromptSubmit" and not lean:
             route_opening_prompt(evt, agent)  # no API call yet: the opening prompt
         sys.exit(0)
-
-    pending, pending_raw = estimate_pending(evt)
-    # ponytail: Claude only; Codex rollouts' write order around hooks is unverified.
-    unrecorded = unrecorded_results(entries, evt.get("tool_use_id")) \
-        if agent == "claude" and env("CONTEXT_WATCH_PENDING", "1") != "0" else 0
-    # The response that issued this call (thinking included) is written only
-    # after the hook runs; assume it is as large as the session's largest so far.
-    thinking = min(breakdown.get("max_output", 0), PENDING_CAP) \
-        if agent == "claude" and env("CONTEXT_WATCH_PENDING", "1") != "0" else 0
-    if env("CONTEXT_WATCH_THINKING").strip():
-        try:
-            thinking = int(env("CONTEXT_WATCH_THINKING"))
-        except ValueError:
-            pass
-    pending += unrecorded + thinking
-    occupancy = breakdown["occupancy"] + pending
+    estimate = estimate_pending(evt)
+    if agent == "claude":
+        # ponytail: Claude only; Codex rollouts' write order around hooks is unverified.
+        unrecorded = unrecorded_results(entries, evt.get("tool_use_id")) if cfg.pending else 0
+        seen = wd.claude_observation(cfg, usage, model, estimate, unrecorded, PENDING_CAP)
+    else:
+        seen = wd.codex_observation(cfg, usage, model, estimate)
+    breakdown, model, window, window_source = seen.breakdown, seen.model, seen.window, seen.window_source
+    pending, pending_raw, unrecorded, thinking = seen.pending, seen.pending_raw, seen.unrecorded, seen.thinking
+    occupancy = seen.occupancy
 
     cwd = evt.get("cwd") or os.getcwd()
-    limit, source = resolve_threshold(model, window, cwd)
-    if window_source == "reported":
-        # Only a host-reported window is trusted for this cap: an assumed 200k
-        # would clamp every 1M-context model's threshold to 180k.
-        try:
-            reserve = int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE)))
-        except ValueError:
-            reserve = DEFAULT_RESERVE
-        cap = window - reserve
-        if 0 < cap < limit:
-            source = "%s, capped from %s to window %s - reserve %s" % (
-                source, format(limit, ","), format(window, ","), format(reserve, ","))
-            limit = cap
+    limit, source = wd.cap_threshold(*resolve_threshold(model, window, cwd), window, window_source, cfg.reserve)
     write_session_note(cwd, evt, os.path.exists(first), dict(observed_occupancy_tokens=occupancy,
                        threshold=limit, threshold_source=source, window=window,
                        window_source=window_source, model=model))
     fired = os.path.exists(first)
     floor_latch = handoff_identity.latch_floor_path(session_id)
     floored = os.path.exists(floor_latch)
-    rearm_limit = limit
-    if floored:
-        # A floored session is watched against window - reserve; compaction
-        # cannot drop it under the configured (startup-floor) threshold.
+    first_occupancy, first_base = read_first_latch(first) if fired else (0, None)
+    latch = wd.Latch(fired=fired, second=os.path.exists(second), floored=floored,
+                     floor_startup=read_first_latch(floor_latch)[0] if floored else 0,
+                     first_occupancy=first_occupancy, first_base=first_base)
+
+    def floor_probe():
         try:
-            rearm_limit = max(window - int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE))), limit)
-        except ValueError:
-            rearm_limit = max(window - DEFAULT_RESERVE, limit)
-    near_floor = False
-    if floored:
-        # A high startup floor can never compact under half of window - reserve;
-        # back within FLOOR_MARGIN of the startup context counts as compacted.
-        startup = read_first_latch(floor_latch)[0]
-        near_floor = bool(startup) and occupancy < startup + FLOOR_MARGIN
-    if (fired or floored) and (occupancy < rearm_limit * REARM_FACTOR or near_floor):
+            if os.path.getsize(transcript_path) <= TAIL_BYTES:
+                return floor_occupancy(entries, agent)
+        except OSError:
+            pass
+        return None
+
+    decision = wd.decide(occupancy, breakdown["occupancy"], limit, source, window, cfg.reserve, latch,
+                         floor_probe, lambda: handoff_written_since(cwd, session_id))
+    if decision.action == wd.REARM:
         for path in (first, second, floor_latch, first + ".cleared",
                      first + ".nudged", first + ".announced"):
             try:
@@ -1346,57 +1313,18 @@ def main():
             except OSError:
                 pass
         sys.exit(0)
-    floor, below_floor, floor_limit = None, False, None
-    if floored or (not fired and occupancy >= limit):
-        # A threshold at or under the startup context would fire at once and
-        # free nothing. Say so once, then watch the window-reserve limit
-        # instead: pressure protection stays, the handoff loop cannot start.
-        if not floored:
-            try:
-                if os.path.getsize(transcript_path) <= TAIL_BYTES:
-                    floor = floor_occupancy(entries, agent)
-            except OSError:
-                pass
-        else:
-            floor = read_first_latch(floor_latch)[0] or None
-        if floored or (floor is not None and limit < floor + max(FLOOR_MARGIN, limit * 0.1)):
-            try:
-                reserve = int(env("CONTEXT_WATCH_RESERVE", str(DEFAULT_RESERVE)))
-            except ValueError:
-                reserve = DEFAULT_RESERVE
-            # ponytail: an assumed (unreported) window uses CONTEXT_WATCH_WINDOW, 200k by default
-            floor_limit = max(window - reserve, limit)
-            below_floor = True
-            source = "%s, raised to window %s - reserve %s (startup context ~%s)" % (
-                source, format(window, ","), format(reserve, ","), format(floor or 0, ","))
-    configured_limit = limit
-    if below_floor:
-        if not floored:
+    limit, source, floor = decision.limit, decision.source, decision.floor
+    if decision.below_floor:
+        if decision.record_floor:
             try:
                 with open_private(floor_latch) as f:
                     f.write("%d/0/0\n" % (floor or 0))
             except OSError:
                 pass
-        limit = floor_limit
         write_session_note(cwd, evt, os.path.exists(first), dict(threshold=limit, threshold_source=source))
-    if os.path.exists(second):
-        sys.exit(0)  # both notices given; only a compaction re-arms
-    need = limit
-    if fired:
-        first_occ, first_base = read_first_latch(first)
-        if breakdown["occupancy"] == first_base:
-            # No model turn since the first notice (e.g. parallel tool results
-            # landing together): it has not been seen yet, so it was not ignored.
-            sys.exit(0)
-        if handoff_written_since(cwd, session_id):
-            sys.exit(0)  # the handoff was written; the notice was acted on
-        need = max(limit * SECOND_NOTICE_FACTOR,
-                   first_occ + limit * (SECOND_NOTICE_FACTOR - 1))
-        # Occupancy cannot pass the window: keep the second notice reachable.
-        need = max(limit, min(need, window - SECOND_NOTICE_MARGIN))
-    note_only = below_floor and not floored and occupancy < need
-    if occupancy < need and not note_only:
+    if decision.action == wd.QUIET:
         sys.exit(0)
+    note_only = decision.action == wd.FLOOR_NOTE
 
     if not note_only:
         try:
@@ -1424,17 +1352,16 @@ def main():
         "window": window,
         "window_source": window_source,
         "usage_age_s": usage_age,
-        "notice": "floor" if note_only else (2 if fired else 1),
+        "notice": decision.log_notice,
         "floor": floor,
         "breakdown": breakdown,
         "session_id": session_id,
         "cwd": cwd,
     })
 
-    skill = env("CONTEXT_WATCH_SKILL", "session-handoff")
-    mode = env("CONTEXT_WATCH_MODE", "warn").strip().lower()
+    skill, mode = cfg.skill, cfg.mode
     if note_only:
-        emit(agent, event_name, build_floor_message(floor, configured_limit, floor_limit, model, agent), "warn")
+        emit(agent, event_name, build_floor_message(floor, decision.configured_limit, decision.floor_limit, model, agent), "warn")
     import shlex
     from handoff_protocol import restart_guard
     guard = restart_guard(cwd, session_id) if auto_mode_on() else None

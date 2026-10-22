@@ -60,3 +60,17 @@ decides when an intent is created or moved; `handoff_dispatch` and
 `handoff_pointers` only read. The store imports neither caller, and preflight
 and dispatch do not import each other: dispatcher holds live in
 `handoff_holds.py`, which both read.
+
+## Watch decision
+
+`skills/session-handoff/hooks/watch_decision.py`, the pure core of the context
+watcher: when it speaks and what latch state follows. `WatchConfig` reads the
+pressure path's `CONTEXT_WATCH_*` settings once; `claude_observation` and
+`codex_observation` turn each host's transcript usage into one `Observation`
+(window, model, pending tokens); `cap_threshold` applies a reported window's
+reserve; `decide` takes the observation, threshold and a `Latch` (the latch
+files as read) and returns `rearm`, `quiet`, `notice` (1 or 2) or `floor-note`,
+plus the floor latch to record. `context_watch.main` is the adapter: it reads
+the event, transcript and latch files, calls the core, then removes or writes
+latches, session notes, the log and the notice. The core imports no hook and
+touches no file, environment or subprocess, so its rules are table tests.
