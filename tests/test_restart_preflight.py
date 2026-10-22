@@ -1005,8 +1005,23 @@ class AdoptTests(unittest.TestCase):
         self.assertEqual(len(argv), 4)
         self.assertEqual(argv[2], 'adopt')
         self.assertRegex(argv[3], r'^h-[0-9a-f]{24}$')
-        self.assertLess(len(self.prompt), 200)
+        script = os.path.realpath(restart.__file__)
+        self.assertEqual(argv[:2], ['python3', script])
+        self.assertEqual(self.prompt, 'Continue the handoff: run exactly python3 %s adopt %s'
+                         % (shlex.quote(script), argv[3]))
         self.assertNotIn(self.root, self.prompt)
+
+    def test_short_handle_command_is_independent_of_script_path_length(self):
+        import shlex
+        binding = restart.status(self.root, 'req-1')
+        for script in ('/opt/kit/restart_preflight.py',
+                       '/opt/' + 'deep/' * 40 + 'restart_preflight.py',
+                       "/opt/Ben's kit/restart_preflight.py"):
+            with self.subTest(script=script), patch.object(restart, '__file__', script):
+                argv = shlex.split(restart.binding_command(binding))
+                self.assertEqual(argv[:3], ['python3', script, 'adopt'])
+                self.assertEqual(len(argv), 4)
+                self.assertRegex(argv[3], r'^h-[0-9a-f]{24}$')
 
     def test_adopt_by_binding_resumes_and_reports_identity_apart_from_host_acceptance(self):
         import shlex, subprocess
