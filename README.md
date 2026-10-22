@@ -633,17 +633,24 @@ no pending intent; a pointer without an intent is inert, and an identical retry
 finishes it. A pending intent with a pointer but no marker may reserve dispatch
 once after every gate is rechecked; with a marker the result is
 `reason: dispatch-reserved` and the agent reconciles, never re-dispatches.
-Legacy intents without a pointer keep reconcile-only behavior.
+Re-entry requires the intent's own `pointer_version` plus a readable pointer
+matching its binding; a pointer file alone grants nothing, so legacy intents
+keep reconcile-only behavior even beside a matching pointer.
 `handoff_pointers.scan(root, session)` lists candidates only when the handle
 resolves through this user's HOME locator, the binding matches the intent, the
-publication is sealed by the existing `~/.context-watch/receipt.key`, no
+publication is sealed by the existing `~/.context-watch/receipt.key`, the
+pointer's workspace and task ID equal the sealed checkpoint's (a missing
+workspace is `workspace-missing`), the index directories are real, owned and
+not group/other-writable (else `unsafe-pointer-dir`), no
 pointer, intent or checkpoint is tracked by Git (indeterminate checks fail
 closed) and continuation is authorized in user scope (`AUTORESUME` /
 `CONTEXT_WATCH_AUTORESUME` or `autoresume` in `~/.context-watch/thresholds.json`;
 project config never authorizes). Anything else is a diagnostic whose recovery
 is explicit `adopt`. Retrieved intents list only for their recorded successor
 (`mode: replay`); settled pointers are skipped silently and pruned with their
-intents. Startup selection is a later slice.
+intents. `.handoffs/` is not gitignored: committing it (for example with
+`git add -A`) makes every candidate ineligible as `git-tracked`. Startup
+selection is a later slice.
 
 The agent calls the supported host tool only for `dispatch: true`, using the
 returned `restart_prompt`, one sentence: `Continue the handoff: run exactly
@@ -659,9 +666,12 @@ new identifiers are bounded ASCII tokens and the final prompt is checked against
 the host limit before intent persistence. A durable registry lock also prevents
 renaming requests from bypassing pending same-terminal/path or retrieved/refused
 same-checkpoint intents, including across different checkpoint paths. Invalid
-persisted records fail closed. Repeated requests never dispatch again. A crash between
-intent and host response leaves `pending`; reconcile it with the host before
-creating a new request. `record_refusal(root, request_id, reason)` persists a
+persisted records fail closed. Repeated requests never dispatch again, except that an intent recorded with a
+pointer (`pointer_version`) and without `dispatch_started_at` (a crash before the
+marker, so no host call was ever returned) may reserve dispatch once after every
+gate is rechecked; with the marker, reconcile. For intents without a pointer, a
+crash between intent and host response leaves `pending`; reconcile it with the
+host before creating a new request. `record_refusal(root, request_id, reason)` persists a
 returned failure without closing the checkpoint. `status(root, request_id)`
 reads `.handoffs/restart/<sha256-request-id>.json`. Reusing an ID with another
 identity or checkpoint blocks. An existing malformed intent also blocks and is
