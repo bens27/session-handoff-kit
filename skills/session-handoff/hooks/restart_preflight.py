@@ -679,7 +679,7 @@ def cli():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['preflight', 'status', 'refusal', 'successor', 'adopt', 'restart', 'acceptance'])
     parser.add_argument('binding', nargs='?', help='adopt: short restart handle (legacy binding JSON accepted for one release)')
-    parser.add_argument('--input', help='JSON argument object; defaults to stdin')
+    parser.add_argument('--input', help='JSON argument file or - for stdin; defaults to stdin')
     parser.add_argument('--root', help='adopt: project root')
     parser.add_argument('--request-id', help='adopt: restart request ID from the binding')
     parser.add_argument('--workers', help='restart: complete worker inventory JSON list; omit when unknown')
@@ -709,7 +709,7 @@ def cli():
             result = restart(args.root, workers, args.host_capable, args.hold, args.path)
             print(json.dumps(result))
             return 0 if result['outcome'] == 'ready' else 1
-        data = protocol.load_state_json(args.input) if args.input else protocol.decode_state_json(protocol.read_cli_input('-'))
+        data = protocol.decode_state_json(protocol.read_cli_input(args.input or '-'))
         function = {'preflight': preflight, 'status': status,
                     'refusal': record_refusal, 'successor': confirm_successor,
                     'acceptance': record_acceptance}[args.operation]

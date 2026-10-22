@@ -602,6 +602,61 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertNotIn(b'Traceback', bad.stderr)
         self.assertEqual(restart.status(self.root, 'cli-utf8')['refusal'], 'Café naïve')
 
+    def test_cli_explicit_stdin_dash_uses_strict_utf8(self):
+        import subprocess
+        self.assertEqual(self.preflight(request_id='cli-dash')['outcome'], 'ready')
+        command = [sys.executable, str(HOOKS / 'restart_preflight.py'), 'refusal', '--input', '-']
+        env = dict(os.environ, PYTHONIOENCODING='latin-1')
+        args = dict(root=self.root, request_id='cli-dash', reason='Café naïve')
+        # A literal dash file must never take precedence over stdin.
+        Path(self.root, '-').write_text('{}')
+        run = subprocess.run(command, input=json.dumps(args, ensure_ascii=False).encode('utf-8'),
+                             cwd=self.root, env=env, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertEqual(restart.status(self.root, 'cli-dash')['refusal'], 'Café naïve')
+        bad = subprocess.run(command, input=json.dumps(args, ensure_ascii=False).encode('latin-1'),
+                             cwd=self.root, env=env, capture_output=True)
+        blocked = json.loads(bad.stdout)
+        self.assertEqual((bad.returncode, blocked['outcome'], blocked['dispatch']), (1, 'blocked', False))
+        self.assertIn('utf-8', blocked['reason'])
+        self.assertNotIn(b'Traceback', bad.stderr)
+        self.assertEqual(restart.status(self.root, 'cli-dash')['refusal'], 'Café naïve')
+
+    def test_context_watch_stdin_uses_strict_utf8(self):
+        import subprocess
+        alias = Path(self.root, 'Café naïve')
+        alias.symlink_to(self.root, target_is_directory=True)
+        event = dict(cwd=str(alias), session_id='old', hook_event_name='UserPromptSubmit', prompt='continue the handoff')
+        raw = json.dumps(event, ensure_ascii=False)
+        env = dict(os.environ, HOME=self.root, TMPDIR=self.root,
+                   CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', PYTHONIOENCODING='latin-1')
+        for mode in ([], ['opening-note']):
+            with self.subTest(mode=mode):
+                command = [sys.executable, str(HOOKS / 'context_watch.py'), *mode]
+                run = subprocess.run(command, input=raw.encode('utf-8'), cwd=self.root,
+                                     env=env, capture_output=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                output = run.stdout.decode('latin-1')
+                if not mode:
+                    output = json.loads(output)['hookSpecificOutput']['additionalContext']
+                self.assertIn('Café naïve', output)
+                self.assertIn(Path(self.path).name, output)
+
+    def test_context_watch_invalid_utf8_reports_without_traceback(self):
+        import subprocess
+        event = dict(cwd=self.root, session_id='old', hook_event_name='UserPromptSubmit', prompt='Café naïve')
+        raw = json.dumps(event, ensure_ascii=False).encode('latin-1')
+        env = dict(os.environ, HOME=self.root, TMPDIR=self.root,
+                   CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', PYTHONIOENCODING='latin-1')
+        for mode in ([], ['opening-note']):
+            with self.subTest(mode=mode):
+                run = subprocess.run([sys.executable, str(HOOKS / 'context_watch.py'), *mode],
+                                     input=raw, cwd=self.root, env=env, capture_output=True)
+                self.assertEqual(run.returncode, 0, run.stderr)  # hooks fail open
+                self.assertIn(b'UTF-8', run.stdout)
+                self.assertIn(b'retry', run.stdout)
+                self.assertNotIn(b'Traceback', run.stderr)
+
     def test_cli_ready_delivers_exact_successor_prompt_but_pending_cannot_redispatch(self):
         import json
         import subprocess

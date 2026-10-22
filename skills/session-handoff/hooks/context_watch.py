@@ -316,9 +316,24 @@ def in_subagent(evt):
     return "subagents" in (evt.get("transcript_path") or "").replace("\\", "/").split("/")
 
 
+def invalid_hook_input():
+    print(json.dumps({'systemMessage': 'handoff-status: Invalid UTF-8 hook input; encode JSON as UTF-8 '
+                      'and retry. No hook event was processed.'}))
+    sys.exit(0)
+
+
 def read_event():
     try:
-        evt = json.load(sys.stdin)
+        try:
+            from handoff_protocol import read_cli_input
+        except ImportError:
+            # A lone hook still needs the event to report its missing installation.
+            raw = sys.stdin.buffer.read().decode('utf-8')
+        else:
+            raw = read_cli_input('-')
+        evt = json.loads(raw)
+    except UnicodeDecodeError:
+        invalid_hook_input()
     except Exception:
         return {}
     return evt if isinstance(evt, dict) else {}
@@ -843,7 +858,8 @@ def bounded_opening_note(evt):
     """Isolate filesystem inspection so a broken/slow store cannot block a prompt."""
     try:
         result = subprocess.run([sys.executable, os.path.abspath(__file__), 'opening-note'],
-                                input=json.dumps(evt), capture_output=True, text=True, timeout=1)
+                                input=json.dumps(evt), capture_output=True, text=True, encoding='utf-8',
+                                env=dict(os.environ, PYTHONIOENCODING='utf-8'), timeout=1)
         return result.stdout.strip() if result.returncode == 0 else ''
     except Exception:
         return ''
@@ -1402,8 +1418,12 @@ def main():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'opening-note':
         try:
-            from handoff_protocol import hook_opening_note
-            note = hook_opening_note(json.load(sys.stdin))
+            from handoff_protocol import hook_opening_note, read_cli_input
+            try:
+                raw = read_cli_input('-')
+            except UnicodeDecodeError:
+                invalid_hook_input()
+            note = hook_opening_note(json.loads(raw))
             if note:
                 print(note)
         except Exception:
