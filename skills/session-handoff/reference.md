@@ -173,6 +173,11 @@ Long-running orchestrators that resume one topic by design can list it in
 stay in the diagnostics (`continuous_topic: true`) but never pause. Required headings
 match `## Objective`, `## Current state`, `## Next steps` exactly at their start;
 trailing text after a space (for example `## Current state (main abc123)`) is allowed.
+When this terminal owns several open checkpoints, resume asks the user to choose
+from a list that shows each one's created, parked and last-resumed times. Set
+`"owned_selection": "newest"` in `~/.context-watch/thresholds.json` (or
+`HANDOFF_OWNED_SELECTION=newest`) to resume the newest one automatically and list
+the others as alternatives. A project `.context-watch.json` cannot set it.
 Trade-off: `<root>/.context-watch.json` is project scope, so a repository file can relax the pause for
 the topics it lists; `restart-budget` and `restart-cooldown` remain hard stops regardless.
 Five previous AgentsRoom restart intents within an hour or another session's

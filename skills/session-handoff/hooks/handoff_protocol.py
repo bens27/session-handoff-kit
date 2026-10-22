@@ -171,6 +171,19 @@ def publication_recovery(root, path):
     return dict(path=path, kind='repair' if repairable else 'abandon', command=command, text=text)
 
 
+OWNED_SELECTIONS = ('ask', 'newest')
+
+
+def owned_selection(root):
+    """How several open checkpoints of this terminal are chosen: 'ask' (default) or 'newest'.
+
+    HANDOFF_OWNED_SELECTION wins over `owned_selection` in ~/.context-watch/thresholds.json;
+    a project file cannot loosen this consent setting. Any other value means 'ask'.
+    """
+    value = os.environ.get('HANDOFF_OWNED_SELECTION') or project_setting(root, 'owned_selection', str, user_only=True)
+    return value if value in OWNED_SELECTIONS else 'ask'
+
+
 def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None):
     stats = {}
     items = ledger.scan(root, max_age, stats)
@@ -192,7 +205,8 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
     # A missing own checkpoint must not make foreign or unowned work
     # become the implicit recovery target. Explicit path selection still works.
     sole = items[0] if len(items) == 1 else None
-    selected = (mine[0]['path'] if len(mine) == 1 else sole['path']
+    newest_owned = len(mine) > 1 and owned_selection(root) == 'newest'
+    selected = (mine[0]['path'] if len(mine) == 1 or newest_owned else sole['path']
                 if sole and not current else None)
     outcome = ('error' if stats['errors'] else 'incomplete' if stats['incomplete'] else 'available' if items else
                'claimed' if stats['claimed'] else 'stale' if stats['stale'] else 'none')
@@ -211,6 +225,10 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
         result['action'] = result['recovery'][0]['text']
     if selected:
         result['selected'] = selected
+    if newest_owned:
+        result['selection'] = 'newest_owned'
+        result['alternatives'] = mine[1:6]
+        result['alternatives_total'] = len(mine) - 1
     if hidden:
         result['other_sessions'] = hidden
         if outcome == 'none':
@@ -1517,6 +1535,13 @@ def generic_intent(prompt):
     return 'retrieve' if normalized in RETRIEVE_COMMANDS else 'resume' if normalized in RESUME_COMMANDS else None
 
 
+def checkpoint_times(item):
+    """created / parked / last resumed, as shown to the user when choosing a checkpoint."""
+    return 'created %s, parked %s, last resumed %s' % (
+        (item.get('created') or item.get('ended') or '?')[:19], (item.get('parked') or '?')[:19],
+        (item.get('last_resumed') or 'never')[:19])
+
+
 def opening_action(prompt, result, session, auto=False, newest=False):
     """One authorization policy shared by startup and explicit opening commands."""
     import re
@@ -1537,8 +1562,10 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     items = result['items']
     if not prompt and not auto:
         return '%d open handoff(s) available. Continue the current request; retrieve or resume explicitly when relevant.' % result['total']
+    if not selected and result.get('selection') == 'newest_owned':
+        selected = next((h for h in items if h['path'] == result['selected']), None)
     if not selected and result['total'] > 1 and not newest:
-        return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (ended %s, %.0fd old): %s' % (i+1,h['topic'][:80],h['ended'][:32],h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'
+        return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (%s, %.0fd old): %s' % (i+1,h['topic'][:80],checkpoint_times(h),h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'
     selected = selected or items[0]
     if not prompt and Record.load(selected['path']).paused:
         return ('Automatic handoff paused; checkpoint remains open at %s. Reduce re-entry context '
@@ -1550,7 +1577,8 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     command = 'python3 %s %s %s --session %s' % (shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
                                                  'resume' if execute else 'prepare', shlex.quote(selected['path']), shlex.quote(session))
     suffix = ' It claims, verifies and acknowledges in one call; then continue with ## Next steps in its body.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
-    return "Handoff '%s' (ended %s, %.0fd old) — %s. " % (selected['topic'][:80],selected['ended'][:32],selected['age_days'],selected['description'][:240]) + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
+    notice = ledger.age_notice(selected)
+    return "Handoff '%s' (%s, %.0fd old) — %s. " % (selected['topic'][:80],checkpoint_times(selected),selected['age_days'],selected['description'][:240]) + ('Note: %s. ' % notice if notice else '') + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
 
 
 def history(root, topic=None, offset=0, limit=10):

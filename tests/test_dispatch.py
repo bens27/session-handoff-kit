@@ -1261,5 +1261,132 @@ class StoppedAuthorizationSourceTests(Base):
         self.assertFalse(r['authorized_to_execute'], r)
 
 
+class OwnedSelectionTests(Base):
+    """Several owned checkpoints: ask by default, or the newest when owned_selection is "newest"."""
+
+    TIMES = ('created', 'parked', 'last_resumed')
+
+    def two_owned(self):
+        self.record_hook_session('sess-a')
+        older = self.save(topic='older-work')
+        newer = self.save(topic='newer-work')
+        return older, newer
+
+    def test_default_asks_with_created_parked_and_resumed_times(self):
+        older, newer = self.two_owned()
+        r = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'), r)
+        self.assertFalse(r['authorized_to_execute'])
+        candidates = r['target']['candidates']
+        self.assertEqual([c['path'] for c in candidates], [newer, older])
+        for c in candidates:
+            for key in self.TIMES:
+                self.assertIn(key, c, c)
+            self.assertTrue(c['created'] and c['parked'], c)
+            self.assertEqual(c['last_resumed'], '', c)
+
+    def test_newest_setting_picks_the_newest_owned_and_lists_the_rest(self):
+        older, newer = self.two_owned()
+        for how in ('file', 'env'):
+            with self.subTest(how=how):
+                env = None
+                config = self.home / '.context-watch' / 'thresholds.json'
+                config.parent.mkdir(exist_ok=True)
+                if how == 'file':
+                    config.write_text(json.dumps({'owned_selection': 'newest'}))
+                else:
+                    config.unlink()
+                    env = {'HANDOFF_OWNED_SELECTION': 'newest'}
+                r = self.dispatch(dict(operation='resume', authorization={'source': 'user'}), env=env)
+                self.assertEqual(r['outcome'], 'proceed', r)
+                self.assertEqual(r['target']['path'], newer)
+                self.assertEqual(r['target']['selection'], 'newest_owned')
+                self.assertEqual([c['path'] for c in r['target']['alternatives']], [older])
+                for key in self.TIMES:
+                    self.assertIn(key, r['target'], r['target'])
+
+    def test_project_file_cannot_loosen_owned_selection(self):
+        self.two_owned()
+        home = self.home / '.context-watch' / 'thresholds.json'
+        home.parent.mkdir(exist_ok=True)
+        home.write_text(json.dumps({'owned_selection': 'ask'}))
+        (self.root / '.context-watch.json').write_text(json.dumps({'owned_selection': 'newest'}))
+        r = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'), r)
+
+    def test_unknown_setting_value_keeps_asking(self):
+        self.two_owned()
+        r = self.dispatch(dict(operation='resume', authorization={'source': 'user'}),
+                          env={'HANDOFF_OWNED_SELECTION': 'whatever'})
+        self.assertEqual(r['code'], 'target_ambiguous', r)
+
+    def test_last_resumed_comes_from_the_topic_chain(self):
+        self.record_hook_session('sess-a')
+        first = self.save(topic='parser')
+        self.cli('resume', first, '--session', 'sess-a')
+        resumed = next(l.split(': ', 1)[1] for l in Path(first).read_text().splitlines() if l.startswith('resumed: '))
+        self.save(topic='parser', body=BODY + 'Second round.\n')
+        self.save(topic='other-work')
+        r = self.dispatch(operation='resume', authorization={'source': 'user'})
+        times = {c['topic']: c['last_resumed'] for c in r['target']['candidates']}
+        self.assertEqual(times, {'parser': resumed, 'other-work': ''}, r)
+
+    def test_lookup_text_lists_created_parked_and_resumed(self):
+        self.two_owned()
+        out = self.cli('lookup')
+        for item in out['items']:
+            for key in self.TIMES:
+                self.assertIn(key, item, item)
+
+
+class StaleNoticeTests(Base):
+    """A selected checkpoint saved over 24h ago carries a 'parked N days (saved X)' notice,
+    anchored on frontmatter `created` so claim/release rewrites do not reset it."""
+
+    def later_view(self, path, rewrite):
+        """Look at the checkpoint 13 days after its save, in-process with a shifted clock."""
+        import time
+        from unittest import mock
+        sys.path.insert(0, str(HOOKS))
+        import handoff_dispatch, handoff_ledger, handoff_protocol
+        later = time.time() + 13 * 86400
+        with mock.patch.dict(os.environ, dict(self.env, HANDOFF_TERMINAL_ID='term-a'), clear=True), \
+                mock.patch('time.time', return_value=later):
+            if rewrite:
+                handoff_ledger.claim(path, 'sess-a')
+                handoff_ledger.release(path, 'sess-a')
+                os.utime(path, (later, later))  # the rewrite happened 13 days after the save
+            target, _ = handoff_dispatch.select_target(str(self.root), {'_operation': 'resume'}, 'sess-a')
+            text = handoff_protocol.opening_action('resume', handoff_protocol.lookup(str(self.root)), 'sess-a')
+        return target, text
+
+    def test_old_selected_checkpoint_carries_age_notice(self):
+        self.record_hook_session('sess-a')
+        path = self.save(topic='old-work')
+        target, text = self.later_view(path, rewrite=False)
+        self.assertTrue(target.get('age_notice', '').startswith('parked 13 days (saved '), target)
+        self.assertIn('Note: parked 13 days (saved ', text)
+
+    def test_claim_and_release_keep_the_notice(self):
+        self.record_hook_session('sess-a')
+        path = self.save(topic='old-work')
+        target, text = self.later_view(path, rewrite=True)
+        self.assertTrue(target.get('age_notice', '').startswith('parked 13 days (saved '), target)
+        self.assertIn('Note: parked 13 days (saved ', text)
+
+    def test_fresh_checkpoint_has_no_notice(self):
+        self.record_hook_session('sess-a')
+        self.save(topic='new-work')
+        r = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertNotIn('age_notice', r['target'], r['target'])
+
+    def test_mtime_is_the_fallback_without_created(self):
+        sys.path.insert(0, str(HOOKS))
+        import handoff_ledger
+        self.assertEqual(handoff_ledger.age_notice(dict(created='', age_days=3.2, parked='2026-10-19T09:00:00')),
+                         'parked 3 days (saved 2026-10-19T09:00:00)')
+        self.assertEqual(handoff_ledger.age_notice(dict(created='garbage', age_days=0.5)), '')
+
+
 if __name__ == '__main__':
     unittest.main()

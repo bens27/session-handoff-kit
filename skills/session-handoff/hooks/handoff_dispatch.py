@@ -250,9 +250,12 @@ def resolve_identity(root, request):
     return identity, None
 
 
+TIMES = ('created', 'parked', 'last_resumed')
+
+
 def _candidate(item):
     return dict(path=item['path'], topic=item['topic'], ended=item['ended'], description=item['description'][:240],
-                mine=bool(item.get('mine')))
+                mine=bool(item.get('mine')), **{k: item.get(k, '') for k in TIMES})
 
 
 def intent_target_request(root, request, host):
@@ -337,7 +340,15 @@ def select_target(root, request, session):
     mine = [i for i in found['items'] if i.get('mine')]
     selected = found.get('selected')
     if selected:
-        return dict(path=selected, selection='owned' if mine else 'sole'), None
+        item = next((i for i in found['items'] if i['path'] == selected), {})
+        info = dict(path=selected, selection=found.get('selection') or ('owned' if mine else 'sole'),
+                    **{k: item.get(k, '') for k in TIMES})
+        if ledger.age_notice(item):
+            info['age_notice'] = ledger.age_notice(item)
+        if found.get('alternatives'):
+            info['alternatives'] = [_candidate(i) for i in found['alternatives']]
+            info['alternatives_total'] = found.get('alternatives_total', len(found['alternatives']))
+        return info, None
     if len(mine) > 1:
         return dict(candidates=[_candidate(i) for i in mine]), ('ask', 'target_ambiguous', 'Several of this session\'s checkpoints are open; ask the user which one.')
     if found['total']:

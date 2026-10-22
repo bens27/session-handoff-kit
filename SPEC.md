@@ -834,7 +834,19 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    match this terminal; an untagged one must match the resolved session. A
    foreign readable name returns `ask`/`foreign_only` with candidates and no
    execution authority; the user must explicitly select its exact path or
-   kebab-case topic. Non-path text matching
+   kebab-case topic. Without a target, one open checkpoint owned by this
+   terminal is selected (`owned`). Several give `ask`/`target_ambiguous` by
+   default; with the `owned_selection` setting `"newest"` (string, from
+   `HANDOFF_OWNED_SELECTION` or `~/.context-watch/thresholds.json`; a project
+   `.context-watch.json` is ignored; any other value means `"ask"`) the newest
+   is selected as `newest_owned`, the next five are returned as `alternatives`
+   and `alternatives_total` counts all the others.
+   Every candidate, alternative and selected target carries `created` (save
+   time), `parked` (last write to the checkpoint file) and `last_resumed`
+   (newest resume of a checkpoint with the same topic, empty if never). A
+   selected target saved over 24h ago (frontmatter `created`, else the last
+   write) also carries `age_notice` (`parked N days (saved X)`), repeated in
+   the opening text; claim and release do not reset it. Non-path text matching
    no topic or description (such as `resume later`) gives `none`/`no_operation`.
    A bare readable choice can accompany an explicit `resume`/`retrieve`
    operation; bare choice text alone does not authorize resume, which still

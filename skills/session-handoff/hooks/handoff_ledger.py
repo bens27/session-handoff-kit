@@ -240,9 +240,31 @@ def _claimed_recently(fm, now):
         return False
 
 
+def age_notice(item, now=None):
+    """'parked N days (saved X)' when a checkpoint was saved over 24h ago, else ''.
+
+    Anchored on frontmatter `created`, which claim/release never rewrite; the
+    file's last write (`age_days`) is the fallback when `created` is missing
+    or unparseable.
+    """
+    created = item.get("created") or ""
+    try:
+        stamp = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        days = int(((now or time.time()) - stamp.timestamp()) // 86400)
+        saved = created[:19]
+    except (TypeError, ValueError):
+        days = int(item.get("age_days") or 0)
+        saved = (item.get("parked") or "?")[:19]
+    if days < 1:
+        return ""
+    return "parked %d day%s (saved %s)" % (days, "" if days == 1 else "s", saved)
+
+
 def scan(root, max_age_days=14, stats=None):
     """Return open handoffs under root as [{path, topic, ended, description,
-    skills, age_days}], newest (most recently ended) first, one per topic.
+    skills, created, parked, last_resumed, age_days}], newest (most recently
+    ended) first, one per topic. `parked` is the checkpoint file's last write;
+    `last_resumed` is the newest resume of any checkpoint with the same topic.
     If a dict is passed as stats it receives {"stale": n, "duplicates": n}:
     open handoffs hidden for age, and older open handoffs of a newer one's topic."""
     now = time.time()
@@ -251,6 +273,11 @@ def scan(root, max_age_days=14, stats=None):
     records = _records(root, errors)
     latest = {}
     duplicates = 0
+    last_resumed = {}  # topic -> newest `resumed` stamp of any checkpoint of that topic
+    for r in records:
+        stamp = r["fm"].get("resumed") or ""
+        if stamp > last_resumed.get(r["topic"], ""):
+            last_resumed[r["topic"]] = stamp
     for r in sorted(records, key=lambda r: (r["ended"], r["path"])):
         if r["legacy"] and not r["fm"] and "handoff" not in "\n".join(r["text"].splitlines()[:5]).lower():
             continue
@@ -279,6 +306,9 @@ def scan(root, max_age_days=14, stats=None):
                           skills=(fm.get("skills") or "")[:240], git=(fm.get("git") or "")[:240],
                           terminal=(fm.get("terminal") or "")[:120],
                           session_id=fm.get("session_id") or "",
+                          created=(fm.get("created") or r["ended"])[:64],
+                          parked=datetime.fromtimestamp(r["mtime"]).isoformat(timespec="seconds"),
+                          last_resumed=last_resumed.get(r["topic"], "")[:64],
                           age_days=round(age, 1), problems=r["problems"][:8]))
     found.sort(key=lambda h: (h["ended"], h["path"]), reverse=True)
     if stats is not None:
