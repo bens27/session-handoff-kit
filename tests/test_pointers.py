@@ -96,6 +96,7 @@ class PointerTests(unittest.TestCase):
     def test_prune_removes_old_unreadable_pointer_and_stops_diagnostics(self):
         ready = self.preflight()
         location = self.pointer_file(ready)
+        self.intent_file().unlink()
         location.write_text('{broken')
         os.utime(location, (1, 1))
         self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'invalid-pointer')
@@ -142,26 +143,47 @@ class PointerTests(unittest.TestCase):
     def test_prune_cleans_permission_denied_pointer_after_grace(self):
         ready = self.preflight()
         location = self.pointer_file(ready)
+        self.intent_file().unlink()
         os.utime(location, (1, 1))
         with patch.object(pointers, 'read_pointer', side_effect=PermissionError('unreadable')):
             pointers.prune(self.root, [])
         self.assertFalse(location.exists())
         self.assertEqual(pointers.scan(self.root), dict(candidates=[], diagnostics=[]))
 
+    def test_prune_preserves_old_unreadable_pointer_with_pending_intent(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        os.utime(location, (1, 1))
+        with patch.object(pointers, 'read_pointer', side_effect=OSError('transient I/O error')):
+            pointers.prune(self.root, [])
+        self.assertTrue(location.exists())
+        self.assertEqual(restart.status(self.root, 'restart-1')['state'], 'pending')
+
+    def test_prune_preserves_old_unknown_schema_pointer_with_existing_intent(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        data = json.loads(location.read_text())
+        data['version'] = pointers.VERSION + 1
+        location.write_text(json.dumps(data))
+        os.utime(location, (1, 1))
+        pointers.prune(self.root, [])
+        self.assertTrue(location.exists())
+
     def test_prune_preserves_foreign_owned_unreadable_entry(self):
         ready = self.preflight()
         location = self.pointer_file(ready)
+        self.intent_file().unlink()
         location.write_text('{broken')
         os.utime(location, (1, 1))
-        real_lstat = Path.lstat
-        def foreign_lstat(path):
-            info = real_lstat(path)
-            if path == location:
+        real_lstat = os.lstat
+        def foreign_lstat(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if path == location.name and 'dir_fd' in kwargs:
                 fields = list(info)
                 fields[4] = os.getuid() + 1
                 return os.stat_result(fields)
             return info
-        with patch.object(Path, 'lstat', foreign_lstat):
+        with patch.object(pointers.os, 'lstat', foreign_lstat):
             pointers.prune(self.root, [])
         self.assertTrue(location.exists())
 

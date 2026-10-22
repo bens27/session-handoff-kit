@@ -298,12 +298,22 @@ def prune(root, request_ids, *, now=None, grace_seconds=24 * 60 * 60):
     Call with the intent registry lock held, as for ``intents.prune_settled``.
     ``grace_seconds`` configures the 24-hour default repair window; age uses lstat
     mtime, never untrusted pointer content. Existing (even invalid) intents stay.
-    Unsafe directories and foreign-owned entries are never cleaned up.
+    Unsafe directories and foreign-owned entries are never cleaned up. Unreadable
+    pointers whose filename digest belongs to an intent on disk are preserved.
     """
     if (type(grace_seconds) not in (int, float) or not 0 <= grace_seconds < float('inf')):
         raise ValueError('invalid-pointer-grace')
     now = time.time() if now is None else now
     try:
+        protected = set()
+        for location in intents.entries(root):
+            record = protocol.load_state_json(location)
+            if not isinstance(record, dict):
+                return  # Unknown intent state cannot justify deleting its index.
+            digest = record.get('binding_sha256')
+            if digest is not None and not isinstance(digest, str):
+                return
+            protected.add(digest)
         with _check_dirs(root) as directory_fd:
             for name in os.listdir(directory_fd):
                 if not name.endswith('.json'):
@@ -316,7 +326,7 @@ def prune(root, request_ids, *, now=None, grace_seconds=24 * 60 * 60):
                     try:
                         data = read_pointer(name, dir_fd=directory_fd)
                     except (OSError, ValueError, UnicodeDecodeError):
-                        if not stale:
+                        if not stale or name[:-len('.json')] in protected:
                             continue
                     else:
                         if data['root'] != os.path.realpath(root):
