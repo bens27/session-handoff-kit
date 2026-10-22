@@ -38,7 +38,7 @@ class ResumeCliTests(unittest.TestCase):
 
     def save(self, topic='work', terminal=None, session='old', **extra):
         doc = dict(topic=topic, description='About ' + topic, body=BODY, **extra)
-        code, out = self.run_cli('save', '--session', session, '--request-id', 'r-' + topic,
+        code, out = self.run_cli('save', '.', '--session', session, '--request-id', 'r-' + topic,
                                  input=json.dumps(doc), terminal=terminal)
         self.assertEqual(code, 0, out)
         return out['path']
@@ -47,7 +47,7 @@ class ResumeCliTests(unittest.TestCase):
         for n, heading in enumerate(('## Next steps (ordered)', '## Next steps ', '## Next steps')):
             topic = 'relaxed-%d' % n
             body = BODY.replace('## Next steps', heading, 1).replace('Run the parser checks.', '1. FIRST\n2. second')
-            code, saved = self.run_cli('save', '--session', 'old', '--request-id', 'r-' + topic,
+            code, saved = self.run_cli('save', '.', '--session', 'old', '--request-id', 'r-' + topic,
                                        input=json.dumps(dict(topic=topic, description='d', body=body)))
             self.assertEqual(code, 0, saved)
             _, out = self.run_cli('resume', saved['path'], '--session', 'new-%d' % n)
@@ -125,10 +125,10 @@ class ResumeCliTests(unittest.TestCase):
     def test_save_defaults_session_from_env_and_request_id_from_content(self):
         self.env['HANDOFF_SESSION_ID'] = 'env-session'
         doc = json.dumps(dict(topic='work', description='d', body=BODY))
-        code, first = self.run_cli('save', input=doc)
+        code, first = self.run_cli('save', '.', input=doc)
         self.assertEqual((code, first['outcome']), (0, 'saved'), first)
         self.assertIn('session_id: env-session\n', Path(first['path']).read_text())
-        _, retry = self.run_cli('save', input=doc)
+        _, retry = self.run_cli('save', '.', input=doc)
         self.assertEqual((retry['outcome'], retry['path']), ('saved', first['path']))
 
     def test_prepare_defaults_session_from_terminal_pointer(self):
@@ -199,7 +199,7 @@ class ResumeCliTests(unittest.TestCase):
 
     def test_oversized_resume_output_is_delivered_and_acknowledged(self):
         big = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\n' + 'x' * 19000 + '\n'
-        code, out = self.run_cli('save', '--session', 'old', '--request-id', 'r-big',
+        code, out = self.run_cli('save', '.', '--session', 'old', '--request-id', 'r-big',
                                  input=json.dumps(dict(topic='big', description='Big', body=big)))
         self.assertEqual(code, 0, out)
         path = out['path']
@@ -226,7 +226,7 @@ class ResumeCliTests(unittest.TestCase):
             draft = dict(topic=name.replace('_', '-'), description=name, body=body)
             if refs:
                 draft['references'] = refs
-            code, saved = self.run_cli('save', '--session', 'old-' + name, '--request-id', 'r-' + name,
+            code, saved = self.run_cli('save', '.', '--session', 'old-' + name, '--request-id', 'r-' + name,
                                        input=json.dumps(draft))
             self.assertEqual(code, 0, saved)
             p = subprocess.run([sys.executable, str(LEDGER), 'resume', saved['path'], '--session', 'new-' + name,
@@ -273,11 +273,11 @@ class ResumeCliTests(unittest.TestCase):
         (probe / '.handoffs').mkdir(parents=True)
         real = self.root
         self.root = probe
-        self.run_cli('save', '--session', 'old', '--request-id', 'r', input=doc)
+        self.run_cli('save', '.', '--session', 'old', '--request-id', 'r', input=doc)
         _, full = self.run_cli('resume', '--session', 'new', '--budget-bytes', '60000')
         self.root = real
         inner = len(json.dumps({k: v for k, v in full.items() if k != 'project'}, ensure_ascii=False).encode())
-        self.run_cli('save', '--session', 'old', '--request-id', 'r', input=doc)
+        self.run_cli('save', '.', '--session', 'old', '--request-id', 'r', input=doc)
         code, out = self.run_cli('resume', '--session', 'new', '--budget-bytes', str(inner + 10))
         self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
         self.assertEqual(self.run_cli('lookup')[1]['outcome'], 'none', 'acknowledged work must have been delivered')
@@ -287,7 +287,7 @@ class ResumeCliTests(unittest.TestCase):
         code, out = self.run_cli('resume', '--session', 'b')
         self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
         doc = dict(topic='work', description='Again', body=BODY)
-        code, out = self.run_cli('save', '--session', 'a', '--request-id', 'r-again', input=json.dumps(doc))
+        code, out = self.run_cli('save', '.', '--session', 'a', '--request-id', 'r-again', input=json.dumps(doc))
         self.assertEqual((code, out['outcome']), (1, 'conflict'), out)
         _, out = self.run_cli('lookup')
         self.assertEqual(out['outcome'], 'none', out)
@@ -297,7 +297,7 @@ class ResumeCliTests(unittest.TestCase):
         path = self.save('work', session='a')
         self.run_cli('resume', '--session', 'b')
         doc = dict(topic='work', description='Next', body=BODY, predecessor=path)
-        code, out = self.run_cli('save', '--session', 'b', '--request-id', 'r-next', input=json.dumps(doc))
+        code, out = self.run_cli('save', '.', '--session', 'b', '--request-id', 'r-next', input=json.dumps(doc))
         self.assertEqual((code, out['outcome']), (0, 'saved'), out)
         _, out = self.run_cli('history', '--topic', 'work')
         statuses = {Path(i['path']).name: i.get('status') for i in out['items']}
@@ -334,7 +334,7 @@ class ResumeCliTests(unittest.TestCase):
         self.assertGreater(len(big), 65000)
         for fields in ((), ('--fields', 'path,body')):
             topic = 'big%d' % len(fields)
-            code, out = self.run_cli('save', '--session', 'old', '--request-id', 'r-' + topic,
+            code, out = self.run_cli('save', '.', '--session', 'old', '--request-id', 'r-' + topic,
                                      input=json.dumps(dict(topic=topic, description='Big', body=big)))
             self.assertEqual(code, 0, out)
             p = subprocess.run([sys.executable, str(LEDGER), 'resume', out['path'], '--session', 'new-' + topic, *fields],

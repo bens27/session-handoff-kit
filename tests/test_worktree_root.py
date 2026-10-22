@@ -47,7 +47,7 @@ class WorktreeRootTests(unittest.TestCase):
             draft = {'topic': 'worktree-save', 'description': 'Stay in the caller worktree.',
                      'body': '## Objective\nKeep work isolated.\n## Current state\nWorker only.\n## Next steps\nReport the checkpoint path.\n',
                      'references': []}
-            saved = subprocess.run([sys.executable, '-B', '-S', str(LEDGER), 'save',
+            saved = subprocess.run([sys.executable, '-B', '-S', str(LEDGER), 'save', '.',
                                     '--session', 'fixture-worker', '--request-id', 'worktree-save'],
                                    cwd=nested, env=env, input=json.dumps(draft), text=True,
                                    capture_output=True, timeout=20)
@@ -72,7 +72,7 @@ class WorktreeRootTests(unittest.TestCase):
             fallback.mkdir(parents=True)
             (fallback / 'legacy.md').write_text(
                 '---\ntopic: existing-app\nstatus: open\nproject: ' + str(app) + '\n---\n' + draft['body'])
-            app_save = subprocess.run([sys.executable, '-B', '-S', str(LEDGER), 'save',
+            app_save = subprocess.run([sys.executable, '-B', '-S', str(LEDGER), 'save', '.',
                                        '--session', 'fixture-app', '--request-id', 'app-save'],
                                       cwd=child, env=env, text=True, capture_output=True, timeout=20,
                                       input=json.dumps(dict(draft, topic='app-save')))
@@ -87,7 +87,7 @@ class WorktreeRootTests(unittest.TestCase):
             offline_child.mkdir()
             no_git = base / 'no-git-bin'
             no_git.mkdir()
-            offline_save = subprocess.run([sys.executable, '-B', '-S', str(LEDGER), 'save',
+            offline_save = subprocess.run([sys.executable, '-B', '-S', str(LEDGER), 'save', '.',
                                            '--session', 'fixture-offline', '--request-id', 'offline-save'],
                                           cwd=offline_child, env=dict(env, PATH=str(no_git)),
                                           input=json.dumps(dict(draft, topic='offline-save')),

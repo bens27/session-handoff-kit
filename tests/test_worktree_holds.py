@@ -32,7 +32,7 @@ class WorktreeHoldTests(unittest.TestCase):
         self.worker = self.main / '.worktrees/worker'
         subprocess.run(['git', '-C', str(self.main), 'worktree', 'add', '--detach', str(self.worker)],
                        env=self.env, check=True, capture_output=True)
-        _, self.saved = self.cli('handoff_ledger.py', 'save', '--session', 'fixture-old',
+        _, self.saved = self.cli('handoff_ledger.py', 'save', '.', '--session', 'fixture-old',
                                  '--request-id', 'worker-save',
                                  input=json.dumps({'topic': 'held-work', 'description': 'Worker fixture', 'body': BODY}))
         self.assertEqual(self.saved['outcome'], 'saved')
@@ -143,7 +143,7 @@ class WorktreeHoldTests(unittest.TestCase):
                         'submodule', 'add', '-q', str(source), 'mods/sub'], env=self.env,
                        check=True, capture_output=True)
         self.worker = self.main
-        _, saved = self.cli('handoff_ledger.py', 'save', '--session', 'fixture-old',
+        _, saved = self.cli('handoff_ledger.py', 'save', '.', '--session', 'fixture-old',
                             '--request-id', 'main-save', input=json.dumps({
                                 'topic': 'held-main', 'description': 'Main fixture', 'body': BODY}))
         self.assertEqual(saved['outcome'], 'saved', saved)
@@ -170,7 +170,7 @@ class WorktreeHoldTests(unittest.TestCase):
 
     def test_non_utf8_git_marker_preserves_save_and_blocks_retrieval_safely(self):
         (self.worker / '.git').write_bytes(b'gitdir: \xff\xfe/x\n')
-        _, saved = self.cli('handoff_ledger.py', 'save', '--session', 'fixture-old',
+        _, saved = self.cli('handoff_ledger.py', 'save', '.', '--session', 'fixture-old',
                             '--request-id', 'malformed-marker-save', input=json.dumps({
                                 'topic': 'safe-save', 'description': 'Keep save local', 'body': BODY}))
         self.assertEqual(saved['outcome'], 'saved', saved)

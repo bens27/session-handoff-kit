@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -18,16 +19,19 @@ BODY = '## Objective\nFinish work.\n## Current state\nReady.\n## Next steps\nRun
 
 class PortskillDefectTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name).resolve()
+        # The subprocesses' temp base is a sibling of the project, so the project is not under it.
+        self.tmpdir = self.base / 'tmp'
+        self.tmpdir.mkdir()
         self.root = self.base / 'project'
         self.root.mkdir()
-        self.scratch = self.base / 'scratch'
+        self.scratch = self.tmpdir / 'scratch'
         self.scratch.mkdir()
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(('CODEX_THREAD_ID', 'HANDOFF_', 'CONTEXT_WATCH_', 'AUTORESUME', 'AGENTSROOM_'))}
-        self.env.update(HOME=str(self.base), TMPDIR=str(self.base), AGENTSROOM_AGENT_ID='terminal-a',
+        self.env.update(HOME=str(self.base), TMPDIR=str(self.tmpdir), AGENTSROOM_AGENT_ID='terminal-a',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', CONTEXT_WATCH_THINKING='0')
 
     def hook(self, tokens, session='s1', event='PostToolUse', cwd=None):
@@ -68,19 +72,58 @@ class PortskillDefectTests(unittest.TestCase):
         self.assertEqual((code, out['outcome']), (0, 'saved'), out)
         self.assertEqual(os.path.realpath(out['project']), str(self.root))
         self.assertFalse(list(self.scratch.rglob('*.md')), 'nothing may be filed under the scratch cwd')
+        self.assertTrue(any(str(self.root) in w for w in out.get('warnings', [])), out)
+
+    def assert_refused(self, cwd, session='unknown'):
+        code, out = self.save_cli(dict(topic='work', description='d', body=BODY), cwd, session)
+        self.assertEqual((code, out['outcome']), (1, 'invalid'), out)
+        self.assertIn('save <root>', out['action'])
+        self.assertFalse(list(self.tmpdir.rglob('*.md')), 'nothing may be filed under the temp base')
 
     def test_save_from_a_temp_base_without_record_is_refused(self):
-        code, out = self.save_cli(dict(topic='work', description='d', body=BODY), self.base, session='unknown')
-        # The temp base itself is never a project: refuse with an actionable message.
-        self.assertEqual(out['outcome'], 'invalid', out)
-        self.assertIn('project', out['action'])
+        self.assert_refused(self.tmpdir)
 
-    def test_temp_base_that_is_already_a_project_still_saves(self):
-        # A temp dir holding .handoffs/ was made a project on purpose (isolated test roots, TMPDIR=root).
-        (self.base / '.handoffs').mkdir()
-        code, out = self.save_cli(dict(topic='work', description='d', body=BODY), self.base, session='unknown')
+    def test_leftover_handoffs_in_a_temp_base_does_not_lift_the_refusal(self):
+        # One stray save (or another local user) can create <tmp>/.handoffs; that is no consent.
+        (self.tmpdir / '.handoffs').mkdir()
+        self.assert_refused(self.tmpdir)
+
+    def test_explicit_root_in_a_temp_base_is_honoured(self):
+        code, out = self.save_cli(dict(topic='work', description='d', body=BODY), self.tmpdir, 'unknown', '.')
         self.assertEqual((code, out['outcome']), (0, 'saved'), out)
-        self.assertEqual(os.path.realpath(out['project']), str(self.base))
+        self.assertEqual(os.path.realpath(out['project']), str(self.tmpdir))
+
+    def test_scratch_dir_inside_a_temp_base_without_record_is_refused(self):
+        self.assert_refused(self.scratch)
+
+    def plant_pointer(self, session, project, mode=0o600, link=False):
+        with patch.object(tempfile, 'tempdir', str(self.tmpdir)):
+            pointer = Path(protocol.ledger.project_pointer_path(session))
+        target = self.base / 'planted.json' if link else pointer
+        target.write_text(json.dumps(dict(session_id=session, project=str(project), ts=time.time())))
+        os.chmod(target, mode)
+        if link:
+            os.symlink(target, pointer)
+
+    def test_symlinked_pointer_is_ignored(self):
+        self.plant_pointer('sP', self.root, link=True)
+        self.assert_refused(self.scratch, 'sP')
+
+    def test_group_or_other_accessible_pointer_is_ignored(self):
+        self.plant_pointer('sP', self.root, mode=0o644)
+        self.assert_refused(self.scratch, 'sP')
+
+    def test_pointer_naming_a_project_under_a_temp_base_is_ignored(self):
+        elsewhere = self.tmpdir / 'elsewhere'
+        elsewhere.mkdir()
+        self.plant_pointer('sP', elsewhere)
+        self.assert_refused(self.scratch, 'sP')
+
+    def test_private_pointer_naming_a_user_project_redirects(self):
+        self.plant_pointer('sP', self.root)
+        code, out = self.save_cli(dict(topic='work', description='d', body=BODY), self.scratch, 'sP')
+        self.assertEqual((code, out['outcome']), (0, 'saved'), out)
+        self.assertEqual(os.path.realpath(out['project']), str(self.root))
 
     # 3. worker inventory
     def preflight_with(self, workers):
@@ -99,9 +142,25 @@ class PortskillDefectTests(unittest.TestCase):
         out = self.preflight_with([dict(id='mailbox-brief', settled=True, report=None)])
         self.assertEqual((out['outcome'], out['dispatch']), ('ready', True), out)
 
+    def test_settled_worker_with_malformed_report_still_blocks(self):
+        out = self.preflight_with([dict(id='mailbox-brief', settled=True, report=[])])
+        self.assertEqual((out['outcome'], out.get('reason')), ('blocked', 'worker-report-not-durable'), out)
+
     def test_unsettled_worker_without_report_still_blocks(self):
         out = self.preflight_with([dict(id='mailbox-brief')])
         self.assertEqual(out['outcome'], 'blocked', out)
+
+    def test_in_flight_mailbox_delegation_is_dispatchable(self):
+        # Its reply is persisted in the AgentsRoom inbox and reaches the restarted agent.
+        out = self.preflight_with([dict(id='lane-brief', state='in_flight', via='mailbox')])
+        self.assertEqual((out['outcome'], out['dispatch']), ('ready', True), out)
+        intent = restart.status(str(self.root), 'restart-w')
+        self.assertEqual(intent['workers'], [dict(id='lane-brief', state='in_flight', via='mailbox')])
+
+    def test_in_flight_worker_without_durable_channel_blocks(self):
+        # A native subagent's report reaches only the spawning session; a restart would lose it.
+        out = self.preflight_with([dict(id='subagent', state='in_flight')])
+        self.assertEqual((out['outcome'], out['reason']), ('blocked', 'worker-in-flight'), out)
 
     def test_omitted_inventory_blocks_and_transition_text_says_so(self):
         self.assertEqual(self.preflight_with(None)['reason'], 'worker-inventory-unknown')
@@ -110,6 +169,7 @@ class PortskillDefectTests(unittest.TestCase):
         self.assertNotIn('Omit --workers', action)
         self.assertIn("--workers '[]'", action)
         self.assertIn('worker-inventory-unknown', action)
+        self.assertIn('"state": "in_flight", "via": "mailbox"', action)
 
     # 4. one hooks root per message
     def test_transition_names_the_installed_hooks_path_not_the_symlink_target(self):

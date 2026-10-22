@@ -45,7 +45,7 @@ class Base(unittest.TestCase):
         return p.returncode, json.loads(p.stdout)
 
     def save(self, doc, session, request, terminal):
-        return self.run_cli('save', '--session', session, '--request-id', request,
+        return self.run_cli('save', '.', '--session', session, '--request-id', request,
                             input=json.dumps(doc), terminal=terminal)
 
     def session_start(self, session, terminal):

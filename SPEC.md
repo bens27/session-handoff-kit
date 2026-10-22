@@ -450,7 +450,9 @@ stored under the intent lock only with a new ready intent. A rerun after a host
 refusal returns `refused` (a retry needs a new save). Inventory shapes: `[]` is a
 known empty inventory; an entry is `{id, report: {path, sha256}}` or, for a worker
 that finished without a report file, `{id, settled: true, report: null}`; an entry
-with no report and no `settled: true` blocks (`worker-report-not-durable`); an
+may also be `{id, state: "in_flight", via: "mailbox"}` when its reply is persisted
+in the AgentsRoom inbox for the successor. Other workers without a report or
+`settled: true` block (`worker-report-not-durable`); an
 omitted `--workers` is unknown and blocks (`worker-inventory-unknown`).
 New ready intents return `restart_prompt`: one sentence naming one successor
 command, `restart_preflight.py adopt h-<24 hex>`. The handle is a prefix of the
@@ -663,12 +665,14 @@ use the same opening-action policy.
 Topics: `save` slugifies a non-kebab-case topic (lowercase, non-alphanumerics to
 single hyphens, 80 characters) and reports the slug in `warnings`; a topic with no
 usable characters is `invalid`, and the pressure contract text states the kebab-case
-rule. Save root: when no `--root` or predecessor names the project and the current
+rule. Save root: when no explicit root argument or predecessor names the project and the current
 directory lies inside a temp base, the project recorded for the session by the hooks
 (a root-independent pointer in the temp directory, keyed by session id) is used
-instead; a root that would be a temp base itself is refused with an action unless it
-already holds `.handoffs/` or `.git` (an intentional project, such as an isolated test
-root). Emitted
+instead. The pointer must be a private, user-owned regular file naming a
+user-owned project directory outside temporary bases. Without a valid pointer,
+a temp-base root or scratch directory inside one is refused, even if it holds
+`.handoffs/` or `.git`; pass an explicit root (`save <root>`, including `save .`)
+to intentionally save there. Redirects appear in JSON `warnings`. Emitted
 commands name one hooks directory: the installed `~/.agents/skills/session-handoff/hooks`
 when it resolves to these hooks, else their real path.
 

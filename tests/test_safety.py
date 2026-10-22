@@ -35,7 +35,7 @@ class SafetyReview(unittest.TestCase):
         doc=dict(topic='work',description='A concrete task.',
                  body='## Objective\nRepair parser.\n## Current state\nOne test fails.\n## Next steps\nFix that test.\n')
         doc.update(fields)
-        return self.cli('save','--session',session,'--request-id',request,document=doc)
+        return self.cli('save','.','--session',session,'--request-id',request,document=doc)
 
     def hook(self,prompt):
         event=dict(hook_event_name='UserPromptSubmit',session_id='reader',cwd=str(self.root),prompt=prompt)
@@ -67,7 +67,7 @@ class SafetyReview(unittest.TestCase):
         doc=dict(topic='work',body='## Objective\nFix parser.\n## Current state\nReady.\n## Next steps\nRun checks.\n')
         children=[]
         for session in ('writer-a','writer-b'):
-            child=subprocess.Popen([sys.executable,str(LEDGER),'save','--session',session,'--request-id','fixture'],
+            child=subprocess.Popen([sys.executable,str(LEDGER),'save','.','--session',session,'--request-id','fixture'],
                                    cwd=self.root,env=self.env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             child.stdin.write(json.dumps(doc))
             child.stdin.close()
@@ -120,7 +120,7 @@ class SafetyReview(unittest.TestCase):
         child.write_text("""import json,os,subprocess,sys
 with open('calls.txt','a') as f:f.write('called\\n')
 doc={'topic':'work-'+os.environ['HANDOFF_RUN_ID'],'body':'## Objective\\nFix parser.\\n## Current state\\nAttempt failed.\\n## Next steps\\nNeeds inspection.\\n'}
-subprocess.run([sys.executable,os.environ['AUDIT_LEDGER'],'save','--session',os.environ['HANDOFF_RUN_ID'],'--request-id','fixture'],input=json.dumps(doc),text=True,capture_output=True,check=True)
+subprocess.run([sys.executable,os.environ['AUDIT_LEDGER'],'save','.','--session',os.environ['HANDOFF_RUN_ID'],'--request-id','fixture'],input=json.dumps(doc),text=True,capture_output=True,check=True)
 sys.exit(1)
 """)
         env={**self.env,'AUDIT_LEDGER':str(LEDGER)}
@@ -135,7 +135,7 @@ sys.exit(1)
         child.write_text("""import json,os,subprocess,sys
 run=os.environ['HANDOFF_RUN_ID']
 doc={'topic':'run-'+run,'body':'## Objective\\nFix parser.\\n## Current state\\nCheckpointed.\\n## Next steps\\nContinue work.\\n'}
-subprocess.run([sys.executable,os.environ['AUDIT_LEDGER'],'save','--session',run,'--request-id','fixture'],input=json.dumps(doc),text=True,capture_output=True,check=True)
+subprocess.run([sys.executable,os.environ['AUDIT_LEDGER'],'save','.','--session',run,'--request-id','fixture'],input=json.dumps(doc),text=True,capture_output=True,check=True)
 """)
         p=subprocess.run([sys.executable,str(WATCHER),'auto','--max','1','--',sys.executable,str(child)],
                          cwd=self.root,env={**self.env,'AUDIT_LEDGER':str(LEDGER)},capture_output=True,text=True,timeout=10)

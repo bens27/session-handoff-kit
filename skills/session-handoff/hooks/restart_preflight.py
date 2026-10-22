@@ -207,12 +207,7 @@ def status(root, request_id):
     if valid:
         workers = record['workers']
         valid = all(isinstance(w, dict) and isinstance(w.get('id'), str)
-                    and bool(w['id'].strip()) and isinstance(w.get('report'), dict)
-                    and isinstance(w['report'].get('path'), str)
-                    and bool(w['report']['path'])
-                    and isinstance(w['report'].get('sha256'), str)
-                    and len(w['report']['sha256']) == 64
-                    and all(c in '0123456789abcdef' for c in w['report']['sha256'])
+                    and bool(w['id'].strip()) and _worker_record_valid(w)
                     for w in workers)
         if valid:
             valid = len({w['id'] for w in workers}) == len(workers)
@@ -313,12 +308,30 @@ def hook_drift_policy(root):
     return 'block' if 'block' in policies else 'warn'
 
 
+def _worker_record_valid(worker):
+    """A persisted worker is a durable report, a settled worker without one, or a
+    mailbox delegation still in flight (its reply reaches the restarted agent)."""
+    report = worker.get('report')
+    if isinstance(report, dict) and report:
+        return (isinstance(report.get('path'), str) and bool(report['path'])
+                and isinstance(report.get('sha256'), str) and len(report['sha256']) == 64
+                and all(c in '0123456789abcdef' for c in report['sha256']))
+    if report not in (None, {}):
+        return False
+    return worker.get('settled') is True or _in_flight_mailbox(worker)
+
+
+def _in_flight_mailbox(worker):
+    return worker.get('state') == 'in_flight' and worker.get('via') == 'mailbox'
+
+
 def preflight(root, path, session, terminal, request_id, workers=None,
               host_capable=False, hold=False, observations=None):
     """Persist intent before returning dispatch=True exactly once per request.
 
     workers=None means inventory unknown. Each worker needs a durable report
-    {path, sha256}; an active worker without one blocks. Host mailbox adapters
+    {path, sha256}, or settled: true with no report, or {state: in_flight, via:
+    mailbox}; any other active worker without a report blocks. Host mailbox adapters
     must materialize retrieved reports locally before calling. A duplicate intent
     is uncertain after a crash: reconcile with the host, never blindly dispatch.
     """
@@ -438,14 +451,20 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                     or not worker['id'].strip() or worker['id'] in seen):
                 return blocked('worker-inventory-invalid')
             seen.add(worker['id'])
-            report = worker.get('report') or {}
+            report = worker.get('report')
+            if report is None:
+                report = {}
             if not isinstance(report, dict):
                 return blocked('worker-report-not-durable')
             if not report:
-                # No report file: acceptable only when the worker declares itself settled.
-                if worker.get('settled') is not True:
-                    return blocked('worker-report-not-durable')
-                continue
+                # No report file: a settled worker, or a mailbox delegation whose reply
+                # lands in the AgentsRoom inbox the restarted agent reads. Any other
+                # in-flight worker (a native subagent) would lose its report.
+                if _in_flight_mailbox(worker) or worker.get('settled') is True:
+                    continue
+                if worker.get('state') == 'in_flight':
+                    return blocked('worker-in-flight')
+                return blocked('worker-report-not-durable')
             if report and (not isinstance(report.get('path'), str)
                            or not isinstance(report.get('sha256'), str)):
                 return blocked('worker-report-not-durable')

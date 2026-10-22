@@ -59,7 +59,7 @@ class Case(unittest.TestCase):
         return self.run_hook("PostToolUse", extra, hook)
 
     def save_handoff(self):
-        p = subprocess.run([sys.executable, os.path.join(HOOKS, "handoff_ledger.py"), "save",
+        p = subprocess.run([sys.executable, os.path.join(HOOKS, "handoff_ledger.py"), "save", ".",
                             "--session", "old", "--request-id", "c1"],
                            input=json.dumps({"topic": "work", "description": "Fix it.", "body": BODY}),
                            env=self.env({"AGENTSROOM_AGENT_ID": "agent-path"}), cwd=self.project, capture_output=True, text=True, timeout=30)

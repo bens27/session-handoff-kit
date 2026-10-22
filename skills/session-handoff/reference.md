@@ -410,7 +410,10 @@ checkpoints). It reads hook/host identity, derives the request ID below, adds
 durable holds, stores the observations and runs preflight in one call. Pass
 `--workers '[]'` when the inventory is known and nothing is outstanding; a worker
 that finished with no report file is `{"id": "...", "settled": true, "report": null}`
-(without `settled: true` a worker lacking a report blocks as `worker-report-not-durable`).
+or an in-flight mailbox delegation is
+`{"id": "...", "state": "in_flight", "via": "mailbox"}` when its reply persists
+in the AgentsRoom inbox for the successor. Other workers lacking a report and
+`settled: true` block as `worker-report-not-durable`.
 Omitting `--workers` means the inventory is unknown and blocks with
 `worker-inventory-unknown`. The lower-level
 `preflight --input <observations.json>` remains for callers that build the

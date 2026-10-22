@@ -463,6 +463,12 @@ python3 skills/session-handoff/hooks/handoff_ledger.py save --template
 python3 skills/session-handoff/hooks/handoff_ledger.py save --input draft.json
 ```
 
+Save from the project directory, or pass the project explicitly as `save <root>`.
+From a temporary base or scratch directory inside one, save uses a valid private
+project pointer recorded by the session hooks. Without one, it refuses unless
+the root was explicit (`save .` also counts). Existing `.handoffs/` or `.git`
+directories do not lift this refusal. Redirects appear in JSON `warnings`.
+
 The hook's per-terminal pointer takes precedence over explicit `--session` and
 `$HANDOFF_SESSION_ID`; without it, explicit `--session` takes precedence over the
 environment. `save --request-id` defaults to a hash of the draft. `lookup` marks
@@ -571,7 +577,9 @@ native cycle in one command with compact output:
   intent lock (blocked attempts and reruns never overwrite them). It returns
   `{outcome, dispatch, request_id, path, call, agent, restart_prompt}`.
   `--workers '[]'` means known, nothing outstanding; a settled worker without a
-  report file is `{id, settled: true, report: null}`. Omitting `--workers` means
+  report file is `{id, settled: true, report: null}`. An in-flight mailbox
+  delegation is `{id, state: "in_flight", via: "mailbox"}`: its reply must persist
+  in the AgentsRoom inbox for the successor. Omitting `--workers` means
   unknown inventory and blocks (`worker-inventory-unknown`). The request ID is
   deterministic, so a rerun after a host refusal returns `refused`: a retry
   needs a new save once the cause is resolved.
@@ -622,8 +630,9 @@ capability, complete worker inventory and intentional hold state, including
 `waiting_input`. Unknown or malformed inventory or absent host capability blocks. Inventory is
 a list of objects with unique nonempty `id` strings. Each worker
 entry requires `report: {path, sha256}` for a durable local result; a mailbox
-adapter first retrieves and materializes the report. A worker's assertion that
-it finished is insufficient. Local report hashes prove bytes, not correctness
+adapter first retrieves and materializes the report. A settled worker may use
+`{id, settled: true, report: null}`; an in-flight mailbox delegation may use
+`{id, state: "in_flight", via: "mailbox"}` when its reply persists for the successor. Local report hashes prove bytes, not correctness
 or that a running worker cannot produce further results.
 
 **Project pointer index (v3-2).** Before persisting a new intent, preflight

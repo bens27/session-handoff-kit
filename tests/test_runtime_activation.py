@@ -91,7 +91,7 @@ class RuntimeActivation(unittest.TestCase):
         env.update(TMPDIR=str(self.base), CONTEXT_WATCH_ORIGIN="test", CONTEXT_WATCH_JEV="0")
         ledger = Path(release["snapshot"]) / "hooks/handoff_ledger.py"
         body = "## Objective\nKeep the summary.\n## Current state\nReview pending.\n## Next steps\nRequest independent review.\n"
-        saved = subprocess.run([sys.executable, "-B", str(ledger), "save", "--session", "sender",
+        saved = subprocess.run([sys.executable, "-B", str(ledger), "save", ".", "--session", "sender",
                                 "--request-id", "summary"], cwd=project, env=env, text=True,
                                input=json.dumps({"topic": "summary", "description": "Review pending", "body": body}),
                                capture_output=True, timeout=30)

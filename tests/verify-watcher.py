@@ -817,7 +817,7 @@ def main():
                 'with open("homes.txt","a") as log: log.write(os.path.expanduser("~")+"\\n")\n' +
                 'if n < 3:\n' +
                 ' doc={"topic":"run"+str(n),"body":"## Objective\\nContinue\\n## Current state\\nReady\\n## Next steps\\nTest\\n"}\n' +
-                ' subprocess.run(' + repr([PY, ledger, 'save', '--session', 'runner', '--request-id']) +
+                ' subprocess.run(' + repr([PY, ledger, 'save', '.', '--session', 'runner', '--request-id']) +
                 '+[str(n)],input=json.dumps(doc),text=True,check=True,capture_output=True)\n')
     os.chmod(fake, 0o755)
     p_run = subprocess.run([PY, PLUGIN, "auto", "--prompt", "build it", "--", fake],

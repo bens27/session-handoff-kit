@@ -16,12 +16,13 @@ CLEARED = ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HAN
 
 class SaveCliTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
+        (Path(self.tmp.name) / 'tmp').mkdir()
         self.root = Path(self.tmp.name) / 'project'
         (self.root / '.handoffs').mkdir(parents=True)
         self.env = {k: v for k, v in os.environ.items() if k not in CLEARED}
-        self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test',
+        self.env.update(HOME=self.tmp.name, TMPDIR=str(Path(self.tmp.name) / "tmp"), CONTEXT_WATCH_ORIGIN='test',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
 
     def run_cli(self, *args, input=None, cwd=None, **env):

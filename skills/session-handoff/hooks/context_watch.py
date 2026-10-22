@@ -250,14 +250,33 @@ def write_session_note(cwd, evt, fired, context=None):
             json.dump(note, f)
         os.replace(tmp, path)
         write_terminal_pointer(cwd, sid)
-        pointer = _ledger().project_pointer_path(sid)
-        ptmp = "%s.%d" % (pointer, os.getpid())
-        with open_private(ptmp, temp=True) as f:
-            json.dump({"session_id": sid, "project": os.path.realpath(_ledger().project_root(cwd)),
-                       "ts": time.time()}, f)
-        os.replace(ptmp, pointer)
+        write_project_pointer(cwd, sid)
     except Exception:
         pass
+
+
+def write_project_pointer(cwd, sid):
+    """Record this session's project for saves run from a temp cwd. A temp project is
+    never recorded (save ignores one), and an unchanged pointer under an hour old is
+    left alone instead of being rewritten on every event."""
+    ledger = _ledger()
+    project = os.path.realpath(ledger.project_root(cwd))
+    if ledger.under_temp_base(project) or ledger.read_project_pointer(sid, max_age_s=3600) == project:
+        return
+    pointer = ledger.project_pointer_path(sid)
+    ptmp = "%s.%d" % (pointer, os.getpid())
+    try:
+        with open_private(ptmp, temp=True) as f:
+            json.dump({"session_id": sid, "project": project, "ts": time.time()}, f)
+        os.replace(ptmp, pointer)
+    except OSError as exc:
+        # A foreign file in a sticky temp dir cannot be replaced (EPERM); save then
+        # refuses rather than trusting it, but say why the record is missing.
+        print("context-watch: cannot record the session project pointer %s: %s" % (pointer, exc), file=sys.stderr)
+        try:
+            os.unlink(ptmp)
+        except OSError:
+            pass
 
 
 def terminal_pointer_path(cwd, terminal):

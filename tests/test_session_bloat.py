@@ -66,7 +66,7 @@ with patch('time.time', return_value=stamp):
         return p.stdout
 
     def save(self, session='s1', topic='work', body=BODY, **extra):
-        return self.cli('save', doc=dict(topic=topic, description='Continue work', body=body, **extra), session=session)
+        return self.cli('save', '.', doc=dict(topic=topic, description='Continue work', body=body, **extra), session=session)
 
     def test_quick_pressure_after_resume_saves_but_pauses_restart(self):
         self.hook(140000)
@@ -268,7 +268,7 @@ with patch('time.time', return_value=stamp):
 
     def test_missing_heading_error_says_match_is_exact(self):
         body = BODY.replace('## Next steps', '## Next-steps')
-        p = subprocess.run(self.python_command(HOOKS / 'handoff_ledger.py', 'save', '--session', 's1'),
+        p = subprocess.run(self.python_command(HOOKS / 'handoff_ledger.py', 'save', '.', '--session', 's1'),
                            input=json.dumps(dict(topic='work', description='d', body=body)),
                            cwd=self.root, env=self.env, capture_output=True, text=True, timeout=20)
         self.assertIn("missing section '## Next steps'", p.stdout + p.stderr)
@@ -355,7 +355,7 @@ with patch('time.time', return_value=stamp):
             (self.root / 'work.txt').write_text('phase %d\n' % step)
             self.git('add', '.')
             self.git('commit', '-qm', 'phase %d' % step)
-            out = self.cli('save', '--request-id', 'attempt-%d' % step,
+            out = self.cli('save', '.', '--request-id', 'attempt-%d' % step,
                            doc=dict(topic='same-draft', description='Same draft', body=BODY))
             self.clock += 200
         self.assertEqual(out['transition']['kind'], 'paused')
@@ -506,10 +506,10 @@ def pressure(sid):
     trace.write_text('\\n'.join(json.dumps({'message': {'model': 'claude-test', 'usage': {'input_tokens': n}}}) for n in (31000, 140000)))
     subprocess.run([sys.executable, hook], input=json.dumps(dict(hook_event_name='PostToolUse', session_id=sid, cwd=str(root), transcript_path=str(trace))), capture_output=True, text=True, check=True)
 pressure('first')
-saved = cli('save', '--session', 'first', doc=dict(topic='work', description='work', body=body))
+saved = cli('save', '.', '--session', 'first', doc=dict(topic='work', description='work', body=body))
 cli('resume', saved['path'], '--session', 'second')
 pressure('second')
-cli('save', '--session', 'second', doc=dict(topic='work', description='next', body=body + 'Later.\\n', predecessor=saved['path']))
+cli('save', '.', '--session', 'second', doc=dict(topic='work', description='next', body=body + 'Later.\\n', predecessor=saved['path']))
 ''' % (str(HOOKS / 'handoff_ledger.py'), str(HOOKS / 'context_watch.py'), BODY))
         self.env['CODEX_THREAD_ID'] = 'parent-thread-must-not-leak'
         p = subprocess.run([sys.executable, str(HOOKS / 'context_watch.py'), 'auto', '--max', '3', '--',

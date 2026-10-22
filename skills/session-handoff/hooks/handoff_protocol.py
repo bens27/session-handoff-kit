@@ -395,7 +395,8 @@ def _transition(root, guard=None):
             'and continuity delegations; each as {id, report:{path,sha256}}), check live holds/needsInput, then run '
             'python3 %s restart --root %s --workers \'<JSON list>\' --host-capable [--hold]. Pass '
             '--workers \'[]\' when nothing is outstanding; a settled worker with no report file is '
-            '{id, settled: true, report: null}. Omitting --workers blocks with worker-inventory-unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
+            '{id, settled: true, report: null}; a mailbox delegation still in flight is '
+            '{"id": "<name>", "state": "in_flight", "via": "mailbox"}. Omitting --workers blocks with worker-inventory-unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
             'agents_restart for agent %s as the final tool action with the returned restart_prompt, never bare '
             '"%s"; then end the turn. Blocked means manual fresh-session continuation; pending intent requires '
             'reconciliation, never redispatch. Preserve human holds and worker results.')
@@ -1709,37 +1710,29 @@ def save_draft(a):
     return draft
 
 
-def _temp_bases():
-    return {os.path.realpath(p) for p in (tempfile.gettempdir(), '/tmp', '/var/tmp') if p}
-
-
-def redirect_save_root(a):
+def redirect_save_root(a, explicit):
     """Settle the project a save files under when the root was not named explicitly.
 
-    A shell sitting in a scratch directory (for example where the draft lives) must
-    not file the checkpoint under that directory or its temp base. Prefer the project
-    this session's hooks recorded; refuse when the root would be a temp base itself."""
-    if a.root != '.':
-        return None  # explicit --root or predecessor project wins
-    bases = _temp_bases()
+    Returns (refusal, note). A shell in a temp dir (for example where the draft
+    lives) must not file the checkpoint there: use the project this session's hooks
+    recorded, else refuse. Nothing found in a temp dir (.handoffs/, .git) counts as
+    consent, since a stray save or another local user can create it; only an
+    explicit root does."""
+    if explicit:
+        return None, ''
     start = os.path.realpath('.')
-    root = os.path.realpath(ledger.project_root('.'))
-    inside = any(start == b or start.startswith(b + os.sep) for b in bases)
+    root = os.path.realpath(ledger.project_root(a.root))
+    if not (ledger.under_temp_base(root) or (a.root == '.' and ledger.under_temp_base(start))):
+        return None, ''
     recorded = ledger.read_project_pointer(getattr(a, 'session', None))
-    if recorded:
-        recorded = os.path.realpath(recorded)
-        if inside and root != recorded and not (start == recorded or start.startswith(recorded + os.sep)):
-            print('Saving under project %s recorded by this session\'s hooks, not the current directory %s.'
-                  % (recorded, start), file=sys.stderr)
-            a.root = recorded
-            return None
-    # A temp base already holding .handoffs/ or .git was made a project on purpose.
-    established = any(os.path.exists(os.path.join(root, marker)) for marker in ('.handoffs', '.git'))
-    if root in bases and not established:
-        return dict(outcome='invalid', project=root, action=(
-            'The current directory resolves to the temporary folder %s, not a project. Run save from the project '
-            'directory, or pass --root <project>, so the checkpoint is not filed under a temp dir.' % root))
-    return None
+    if recorded and a.root == '.':
+        a.root = recorded
+        return None, ('Saved under project %s recorded by this session\'s hooks, not the temporary directory %s.'
+                      % (recorded, start))
+    return dict(outcome='invalid', project=root, action=(
+        'The save root %s is in a temporary folder and no project is recorded for this session. Run save from '
+        'the project directory, or name the root explicitly (save <root>, e.g. save .) if this folder really '
+        'is the project.' % root)), ''
 
 
 def cli(argv):
@@ -1841,7 +1834,9 @@ def cli(argv):
                 references=[], skills=[],
                 continuity=[dict(id='goal', text='Replace with the original authorized goal and durable constraints.', status='open')])))
             return 0
+    root_note = ''
     if a.command == 'save':
+        explicit_root = a.root is not None  # positional default is None, so `save .` stays explicit
         try:
             draft = save_draft(a)
         except (OSError, ValueError) as exc:
@@ -1871,10 +1866,12 @@ def cli(argv):
             print(json.dumps(NO_SESSION))
             return 1
     if a.command == 'save':
-        refused = redirect_save_root(a)
+        refused, root_note = redirect_save_root(a, explicit_root)
         if refused:
             print(json.dumps(refused))
             return 1
+        if root_note:
+            print(root_note, file=sys.stderr)
     try:
         if a.command == 'history':
             result = history(a.root, a.topic, a.offset, a.limit)
@@ -1898,6 +1895,8 @@ def cli(argv):
         elif a.command == 'save':
             request = a.request_id or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()[:32]
             result = save(a.root, a.session, request, draft)
+            if root_note:
+                result['warnings'] = list(result.get('warnings') or []) + [root_note]
         else:
             result = lookup(a.root, a.max_age_days, a.offset, a.topic, session=a.session)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:

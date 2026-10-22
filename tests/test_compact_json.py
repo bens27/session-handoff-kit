@@ -20,7 +20,8 @@ class CompactJsonTests(unittest.TestCase):
                         AGENTSROOM_AGENT_ID='', HANDOFF_SESSION_ID='s1', CODEX_THREAD_ID='')
         doc = json.dumps(dict(topic='work', description='d',
                               body='## Objective\nX\n## Current state\nY\n## Next steps\nZ\n'))
-        p = subprocess.run([sys.executable, str(LEDGER), 'save'], input=doc,
+        # The root is TMPDIR itself, so it must be named: an unnamed temp-base root is refused.
+        p = subprocess.run([sys.executable, str(LEDGER), 'save', self.root], input=doc,
                            env=self.env, cwd=self.root, text=True, capture_output=True, timeout=60)
         self.assertEqual(json.loads(p.stdout)['outcome'], 'saved', p.stdout + p.stderr)
 

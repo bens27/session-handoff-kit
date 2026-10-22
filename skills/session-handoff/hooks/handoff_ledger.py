@@ -48,6 +48,7 @@ import fcntl
 from contextlib import contextmanager
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -557,15 +558,40 @@ def project_pointer_path(session):
                         "context-watch-project-%s.json" % hashlib.sha1(str(session).encode("utf-8", "replace")).hexdigest()[:20])
 
 
+def temp_bases():
+    return {os.path.realpath(p) for p in (tempfile.gettempdir(), '/tmp', '/var/tmp') if p}
+
+
+def under_temp_base(path):
+    path = os.path.realpath(path)
+    return any(path == b or path.startswith(b + os.sep) for b in temp_bases())
+
+
 def read_project_pointer(session, max_age_s=86400):
+    """The recorded project, or '' unless the pointer is trustworthy. It lives at a
+    predictable path in a shared temp dir, so accept only a bounded regular file
+    (never a symlink) owned by this user with no group/other bits, naming a
+    directory this user owns outside every temp base."""
     if not session:
         return ""
     try:
-        with open(project_pointer_path(session), encoding="utf-8") as f:
-            note = json.load(f)
+        fd = os.open(project_pointer_path(session), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077 or info.st_size > 4096):
+                return ""
+            raw = stream.read(4097)
+            if len(raw) > 4096:
+                return ""
+            note = json.loads(raw.decode("utf-8"))
         project = note.get("project")
-        if (note.get("session_id") == session and isinstance(project, str) and os.path.isdir(project)
+        if not (note.get("session_id") == session and isinstance(project, str)
                 and time.time() - float(note.get("ts") or 0) <= max_age_s):
+            return ""
+        project = os.path.realpath(project)
+        owner = os.stat(project)
+        if stat.S_ISDIR(owner.st_mode) and owner.st_uid == os.getuid() and not under_temp_base(project):
             return project
     except Exception:
         pass

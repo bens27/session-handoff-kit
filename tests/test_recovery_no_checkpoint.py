@@ -91,7 +91,7 @@ def audit(event,args):
         marker.write_text(event)
         os._exit(71)
 sys.addaudithook(audit)
-protocol.cli(['save','--session','saver','--request-id','interrupted','--input',sys.argv[2]])
+protocol.cli(['save','.','--session','saver','--request-id','interrupted','--input',sys.argv[2]])
 """
         stopped = subprocess.run([sys.executable, '-B', '-S', '-c', script, str(SKILL / 'hooks'),
             str(draft), phase, str(marker)], cwd=self.root, env=self.env,
@@ -101,7 +101,7 @@ protocol.cli(['save','--session','saver','--request-id','interrupted','--input',
         return draft
 
     def save(self, topic='older', request='one', session='saver'):
-        code, result = self.cli('save', '--session', session, '--request-id', request,
+        code, result = self.cli('save', '.', '--session', session, '--request-id', request,
             draft={'topic': topic, 'description': 'Actual saved context only.', 'body': BODY})
         if code != 0 or result['outcome'] != 'saved':
             raise AssertionError(result)
@@ -195,9 +195,9 @@ class NoCheckpointRecoveryTests(unittest.TestCase):
                 self.assertTrue(draft.is_file())
                 f.observe('interrupted-before-document', outcome='none', checkpoint_exists=False,
                           retained_draft_exists=draft.is_file())
-                code, saved = f.cli('save', '--session', 'saver', '--request-id', 'interrupted', '--input', draft)
+                code, saved = f.cli('save', '.', '--session', 'saver', '--request-id', 'interrupted', '--input', draft)
                 self.assertEqual((code, saved['outcome']), (0, 'saved'))
-                code, retry = f.cli('save', '--session', 'saver', '--request-id', 'interrupted', '--input', draft)
+                code, retry = f.cli('save', '.', '--session', 'saver', '--request-id', 'interrupted', '--input', draft)
                 self.assertEqual(retry['path'], saved['path'])
                 self.assertEqual(f.cli('history')[1]['total'], 1)
                 self.assertEqual(f.fingerprint(f.transcript), f.history_hash)

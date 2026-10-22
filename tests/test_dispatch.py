@@ -59,7 +59,7 @@ class Base(unittest.TestCase):
     def save(self, topic='parser', session='sess-a', terminal='term-a', body=BODY, **extra):
         doc = dict(topic=topic, description=topic.title(), body=body, **extra)
         digest = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:12]
-        result = self.cli('save', '--session', session, '--request-id', 'req-%s-%s-%s' % (topic, session, digest),
+        result = self.cli('save', '.', '--session', session, '--request-id', 'req-%s-%s-%s' % (topic, session, digest),
                           input=json.dumps(doc), terminal=terminal)
         self.assertEqual(result['outcome'], 'saved', result)
         return result['path']
@@ -387,7 +387,7 @@ class FailureAndRetryTests(Base):
         self.assertEqual(first['request_id'], again['request_id'])
         self.assertIn('--request-id ' + first['request_id'], first['next_action']['command'])
         doc = dict(topic='parser', description='Parser', body=BODY)
-        self.cli('save', '--session', 'sess-a', '--request-id', first['request_id'], input=json.dumps(doc))
+        self.cli('save', '.', '--session', 'sess-a', '--request-id', first['request_id'], input=json.dumps(doc))
         later = self.dispatch(operation='save', topic='parser')
         self.assertNotEqual(first['request_id'], later['request_id'])
 
@@ -824,14 +824,14 @@ class TemplateTests(Base):
             self.assertIn(heading, draft['body'])
         self.assertIsInstance(draft['references'], list)
         self.assertIsInstance(draft['skills'], list)
-        saved = self.cli('save', '--session', 'sess-a', '--request-id', 'tpl', input=json.dumps(draft))
+        saved = self.cli('save', '.', '--session', 'sess-a', '--request-id', 'tpl', input=json.dumps(draft))
         self.assertEqual(saved['outcome'], 'saved', saved)
 
     def test_oversized_checkpoint_saves_with_an_advisory_warning(self):
         body = BODY + '## Background\n' + ('context line\n' * 2500)
         path = self.save(body=body)
         self.assertTrue(os.path.isfile(path))
-        r = self.cli('save', '--session', 'sess-a', '--request-id', 'big-2',
+        r = self.cli('save', '.', '--session', 'sess-a', '--request-id', 'big-2',
                      input=json.dumps(dict(topic='big', description='Big', body=body)))
         self.assertEqual(r['outcome'], 'saved')
         self.assertTrue(any('recommended' in w for w in r['warnings']), r['warnings'])
