@@ -798,6 +798,7 @@ class AdoptTests(unittest.TestCase):
                          ('blocked', 'prepare', 'prepare-path-alias'), result)
         self.assertEqual(result['path'], self.path)
         self.assertEqual(result['preparation']['path'], str(alias))
+        self.assertNotIn('delivery_receipt', result['preparation'])
         self.assertEqual(os.path.realpath(result['preparation']['path']), self.path)
         self.assertEqual(result['command'], restart.adopt_command(self.root, 'req-1'))
         self.assertEqual(stdout.count('UNIQUE-BODY-MARKER'), 1)

@@ -369,11 +369,13 @@ automatic mode or under explicit restart authorization. This is an agent procedu
 using the host's MCP tools, not a Python host client. A saved checkpoint alone
 does not authorize dispatch. A live request to pause or wait takes precedence.
 
-If successor adoption blocks at `prepare`, report its reason and the objective
-and next step from retrieval-only `preparation.body`, or inspect the recorded
-`path` if no body is returned. A returned preparation can name different work;
-never treat it as adopted. `prepare-path-alias` means equivalent canonical paths
-need spelling reconciliation; `prepare-target-mismatch` means different work.
+If successor adoption blocks at `prepare`, report its reason. For
+`prepare-target-mismatch`, take the objective and next step from the recorded
+`path`; `preparation.body` describes the other checkpoint. Otherwise use the
+retrieval-only `preparation.body`, or inspect the recorded `path` if no body is
+returned. Never treat a returned preparation as adopted. `prepare-path-alias`
+means equivalent canonical paths need spelling reconciliation;
+`prepare-target-mismatch` means different work.
 Preserve the pending intent and resolve the cause before running the returned
 exact `command`. Explicit adoption authorizes only its recorded checkpoint and
 does not bypass identity, trust, ownership or holds; ask before switching work.

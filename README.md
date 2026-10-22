@@ -597,8 +597,10 @@ native cycle in one command with compact output:
   (`identity`, `intent`, `binding`, `prepare`, `successor`, `hold`, `resume`) and
   preserves state. A prepare refusal includes the recorded `path`, exact adopt
   `command` and available retrieval-only `preparation` (body, dependencies,
-  continuity and predecessor; no delivery receipt). Inspect that path for the
-  objective/next step if no body is available. `prepare-path-alias` distinguishes
+  continuity and predecessor; no delivery receipt). For `prepare-target-mismatch`,
+  take the objective/next step from the recorded `path`; `preparation.body`
+  describes the other checkpoint. Otherwise inspect that path if no body is
+  available. `prepare-path-alias` distinguishes
   equivalent canonical paths from `prepare-target-mismatch`; both leave the
   intent pending. Resolve the cause before retrying; an explicit adopt command
   authorizes only the recorded checkpoint, never a different checkpoint or a
