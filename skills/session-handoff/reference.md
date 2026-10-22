@@ -159,7 +159,7 @@ register, forward Git commits, or changed observed working-file hashes. Body-onl
 rewrites do not count. Unknown/legacy evidence does not count. File hashing skips
 Git directory entries and excludes only top-level `.handoffs`, `.agentsroom` and
 `.git` paths. With no same-topic pressure predecessor, the baseline is the
-checkpoint this session resumed. A branch name change alone does not count; a newer descendant
+checkpoint this session resumed under a valid transfer receipt. A branch name change alone does not count; a newer descendant
 commit does, even on another branch. The exact bounds,
 exclusions and evidence rules are defined in [SPEC](../../SPEC.md#72-deterministic-checkpoint-protocol)
 under automatic transition guards (`save_progress` is the implementation source).

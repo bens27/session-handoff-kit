@@ -268,6 +268,28 @@ with patch('time.time', return_value=stamp):
         self.assertFalse(diag['progress']['present'], diag)
         self.assertEqual(out['transition']['kind'], 'paused')
 
+    def test_forged_resumed_by_on_an_old_checkpoint_is_not_a_fallback_baseline(self):
+        """resumed_by/resumed sit outside the MAC; only a receipt-backed transfer may be the baseline."""
+        self.init_work()
+        self.clock = float(int(time.time()))
+        old = self.save(session='s0', topic='old-work')
+        (self.root / 'work.txt').write_text('committed after the old checkpoint\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'later work')
+        self.hook(140000)
+        first = self.save(topic='slice-a')
+        self.hook(31000, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 121
+        path = Path(old['path'])
+        text = path.read_text().replace('\n---\n', '\nstatus: resumed\nresumed_by: s2\nresumed: 2999-01-01T00:00:00.000000\n---\n', 1)
+        path.write_text(text)  # volatile keys: the checkpoint stays trusted
+        self.hook(140000, session='s2')
+        out = self.save(session='s2', topic='slice-b', body=BODY + 'No new work.\n')
+        diag = out['transition']['diagnostics']
+        self.assertFalse(diag['progress']['present'], diag)
+        self.assertEqual(out['transition']['kind'], 'paused')
+
     def test_continuous_topic_opt_out_exempts_soft_thrash_reasons(self):
         (self.root / '.context-watch.json').write_text(json.dumps(dict(continuous_topics=['work'])))
         out = self.rapid_resume_save()

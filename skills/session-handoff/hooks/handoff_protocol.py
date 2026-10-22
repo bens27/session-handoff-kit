@@ -271,7 +271,8 @@ def workspace_changes_hash(root):
 def save_progress(root, current, continuity, previous, baseline=False):
     """Changed draft hash AND (changed register, forward commits, or working files).
 
-    Only a trusted same-topic pressure predecessor is supplied by the caller.
+    The caller supplies a trusted same-topic pressure predecessor, or with baseline=True
+    the checkpoint this session resumed under a valid transfer receipt.
     Missing legacy evidence is unknown, not progress. Register ordering is immaterial.
     """
     # baseline: previous is the checkpoint this session resumed; topic/reason need not match.
@@ -709,8 +710,10 @@ def save(root, session, request_id, document):
         progress = save_progress(root, fields, document['continuity'], prior)
         if not progress['predecessor_known']:
             # No same-topic pressure predecessor: measure against the checkpoint this session resumed.
+            # resumed_by/resumed are outside the MAC, so only a transfer with a valid receipt counts.
             resumed = sorted((r for r in records if r['record'].trusted() and r['fm'].get('resumed_by') == session
-                              and r['fm'].get('resumed')), key=lambda r: r['fm']['resumed'])
+                              and r['fm'].get('resumed') and resumed_holder(root, r['path'], r['fm'])
+                              and owns_transfer(root, r['path'], r['fm'], session)), key=lambda r: r['fm']['resumed'])
             if resumed:
                 progress = save_progress(root, fields, document['continuity'], resumed[-1]['fm'], baseline=True)
         guard = restart_guard(root, session, topic, records, pressure=fields['reason'] == 'context-pressure', progress=progress)
