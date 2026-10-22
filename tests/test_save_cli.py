@@ -39,6 +39,42 @@ class SaveCliTests(unittest.TestCase):
         head = Path(path).read_text().split('\n---\n', 1)[0]
         return dict(line.split(': ', 1) for line in head.splitlines()[1:] if ': ' in line)
 
+    def test_explicit_stdin_matches_file_save(self):
+        draft = dict(topic='work', description='About work', body=BODY)
+        path = self.root / 'draft.json'
+        path.write_text(json.dumps(draft))
+        code, saved = self.run_cli('save', '--session', 's1', '--input', '-',
+                                   input=json.dumps(draft))
+        self.assertEqual((code, saved['outcome']), (0, 'saved'), saved)
+        code, retried = self.run_cli('save', '--session', 's1', '--input', path)
+        self.assertEqual((code, retried['outcome']), (0, 'saved'), retried)
+        self.assertEqual(retried['path'], saved['path'])
+        self.assertEqual(self.frontmatter(saved['path'])['topic'], 'work')
+        self.assertTrue(Path(saved['path']).read_text().endswith(BODY))
+
+    def test_explicit_stdin_invalid_json_is_recoverable(self):
+        for raw in ('', '{broken', '[]'):
+            with self.subTest(raw=raw):
+                code, out = self.run_cli('save', '--session', 's1', '--input', '-', input=raw)
+                self.assertEqual((code, out['outcome']), (1, 'invalid'))
+                self.assertIn('correct the input and retry', out['action'])
+                self.assertNotIn("No such file or directory", out['action'])
+        self.assertEqual(list((self.root / '.handoffs').glob('*.md')), [])
+
+    def test_explicit_stdin_read_failure_is_recoverable(self):
+        result = subprocess.run(
+            [sys.executable, '-c',
+             "import runpy, sys; sys.stdin.close(); sys.argv = sys.argv[1:]; "
+             "runpy.run_path(sys.argv[0], run_name='__main__')",
+             str(LEDGER), 'save', '--session', 's1', '--input', '-'],
+            cwd=self.root, env={**self.env, 'PYTHONPATH': str(LEDGER.parent)},
+            capture_output=True, text=True, timeout=30)
+        out = json.loads(result.stdout)
+        self.assertEqual((result.returncode, out['outcome']), (1, 'invalid'))
+        self.assertIn('closed file', out['action'])
+        self.assertIn('correct the input and retry', out['action'])
+        self.assertEqual(list((self.root / '.handoffs').glob('*.md')), [])
+
     # 12: project comes from the predecessor, not an unrelated cwd
     def test_save_follows_predecessor_project_from_other_cwd(self):
         _, first = self.save()

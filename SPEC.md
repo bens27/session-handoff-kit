@@ -375,7 +375,8 @@ scan: a missing `created` falls back to the filename date, then mtime, and a
 non-object `.published` receipt makes the checkpoint `incomplete`.
 
 `save [dir] [--session ID] [--request-id ID] --input draft.json` validates the
-agent-authored core and generates timestamps, project/Git state, session/trigger
+agent-authored core (`--input -` reads stdin, matching `dispatch`; omitting
+`--input` also reads stdin unless `--topic` or `--body` supplies the draft) and generates timestamps, project/Git state, session/trigger
 identity and publication identity. Identical request retries return the same
 checkpoint; changed content under the same ID is refused. Temporary-file fsync
 and exclusive atomic publication prevent partial Markdown files. Directory
@@ -1351,7 +1352,7 @@ Rule convention:
 Use the bundled session-handoff skill and its complete hooks directory.
 Run handoff_ledger.py lookup and follow its explicit outcome/action.
 Retrieve with prepare --session ID; authorized continuation uses
-resume --session ID [topic]. Save with --input draft.json; only outcome saved completes a checkpoint.
+resume --session ID [topic]. Save with --input draft.json (or --input - for stdin); only outcome saved completes a checkpoint.
 ```
 
 Oz / cloud harnesses: commit the repo-local form of everything (project

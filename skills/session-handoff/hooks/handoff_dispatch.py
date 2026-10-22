@@ -646,7 +646,7 @@ def cli(argv):
         p.add_argument('--pretty', action='store_true', help='Indent JSON output')
         a = p.parse_args(args)
         try:
-            raw = sys.stdin.read() if a.input == '-' else open(a.input, encoding='utf-8').read()
+            raw = protocol.read_cli_input(a.input)
             request = json.loads(raw)
         except (OSError, ValueError) as exc:
             print(json.dumps(blocked({}, 'invalid_request', 'Unreadable request: %s.' % exc)))

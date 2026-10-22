@@ -34,6 +34,14 @@ def decode_state_json(raw):
     return value
 
 
+def read_cli_input(path='-'):
+    """Read a complete CLI input file, or stdin for the conventional dash."""
+    if path == '-':
+        return sys.stdin.read()
+    with open(path, encoding='utf-8') as stream:
+        return stream.read()
+
+
 def load_state_json(path, limit=None):
     with open(path, encoding='utf-8') as stream:
         return decode_state_json(stream.read() if limit is None else stream.read(limit))
@@ -1658,11 +1666,7 @@ def delivery_metrics(result, root, session, fields=None):
 def save_draft(a):
     """Build the save draft from JSON and flags, and settle a.root; a dict with outcome is a refusal."""
     if a.input or not (a.topic or a.body):
-        if a.input:
-            with open(a.input, encoding='utf-8') as f:
-                raw = f.read()
-        else:
-            raw = sys.stdin.read()
+        raw = read_cli_input(a.input or '-')
         draft = decode_state_json(raw)
     else:
         draft = {}
@@ -1735,7 +1739,7 @@ def cli(argv):
     save_p.add_argument('--session')
     save_p.add_argument('--request-id')
     save_p.add_argument('--template', action='store_true', help='Print a valid JSON draft without writing a checkpoint')
-    save_p.add_argument('--input', help='JSON draft path; default stdin unless --topic/--body are given')
+    save_p.add_argument('--input', help='JSON draft path or - for stdin; default stdin unless --topic/--body are given')
     save_p.add_argument('--topic', help='Draft topic (kebab-case); overrides the JSON draft')
     save_p.add_argument('--description', help='Draft description; overrides the JSON draft')
     save_p.add_argument('--body', help='Markdown file used as the draft body; overrides the JSON draft')

@@ -464,6 +464,9 @@ python3 skills/session-handoff/hooks/handoff_ledger.py save --template
 python3 skills/session-handoff/hooks/handoff_ledger.py save --input draft.json
 ```
 
+`save --input -` reads the JSON draft from stdin, as does omitting `--input`
+unless `--topic` or `--body` supplies the draft.
+
 Save from the project directory, or pass the project explicitly as `save <root>`.
 From a temporary base or scratch directory inside one, save uses a valid private
 project pointer recorded by the session hooks. Without one, it refuses unless
