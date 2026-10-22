@@ -1003,6 +1003,9 @@ is the recovery. No second key exists. Pointer workspace and task_id must equal
 the sealed checkpoint's (missing workspace: `workspace-missing`); a symlinked
 or foreign index directory, an other-writable `.handoffs/` or a non-private
 `.handoffs/pointers/` is `unsafe-pointer-dir` (group write follows the umask).
+Both directories are opened without following symlinks and validated with fstat;
+pointer enumeration, reads, locks, atomic writes and pruning use the pinned
+directory descriptor so a subsequent rename cannot redirect pointer I/O.
 The marker re-entry below applies only to intents that record
 `pointer_version` and have a matching readable pointer; a pointer file alone is
 never authority, so legacy intents stay reconcile-only.

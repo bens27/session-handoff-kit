@@ -8,11 +8,13 @@ a publication sealed by this machine's existing receipt key, no Git-tracked
 pointer/intent/checkpoint and user-scope continuation authorization.
 """
 import json
+import fcntl
+import secrets
+from contextlib import contextmanager
 import os
 import re
 import stat
 import time
-from pathlib import Path
 
 import handoff_intents as intents
 import handoff_ledger as ledger
@@ -37,24 +39,82 @@ def pointer_dir(root):
     return os.path.join(os.path.realpath(root), '.handoffs', 'pointers')
 
 
-def _safe_dir(path, private):
+def _safe_dir(fd, private):
     """Refuse a symlinked or foreign-owned index directory. ``.handoffs`` follows the
     umask (0775 under user-private groups), so only other-write is refused there;
     ``.handoffs/pointers`` is the trust anchor and must be private."""
-    info = os.lstat(path)
+    info = os.fstat(fd)
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
             or info.st_mode & (0o077 if private else 0o002)):
         raise ValueError('unsafe-pointer-dir')
 
 
+@contextmanager
 def _check_dirs(root, create=False):
+    """Pin both validated directories; never resolve their names again during I/O."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     handoffs = os.path.join(os.path.realpath(root), '.handoffs')
-    directory = pointer_dir(root)
-    _safe_dir(handoffs, private=False)
-    if create and not os.path.lexists(directory):
-        os.mkdir(directory, 0o700)
-    _safe_dir(directory, private=True)
-    return directory
+    hfd = os.open(handoffs, flags)
+    try:
+        _safe_dir(hfd, private=False)
+        if create:
+            try:
+                os.mkdir('pointers', 0o700, dir_fd=hfd)
+            except FileExistsError:
+                pass
+        pfd = os.open('pointers', flags, dir_fd=hfd)
+        try:
+            _safe_dir(pfd, private=True)
+            yield pfd
+        finally:
+            os.close(pfd)
+    finally:
+        os.close(hfd)
+
+
+@contextmanager
+def _locked(directory_fd, name):
+    """Stable sidecar lock in the pinned directory, with the ledger's timeout."""
+    fd = os.open(name + '.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                 0o600, dir_fd=directory_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError('unsafe-pointer-lock')
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ledger.ConflictError('busy; retry after the current operation finishes')
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _write_json(directory_fd, name, data):
+    """Atomic private publication without reopening the checked directory path."""
+    temporary = '.state-' + secrets.token_hex(16)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o600, dir_fd=directory_fd)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(data, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
 
 
 def _workspace_exists(path):
@@ -88,19 +148,29 @@ def _same(a, b):
 def write_pointer(root, data):
     """Atomically write (fsync) a private pointer; identical retries are no-ops, conflicts refuse."""
     location = pointer_path(root, data['binding_sha256'])
-    _check_dirs(root, create=True)
-    with ledger.locked(location):
-        if os.path.lexists(location):
-            if not _same(read_pointer(location), data):
+    name = os.path.basename(location)
+    with _check_dirs(root, create=True) as directory_fd, _locked(directory_fd, name):
+        try:
+            existing = read_pointer(location, dir_fd=directory_fd)
+        except FileNotFoundError:
+            _write_json(directory_fd, name, data)
+        else:
+            if not _same(existing, data):
                 raise PointerConflict('pointer-conflict')
-            return location
-        protocol.write_json(location, data)  # mkstemp: 0600
     return location
 
 
-def read_pointer(location):
+def read_pointer(location, *, dir_fd=None):
     """Bounded regular private file, no symlink/FIFO following, schema-validated."""
-    fd = os.open(location, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    if dir_fd is None:
+        directory = os.path.dirname(os.path.abspath(location))
+        handoffs = os.path.dirname(directory)
+        if os.path.basename(directory) != 'pointers' or os.path.basename(handoffs) != '.handoffs':
+            raise ValueError('unsafe-pointer-dir')
+        with _check_dirs(os.path.dirname(handoffs)) as directory_fd:
+            return read_pointer(location, dir_fd=directory_fd)
+    fd = os.open(os.path.basename(location), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                 dir_fd=dir_fd)
     with os.fdopen(fd, 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
@@ -137,7 +207,7 @@ def user_continuation_authorized():
     return protocol.project_setting(os.path.expanduser('~'), 'autoresume', bool, user_only=True) is True
 
 
-def evaluate(root, location, session=None):
+def evaluate(root, location, session=None, *, dir_fd=None):
     """One pointer's eligibility: dict(status=candidate|ineligible|incomplete|settled, ...)."""
 
     def out(status, reason=None, **extra):
@@ -146,7 +216,7 @@ def evaluate(root, location, session=None):
             result.update(reason=reason, action=RECOVER)
         return result
     try:
-        data = read_pointer(location)
+        data = read_pointer(location, dir_fd=dir_fd)
     except (OSError, ValueError, UnicodeDecodeError):
         return out('ineligible', 'invalid-pointer')
     if data['root'] != os.path.realpath(root):
@@ -203,36 +273,40 @@ def evaluate(root, location, session=None):
 def scan(root, session=None):
     """Candidates plus diagnostics; settled pointers are skipped silently."""
     candidates, diagnostics = [], []
-    directory = Path(pointer_dir(root))
-    if not os.path.lexists(directory):
-        return dict(candidates=candidates, diagnostics=diagnostics)
+    directory = pointer_dir(root)
     try:
-        _check_dirs(root)
-        entries = sorted(directory.glob('*.json'))
+        with _check_dirs(root) as directory_fd:
+            for name in sorted(os.listdir(directory_fd)):
+                if not name.endswith('.json'):
+                    continue
+                result = evaluate(root, os.path.join(directory, name), session, dir_fd=directory_fd)
+                if result['status'] == 'candidate':
+                    candidates.append(result)
+                elif result['status'] != 'settled':
+                    diagnostics.append(result)
+    except FileNotFoundError:
+        return dict(candidates=[], diagnostics=[])
     except (OSError, ValueError):
         return dict(candidates=[], diagnostics=[dict(
-            status='ineligible', pointer=str(directory), reason='unsafe-pointer-dir', action=RECOVER)])
-    for entry in entries:
-        result = evaluate(root, str(entry), session)
-        if result['status'] == 'candidate':
-            candidates.append(result)
-        elif result['status'] != 'settled':
-            diagnostics.append(result)
+            status='ineligible', pointer=directory, reason='unsafe-pointer-dir', action=RECOVER)])
     return dict(candidates=candidates, diagnostics=diagnostics)
 
 
 def prune(root, request_ids):
     """Remove pointers of pruned settled intents."""
-    for entry in Path(pointer_dir(root)).glob('*.json'):
-        try:
-            data = read_pointer(str(entry))
-        except (OSError, ValueError, UnicodeDecodeError):
-            continue
-        if data['request_id'] in request_ids:
-            try:
-                entry.unlink()
-            except OSError:
-                pass
+    try:
+        with _check_dirs(root) as directory_fd:
+            for name in os.listdir(directory_fd):
+                if not name.endswith('.json'):
+                    continue
+                try:
+                    data = read_pointer(name, dir_fd=directory_fd)
+                    if data['request_id'] in request_ids:
+                        os.unlink(name, dir_fd=directory_fd)
+                except (OSError, ValueError, UnicodeDecodeError):
+                    continue
+    except (OSError, ValueError):
+        pass
 
 
 def matches_intent(root, record):
@@ -240,8 +314,8 @@ def matches_intent(root, record):
     try:
         if record.get('pointer_version') != VERSION:
             return False
-        _check_dirs(root)
-        data = read_pointer(pointer_path(root, record['binding_sha256']))
+        with _check_dirs(root) as directory_fd:
+            data = read_pointer(pointer_path(root, record['binding_sha256']), dir_fd=directory_fd)
     except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
         return False
     return (data['root'] == record['root'] and data['checkpoint_path'] == record['path']

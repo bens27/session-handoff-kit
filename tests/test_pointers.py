@@ -313,6 +313,130 @@ class PointerTests(unittest.TestCase):
         result = self.preflight()
         self.assertEqual((result['stage'], result['reason']), ('pointer', 'pointer-write-failed'), result)
 
+    def swap_after_directory_check(self, directory, replacement):
+        """Inject a rename at the directory-validation/filesystem-use boundary."""
+        checked = pointers._safe_dir
+        moved = directory.with_name('pinned-pointers')
+        swapped = False
+
+        def check_then_swap(path_or_fd, private):
+            nonlocal swapped
+            checked(path_or_fd, private)
+            if private and not swapped:
+                swapped = True
+                directory.rename(moved)
+                directory.symlink_to(replacement, target_is_directory=True)
+
+        return moved, patch.object(pointers, '_safe_dir', side_effect=check_then_swap)
+
+    def test_scan_does_not_follow_directory_swap_after_validation(self):
+        ready = self.preflight()
+        self.authorize()
+        directory = self.pointer_file(ready).parent
+        replacement = Path(self.root) / 'attacker'
+        replacement.mkdir(mode=0o700)
+        planted = replacement / self.pointer_file(ready).name
+        planted.write_text('{}')
+        planted.chmod(0o600)
+        _, race = self.swap_after_directory_check(directory, replacement)
+        with race:
+            result = pointers.scan(self.root)
+        self.assertEqual([c['request_id'] for c in result['candidates']], ['restart-1'], result)
+        self.assertEqual(result['diagnostics'], [])
+
+    def test_write_does_not_follow_directory_swap_after_validation(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        data = json.loads(location.read_text())
+        location.unlink()
+        replacement = Path(self.root) / 'attacker'
+        replacement.mkdir(mode=0o700)
+        moved, race = self.swap_after_directory_check(location.parent, replacement)
+        with race:
+            pointers.write_pointer(self.root, data)
+        self.assertEqual(list(replacement.iterdir()), [])
+        self.assertEqual(json.loads((moved / location.name).read_text()), data)
+
+    def test_prune_does_not_unlink_from_replacement_directory(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        replacement = Path(self.root) / 'attacker'
+        replacement.mkdir(mode=0o700)
+        planted = replacement / location.name
+        planted.write_bytes(location.read_bytes())
+        planted.chmod(0o600)
+        moved, race = self.swap_after_directory_check(location.parent, replacement)
+        with race:
+            pointers.prune(self.root, {'restart-1'})
+        self.assertTrue(planted.exists())
+        self.assertFalse((moved / location.name).exists())
+
+    def test_direct_read_pins_checked_directory(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        expected = json.loads(location.read_text())
+        replacement = Path(self.root) / 'attacker'
+        replacement.mkdir(mode=0o700)
+        _, race = self.swap_after_directory_check(location.parent, replacement)
+        with race:
+            self.assertEqual(pointers.read_pointer(str(location)), expected)
+
+    def test_handoffs_swap_does_not_redirect_pointer_directory_open(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        expected = json.loads(location.read_text())
+        handoffs = location.parent.parent
+        moved = handoffs.with_name('pinned-handoffs')
+        replacement = Path(self.root) / 'attacker'
+        replacement.mkdir(mode=0o700)
+        checked = pointers._safe_dir
+        swapped = False
+
+        def check_then_swap(fd, private):
+            nonlocal swapped
+            checked(fd, private)
+            if not private and not swapped:
+                swapped = True
+                handoffs.rename(moved)
+                handoffs.symlink_to(replacement, target_is_directory=True)
+
+        with patch.object(pointers, '_safe_dir', side_effect=check_then_swap):
+            self.assertEqual(pointers.read_pointer(str(location)), expected)
+
+    def test_symlink_lock_is_refused_without_touching_target(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        data = json.loads(location.read_text())
+        lock = location.with_name(location.name + '.lock')
+        lock.unlink()
+        target = Path(self.root) / 'victim'
+        target.write_text('untouched')
+        lock.symlink_to(target)
+        with self.assertRaises(OSError):
+            pointers.write_pointer(self.root, data)
+        self.assertEqual(target.read_text(), 'untouched')
+
+    def test_failed_replace_cleans_temporary_file_in_pinned_directory(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        data = json.loads(location.read_text())
+        location.unlink()
+        replacement = Path(self.root) / 'attacker'
+        replacement.mkdir(mode=0o700)
+        moved = location.parent.with_name('pinned-pointers')
+
+        def fail_replace(*args, **kwargs):
+            location.parent.rename(moved)
+            location.parent.symlink_to(replacement, target_is_directory=True)
+            raise OSError('replace failed')
+
+        with patch.object(os, 'replace', side_effect=fail_replace):
+            with self.assertRaisesRegex(OSError, 'replace failed'):
+                pointers.write_pointer(self.root, data)
+        self.assertEqual(list(moved.glob('.state-*')), [])
+        self.assertFalse((moved / location.name).exists())
+        self.assertEqual(list(replacement.iterdir()), [])
+
     def test_group_writable_handoffs_under_umask_002_still_dispatches(self):
         import shutil
         shutil.rmtree(Path(self.root) / '.handoffs')
