@@ -1,5 +1,4 @@
 """Public handoff workflow with advisory size targets. Stdlib only; legacy ledger is the file adapter."""
-from handoff_contract import project_output, continuity_items, continuation_document
 
 import argparse
 import errno
@@ -13,6 +12,9 @@ import tempfile
 import time
 from datetime import datetime
 
+from handoff_contract import (command_template, continuation_command, ledger_command,
+                              exit_status, emit_output, render_output, project_output,
+                              continuity_items, continuation_document)
 import handoff_identity
 import handoff_ledger as ledger
 import handoff_workspace as workspace
@@ -128,9 +130,7 @@ def hook_opening_note(event):
             or ledger._claimed_recently(checkpoint.fm, datetime.now())
             or authoritative != path or not checkpoint.trusted()):
         return pointer
-    command = 'python3 %s resume %s --session %s --fields path,body' % (
-        shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
-        shlex.quote(path), shlex.quote(session))
+    command = continuation_command(hooks_dir(), 'resume', path, session, 'path,body')
     if not session:
         return pointer
     return ('The session-handoff skill does not need to load. Run %s; follow its outcome/action, '
@@ -153,16 +153,16 @@ def publication_recovery(root, path):
                       and ledger.valid_seal(intent.get('seal'), key, hashlib.sha256(text.encode()).hexdigest()))
     except (OSError, ValueError, TypeError):
         pass
-    cli = 'python3 ' + shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
-    abandon = cli + ' abandon ' + shlex.quote(path)
-    command = (cli + ' repair ' + shlex.quote(path) + ' --root ' + shlex.quote(ledger.project_root(root))
+    abandon = ledger_command(hooks_dir(), 'abandon', path)
+    command = (ledger_command(hooks_dir(), 'repair', path, '--root', ledger.project_root(root))
                if repairable else abandon)
     text = ('Incomplete checkpoint %s. ' % json.dumps(path))
     if repairable:
         text += 'In the publishing terminal, complete the unchanged publication with: %s. ' % command
     else:
-        original = '%s save --session %s --request-id <original-request-id> --input <original-draft.json>' % (
-            cli, shlex.quote(fm.get('session_id') or ''))
+        original = command_template(
+            os.path.join(hooks_dir(), 'handoff_ledger.py'), ('save', '--session', fm.get('session_id') or ''),
+            '--request-id <original-request-id> --input <original-draft.json>')
         text += ('No authenticated intent matches the current checkpoint. Preserve it for inspection; '
                  'if available, retry the original save request: %s. '
                  'Otherwise ask the user before explicitly abandoning it with: %s. '
@@ -403,16 +403,18 @@ def _transition(root, guard=None, path=None):
         return dict(kind='agents_restart', requires_preflight=True, action=(
             'Settle and inventory every worker you delegated (agents_spawned_list includeClosed:true, mailbox '
             'and continuity delegations; each as {id, report:{path,sha256}}), check live holds/needsInput, then run '
-            'python3 %s restart --root %s%s --workers \'<JSON list>\' --host-capable [--hold]. Pass '
+            '%s. Pass '
             '--workers \'[]\' when nothing is outstanding; a settled worker with no report file is '
             '{id, settled: true, report: null}; a mailbox delegation still in flight is '
             '{"id": "<name>", "state": "in_flight", "via": "mailbox"}. Omitting --workers blocks with worker-inventory-unknown. Only outcome: ready and dispatch: true permit calling AgentsRoom '
             'agents_restart for agent %s as the final tool action with the returned restart_prompt, never bare '
             '"%s"; then end the turn. Blocked means manual fresh-session continuation; pending intent requires '
             'reconciliation, never redispatch. Preserve human holds and worker results.')
-            % (shlex.quote(os.path.join(hooks_dir(), 'restart_preflight.py')),
-               shlex.quote(os.path.realpath(handoff_identity.project_root(root))),
-               ' --path ' + shlex.quote(os.path.realpath(path)) if path is not None else '',
+            % (command_template(
+                   os.path.join(hooks_dir(), 'restart_preflight.py'),
+                   ('restart', '--root', os.path.realpath(handoff_identity.project_root(root)))
+                   + (('--path', os.path.realpath(path)) if path is not None else ()),
+                   "--workers '<JSON list>' --host-capable [--hold]"),
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
@@ -674,11 +676,10 @@ def save(root, session, request_id, document):
             held = Record.load(predecessor).fm
             if held.get('status') == 'resumed' and not owns_transfer(root, predecessor, held, session):
                 holder = resumed_holder(root, predecessor, held)
-                ledger_cli = shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
                 untraceable = not holder.get('terminal') and not holder.get('runner_id')
-                recovery = (dict(command='python3 %s recover-transfer %s --previous-session %s --resumed-at %s --fingerprint %s' % (
-                    ledger_cli, shlex.quote(predecessor), shlex.quote(held.get('resumed_by', '')),
-                    shlex.quote(held.get('resumed', '')), snapshot(predecessor)),
+                recovery = (dict(command=ledger_command(
+                    hooks_dir(), 'recover-transfer', predecessor, '--previous-session', held.get('resumed_by', ''),
+                    '--resumed-at', held.get('resumed', ''), '--fingerprint', snapshot(predecessor)),
                     requires='Explicit user confirmation that this terminal performed this exact transfer; then add --confirm-holder.')
                     if untraceable else None)
                 if recovery:
@@ -689,8 +690,9 @@ def save(root, session, request_id, document):
                               'If the user confirms this terminal performed that transfer, run the `recovery` command (recover-transfer ... --confirm-holder) in this terminal, then retry the save; '
                               'otherwise do not supersede it.' % (held.get('resumed_by'), held.get('resumed'), why))
                 else:
-                    action = ('Handoff resumed by %s in terminal %s at %s; do not supersede a different or untraceable holder. Continue in the holding terminal with: python3 %s save --input <original-draft.json>.'
-                              % (held.get('resumed_by'), holder.get('terminal') or 'unknown', held.get('resumed'), ledger_cli))
+                    action = ('Handoff resumed by %s in terminal %s at %s; do not supersede a different or untraceable holder. Continue in the holding terminal with: %s.'
+                              % (held.get('resumed_by'), holder.get('terminal') or 'unknown', held.get('resumed'),
+                                 command_template(os.path.join(hooks_dir(), 'handoff_ledger.py'), ('save',), '--input <original-draft.json>')))
                 return dict(outcome='conflict', path=predecessor,
                             holder=dict(resumed_by=held.get('resumed_by'), terminal=holder.get('terminal'),
                                         runner_id=holder.get('runner_id'), resumed=held.get('resumed')),
@@ -1574,8 +1576,8 @@ def opening_action(prompt, result, session, auto=False, newest=False):
         return 'An open handoff is available. Supply a unique session identity to prepare; never borrow another session identity.'
     execute = resume or (auto and not retrieve)
     # With --session, `resume` is the one-shot command that claims, verifies and acknowledges.
-    command = 'python3 %s %s %s --session %s' % (shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
-                                                 'resume' if execute else 'prepare', shlex.quote(selected['path']), shlex.quote(session))
+    command = continuation_command(
+        hooks_dir(), 'resume' if execute else 'prepare', selected['path'], session)
     suffix = ' It claims, verifies and acknowledges in one call; then continue with ## Next steps in its body.' if execute else ' Retrieve only; leave execution skills, verification and next steps until continuation is authorized.'
     notice = ledger.age_notice(selected)
     return "Handoff '%s' (%s, %.0fd old) — %s. " % (selected['topic'][:80],checkpoint_times(selected),selected['age_days'],selected['description'][:240]) + ('Note: %s. ' % notice if notice else '') + (('Fully automatic: this terminal\'s handoff; proceed without asking. ' if selected.get('terminal') else 'Fully automatic: newest of %d; proceed without asking. ' % result['total']) if newest else 'Proceed without asking. ' if auto and execute else '') + 'Run ' + command + '.' + suffix
@@ -1672,8 +1674,7 @@ def delivery_metrics(result, root, session, fields=None):
     """
     metrics = result['metrics']
     def serialized_size():
-        delivered = project_output(result, fields)
-        return len(json.dumps(delivered, ensure_ascii=False).encode())
+        return len(render_output(result, profile='protocol', fields=fields).encode())
     note = ledger.read_session_note(root, session=session)
     observed, threshold = note.get('observed_occupancy_tokens'), note.get('threshold')
     if type(observed) is int and type(threshold) is int:
@@ -1841,7 +1842,7 @@ def cli(argv):
         if a.fields:
             keep = {'outcome', 'action'} | set(ledger._split_csv(a.fields))
             result = {k: v for k, v in result.items() if k in keep}
-        print(json.dumps(result))
+        emit_output(result)
         return 0
     if a.command == 'report':
         try:
@@ -1850,14 +1851,14 @@ def cli(argv):
             result = dict(outcome='no-data', action='No telemetry log exists; no delivery measurements are available.')
         except OSError as exc:
             result = dict(outcome='unavailable', action='Cannot read telemetry: ' + str(exc)[:300])
-        print(json.dumps(result))
-        return 1 if result['outcome'] == 'unavailable' else 0
+        emit_output(result)
+        return exit_status('report', result['outcome'])
     if a.command == 'save':
         if a.template:
-            print(json.dumps(dict(topic='task-checkpoint', description='Replace with the actual task state.',
+            emit_output(dict(topic='task-checkpoint', description='Replace with the actual task state.',
                 body='## Objective\nState the authorized goal.\n## Constraints\nList the limits the next session must keep.\n## Current state\nRecord verified evidence.\n## Decisions\nRecord choices already made and why.\n## Pending operations\nName any operation started but not confirmed, or None.\n## Next steps\nName the exact next action; put files it edits or depends on in references as path#Lstart-Lend.\n',
                 references=[], skills=[],
-                continuity=[dict(id='goal', text='Replace with the original authorized goal and durable constraints.', status='open')])))
+                continuity=[dict(id='goal', text='Replace with the original authorized goal and durable constraints.', status='open')]))
             return 0
     root_note = ''
     if a.command == 'save':
@@ -1865,10 +1866,10 @@ def cli(argv):
         try:
             draft = save_draft(a)
         except (OSError, ValueError) as exc:
-            print(json.dumps(dict(outcome='invalid', action=str(exc)[:500] + '; correct the input and retry.')))
+            emit_output(dict(outcome='invalid', action=str(exc)[:500] + '; correct the input and retry.'))
             return 1
         if isinstance(draft, dict) and draft.get('outcome'):
-            print(json.dumps(draft))
+            emit_output(draft)
             return 1
     if hasattr(a, 'session'):
         recorded = terminal_session(getattr(a, 'root', '.'))
@@ -1888,12 +1889,12 @@ def cli(argv):
             print('Using current host session %s instead of differing --session %s.' % (host, a.session), file=sys.stderr)
         a.session = chosen
         if not a.session and a.command != 'lookup':
-            print(json.dumps(NO_SESSION))
+            emit_output(NO_SESSION)
             return 1
     if a.command == 'save':
         refused, root_note = redirect_save_root(a, explicit_root)
         if refused:
-            print(json.dumps(refused))
+            emit_output(refused)
             return 1
         if root_note:
             print(root_note, file=sys.stderr)
@@ -1931,18 +1932,14 @@ def cli(argv):
         delivery_metrics(result, a.root, a.session, a.fields)
     telemetry(a.command, a.root, getattr(a, 'session', None), result)
     delivered_path = result.get('path')
-    result = project_output(result, getattr(a, 'fields', None))
-    output = json.dumps(result, ensure_ascii=False)
-    print(output)
+    emit_output(result, profile='protocol', fields=getattr(a, 'fields', None))
     sys.stdout.flush()
     if a.command == 'resume' and result['outcome'] == 'resumed':
         try:
             delivered(a.root, delivered_path, a.session)
         except (OSError, ValueError, TypeError, KeyError):
             pass  # Keep pending replay if post-delivery diagnostics cannot persist.
-    if a.command == 'save' and result['outcome'] == 'incomplete':
-        return 1
-    return 1 if result['outcome'] in ('error', 'blocked', 'invalid', 'conflict', 'needs-context', 'needs-original-draft', 'verification-failed', 'verification-timeout', 'timeout', 'needs-confirmation') else 0
+    return exit_status('protocol', result['outcome'], a.command)
 
 
 if __name__ == '__main__':

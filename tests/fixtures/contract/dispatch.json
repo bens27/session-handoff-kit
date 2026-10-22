@@ -1,0 +1,105 @@
+{
+  "baseline": "5f8c0808b8b2cf932bce4de518f789037b5d980c",
+  "codes": {
+    "ok": false,
+    "recovery": false,
+    "history_only": false,
+    "held": false,
+    "released": false,
+    "no_operation": false,
+    "not_lifecycle": false,
+    "lifecycle_unrecognised": false,
+    "no_open_handoff": false,
+    "no_hold": false,
+    "claimed_elsewhere": false,
+    "stale_only": false,
+    "foreign_only": false,
+    "target_ambiguous": false,
+    "topic_ambiguous": false,
+    "confirmation_required": false,
+    "invalid_request": false,
+    "invalid_authorization": false,
+    "invalid_override": false,
+    "autoresume_not_enabled": false,
+    "identity_conflict": false,
+    "identity_required": false,
+    "target_not_found": false,
+    "target_superseded": false,
+    "target_closed": false,
+    "dispatch_pending": false,
+    "dispatch_state_invalid": false,
+    "restart_successor": false,
+    "lookup_error": true,
+    "publication_incomplete": false,
+    "hold_state_unreadable": true,
+    "state_changed": true
+  },
+  "cases": [
+    {
+      "outcome": "none",
+      "code": "no_open_handoff",
+      "request": {
+        "_operation": "resume",
+        "_authorization": "user"
+      },
+      "extra": {},
+      "stdout": "{\"outcome\": \"none\", \"code\": \"no_open_handoff\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": \"user\", \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": []}\n"
+    },
+    {
+      "outcome": "ask",
+      "code": "foreign_only",
+      "request": {
+        "_operation": "resume",
+        "_authorization": "user",
+        "_operation_source": "prompt"
+      },
+      "extra": {},
+      "stdout": "{\"outcome\": \"ask\", \"code\": \"foreign_only\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": \"prompt\", \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": \"user\", \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": []}\n"
+    },
+    {
+      "outcome": "blocked",
+      "code": "lookup_error",
+      "request": {},
+      "extra": {},
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"lookup_error\", \"retryable\": true, \"operation\": null, \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": [], \"retry\": {\"max_attempts\": 3, \"backoff_seconds\": [1, 4, 16], \"same_request\": true}}\n"
+    },
+    {
+      "outcome": "blocked",
+      "code": "state_changed",
+      "request": {},
+      "extra": {
+        "retryable": false
+      },
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"state_changed\", \"retryable\": true, \"operation\": null, \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": [], \"retry\": {\"max_attempts\": 3, \"backoff_seconds\": [1, 4, 16], \"same_request\": true}}\n"
+    },
+    {
+      "outcome": "proceed",
+      "code": "ok",
+      "request": {
+        "_operation": "save",
+        "_identity": {
+          "session": "\u00e9"
+        }
+      },
+      "extra": {
+        "authorized_to_execute": true
+      },
+      "stdout": "{\"outcome\": \"proceed\", \"code\": \"ok\", \"retryable\": false, \"operation\": \"save\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": true, \"authorization_source\": null, \"identity\": {\"session\": \"\\u00e9\"}, \"branch\": \"branches/save.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": []}\n"
+    },
+    {
+      "outcome": "blocked",
+      "code": "publication_incomplete",
+      "request": {
+        "_authorization": "autoresume"
+      },
+      "extra": {
+        "next_action": {
+          "kind": "report",
+          "command": "",
+          "text": "repair"
+        }
+      },
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"publication_incomplete\", \"retryable\": false, \"operation\": null, \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": \"autoresume\", \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"repair\"}, \"recheck\": []}\n"
+    }
+  ]
+}

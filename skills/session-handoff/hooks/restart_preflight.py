@@ -17,6 +17,7 @@ import math
 import stat
 import shlex
 
+from handoff_contract import emit_output, exit_status
 import handoff_holds as holds_store
 import handoff_identity
 import handoff_intents as intents
@@ -700,15 +701,15 @@ def cli():
                 raise ValueError('adopt requires a short handle, legacy binding JSON, or --root and --request-id.')
             else:
                 result = adopt(args.root, args.request_id)
-            print(json.dumps(result))
-            return 0 if result.get('outcome') == 'resumed' else 1
+            emit_output(result)
+            return exit_status('preflight', result.get('outcome'), 'adopt')
         if args.operation == 'restart':
             if not args.root:
                 raise ValueError('restart requires --root.')
             workers = None if args.workers is None else json.loads(args.workers)
             result = restart(args.root, workers, args.host_capable, args.hold, args.path)
-            print(json.dumps(result))
-            return 0 if result['outcome'] == 'ready' else 1
+            emit_output(result)
+            return exit_status('preflight', result['outcome'], 'restart')
         data = protocol.decode_state_json(protocol.read_cli_input(args.input or '-'))
         function = {'preflight': preflight, 'status': status,
                     'refusal': record_refusal, 'successor': confirm_successor,
@@ -716,10 +717,10 @@ def cli():
         result = function(**data)
         if args.operation == 'successor':
             result = {k: v for k, v in result.items() if k != 'restart_prompt'}
-        print(json.dumps(result))
+        emit_output(result)
     except (OSError, ValueError, TypeError, KeyError, ledger.ConflictError) as exc:
-        print(json.dumps(dict(outcome='blocked', dispatch=False, reason=str(exc),
-                              host_confirmed=False)))
+        emit_output(dict(outcome='blocked', dispatch=False, reason=str(exc),
+                         host_confirmed=False))
         return 1
     return 0
 

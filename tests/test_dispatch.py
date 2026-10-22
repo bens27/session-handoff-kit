@@ -657,25 +657,6 @@ class OverrideTests(Base):
 class FailureAndRetryTests(Base):
     """Audit 7: typed codes from a closed set; retry is bounded and idempotent."""
 
-    def codes(self):
-        sys.path.insert(0, str(HOOKS))
-        try:
-            import handoff_dispatch
-            return handoff_dispatch.CODES
-        finally:
-            sys.path.remove(str(HOOKS))
-
-    def test_every_code_is_documented_and_retryable_only_when_transient(self):
-        self.record_hook_session('sess-a')
-        self.save()
-        requests = [{}, {'operation': 'launch'}, {'operation': 'retrieve'}, {'prompt': 'continue the handoff'},
-                    {'operation': 'save', 'session': 'x'}, {'operation': 'autoresume'}, {'nonsense': 1}]
-        for request in requests:
-            with self.subTest(request=request):
-                r = self.dispatch(request)
-                self.assertIn(r['code'], self.codes())
-                self.assertEqual(r['retryable'], self.codes()[r['code']])
-
     def test_malformed_input_is_a_typed_json_error(self):
         r = self.cli('dispatch', '--input', '-', input='{not json')
         self.assertEqual((r['outcome'], r['code']), ('blocked', 'invalid_request'))

@@ -122,6 +122,18 @@ LEDGER = canonical_ledger()
 if os.path.dirname(LEDGER) not in sys.path:
     sys.path.insert(0, os.path.dirname(LEDGER))
 try:
+    from handoff_contract import emit_output, render_output, python_command, command_template
+except ImportError:
+    if __name__ != '__main__':
+        raise
+    # A lone copied watcher must still report an incomplete installation. The
+    # unavailable contract cannot encode its own missing-install diagnostic.
+    render_output = json.dumps
+
+    def emit_output(value):
+        print(render_output(value))
+
+try:
     import handoff_identity  # noqa: E402
     from handoff_identity import (  # noqa: E402,F401
         auto_count_path, latch_path, session_key, terminal_pointer_path, truthy as _truthy)
@@ -399,7 +411,7 @@ def claim_once(evt, suffix):
 def diag_envelope(agent, event_name, message):
     if agent != "claude" and event_name == "UserPromptSubmit":
         return message  # Codex UserPromptSubmit: plain stdout becomes context
-    return json.dumps({"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": message}})
+    return render_output({"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": message}})
 
 
 def flush_diag(agent):
@@ -447,14 +459,14 @@ def fail_open(exc, evt, once=True):
         message = ('handoff-status: Handoff service unavailable (%s). Continue the current task; explicit retrieval '
                    'is blocked. Restore the installed skill files/access; do not infer that no handoff exists.'
                    % type(exc).__name__)
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': message}}))
+        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': message}})
     elif claim_once(evt, ".error") if once else _claim_lone_notice(evt):
         message = ("handoff-status: Context-watch failed (%s); context telemetry is unavailable for this hook. "
                    "Continue the current task." % type(exc).__name__)
         if event_name in ("PostToolUse", "UserPromptSubmit"):
             print(diag_envelope(detect_agent(evt, []), event_name, message))
         elif event_name == "Stop":
-            print(json.dumps({"systemMessage": message}))
+            emit_output({"systemMessage": message})
     sys.exit(0)  # report failure without breaking the host session
 
 
@@ -840,7 +852,7 @@ def stats_cli():
         print("untuned: %s used only the built-in %s-token default. Set per-model values in "
               "~/.context-watch/thresholds.json (see hooks/thresholds.example.json) where each "
               "model's quality actually drops." % (", ".join(untuned), format(DEFAULT_TOKENS, ",")))
-    print("last event: %s" % json.dumps(events[-1]))
+    print("last event: %s" % render_output(events[-1]))
     return 0
 
 
@@ -896,8 +908,8 @@ def handle_session_start(evt, agent):
                 "workspace, revision and test results before relying on it. Compaction is "
                 "automatic pressure, not the user parking the work: if the user had "
                 "authorized a task that was in progress, continue it.")
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
-                                                 "additionalContext": note}}))
+        emit_output({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                 "additionalContext": note}})
         sys.exit(0)
     if source in ("resume", "fork"):
         sys.exit(0)  # a resumed session already has its context
@@ -905,7 +917,7 @@ def handle_session_start(evt, agent):
     write_session_note(cwd, evt, False)
     note = bounded_opening_note(evt)
     if note:
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}}))
+        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}})
     sys.exit(0)
 
 
@@ -929,15 +941,14 @@ def nudge_unwritten_handoff(evt):
         os.close(os.open(latch + ".nudged", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except OSError:
         return  # nudged once already, or unwritable temp dir
-    import shlex
-    print(json.dumps({"decision": "block", "reason": (
+    emit_output({"decision": "block", "reason": (
         "[context-watch] No published checkpoint matches this session's trigger. "
-        "For the JSON draft format run python3 %s save --template. Preserve the draft and publish with python3 %s save --session %s "
-        "--input <draft.json>; stop after outcome saved. "
+        "For the JSON draft format run %s. Preserve the draft and publish with %s; stop after outcome saved. "
         "If blocked, report the failed location and keep this session; do not clear. "
         "Searched project: %s."
-        % (shlex.quote(LEDGER), shlex.quote(LEDGER), shlex.quote(key),
-           handoff_identity.project_root(cwd)))}))
+        % (python_command(LEDGER, 'save', '--template'),
+           command_template(LEDGER, ('save', '--session', key), '--input <draft.json>'),
+           handoff_identity.project_root(cwd)))})
     sys.exit(0)
 
 
@@ -1042,9 +1053,9 @@ def announce_manual_clear(evt):
         os.close(os.open(latch + ".announced", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except OSError:
         return  # told once already, or unwritable temp dir
-    print(json.dumps({"systemMessage": (
+    emit_output({"systemMessage": (
         "[context-watch] Handoff saved. If the agent did not restart itself, type "
-        "/clear, then resume (no tmux pane to clear automatically). Hook session id: %s" % key)}))
+        "/clear, then resume (no tmux pane to clear automatically). Hook session id: %s" % key)})
 
 
 def handle_stop(evt):
@@ -1062,7 +1073,7 @@ def handle_stop(evt):
                   and r['record'].trusted()]
         if paused:
             if claim_once(evt, '.automatic-paused'):
-                print(json.dumps({'systemMessage': '[context-watch] Automatic handoff paused. Checkpoint remains open at %s. Report the diagnostics; a fresh session can explicitly continue the handoff after addressing re-entry overhead or the restart budget.' % paused[-1]['path']}))
+                emit_output({'systemMessage': '[context-watch] Automatic handoff paused. Checkpoint remains open at %s. Report the diagnostics; a fresh session can explicitly continue the handoff after addressing re-entry overhead or the restart budget.' % paused[-1]['path']})
             sys.exit(0)
     if not auto_mode_on():
         nudge_unwritten_handoff(evt)
@@ -1095,11 +1106,11 @@ def handle_stop(evt):
     except Exception:
         count = 0
     if count >= max_clears:
-        print(json.dumps({"systemMessage": (
+        emit_output({"systemMessage": (
             "[context-watch] Fully automatic mode stopped after %d automatic clears in a "
             "row in this project, so it cannot loop forever. The newest handoff is still "
             "open. A fresh session may already start near the threshold: raise HANDOFF_AT "
-            "(or HANDOFF_AUTO_MAX), then type /clear and resume." % count)}))
+            "(or HANDOFF_AUTO_MAX), then type /clear and resume." % count)})
         sys.exit(0)
     try:
         with open_private(counter) as f:
@@ -1223,14 +1234,14 @@ def emit(agent, event_name, message, mode):
         # Codex PostToolUse takes the same JSON: additionalContext is added as
         # developer context and the tool result is kept; block replaces it.
         if mode == "block" and event_name == "PostToolUse":
-            print(json.dumps({"decision": "block", "reason": message}))
+            emit_output({"decision": "block", "reason": message})
         else:
-            print(json.dumps({
+            emit_output({
                 "hookSpecificOutput": {
                     "hookEventName": event_name,
                     "additionalContext": message,
                 }
-            }))
+            })
         sys.exit(0)
     print(message)  # Codex UserPromptSubmit: stdout becomes extra context for the turn
     sys.exit(0)
@@ -1378,12 +1389,12 @@ def main():
     skill, mode = cfg.skill, cfg.mode
     if note_only:
         emit(agent, event_name, build_floor_message(floor, decision.configured_limit, decision.floor_limit, model, agent), "warn")
-    import shlex
     from handoff_protocol import restart_guard
     guard = restart_guard(cwd, session_id) if auto_mode_on() else None
     message = build_message(occupancy, pending, breakdown, limit, source, model, skill,
                             agent, second=fired, usage_age=usage_age)
-    message += " Session identity: %s. Publish with python3 %s save --session %s --input <draft.json>." % (session_id, shlex.quote(LEDGER), shlex.quote(session_id))
+    message += " Session identity: %s. Publish with %s." % (
+        session_id, command_template(LEDGER, ('save', '--session', session_id), '--input <draft.json>'))
     note = _ledger().read_session_note(cwd, session=session_id)
     startup = note.get('startup_input_tokens')
     message += (" Context window ~%s [%s]; startup ~%s; working room at startup ~%s tokens. "
@@ -1392,19 +1403,20 @@ def main():
                    format(limit - startup, ',') if type(startup) is int else 'unknown'))
     if guard and guard['pause_reasons']:
         message = ("[context-watch] Context pressure; automatic handoff paused (%s). Finish the atomic action, "
-                   "publish the checkpoint with python3 %s save --session %s --input <draft.json>, "
+                   "publish the checkpoint with %s, "
                    "then follow transition.action and stop. The checkpoint stays open for explicit continuation. "
-                   "Growth diagnostics: %s." % (', '.join(guard['pause_reasons']), shlex.quote(LEDGER),
-                                              shlex.quote(session_id), json.dumps(guard)))
+                   "Growth diagnostics: %s." % (', '.join(guard['pause_reasons']),
+                                              command_template(LEDGER, ('save', '--session', session_id), '--input <draft.json>'),
+                                              json.dumps(guard)))
     elif auto_mode_on() and env("AGENTSROOM_AGENT_ID"):
         # The AgentsRoom agent restarts its own tab, even with an inherited TMUX_PANE.
-        command = shlex.quote(os.path.join(os.path.dirname(LEDGER), 'restart_preflight.py'))
+        command = python_command(os.path.join(os.path.dirname(LEDGER), 'restart_preflight.py'))
         message += (" Fully automatic mode in AgentsRoom: after outcome saved and kind agents_restart, run "
                     "%s restart --root <project> with your complete --workers inventory and --host-capable, as "
                     "transition.action states. Only outcome ready with dispatch true permits agents_restart, as "
                     "the final tool action with the returned restart_prompt; then end the turn. Blocked means "
                     "manual fresh-session continuation; pending needs reconciliation, not redispatch."
-                    % ("python3 " + command))
+                    % command)
     if guard and guard['reasons'] and not guard['pause_reasons']:
         message += ' Thrash warning: %s; save checks predecessor progress before deciding to pause.' % ', '.join(guard['reasons'])
     message += (" Minimal save contract: JSON topic (short kebab-case, e.g. fix-login-bug), description, body with ## Objective, ## Current state, "

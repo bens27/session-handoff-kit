@@ -74,3 +74,17 @@ plus the floor latch to record. `context_watch.main` is the adapter: it reads
 the event, transcript and latch files, calls the core, then removes or writes
 latches, session notes, the log and the notice. The core imports no hook and
 touches no file, environment or subprocess, so its rules are table tests.
+
+## Result and command contract
+
+`skills/session-handoff/hooks/handoff_contract.py` owns public output profiles,
+field projection, command quoting, dispatch result codes and CLI exit policies.
+It imports no domain hook. Profiles retain each interface's existing JSON bytes;
+persistence and telemetry serialization remain with their state owners.
+The conversational `resume PATH` suggestion in `wait` stays in the protocol;
+it is user prompt text, not an executable Python command.
+
+`handoff_cli.py` owns ledger command routing and a declarative legacy option
+table. It normalizes historical flag consumption before argparse, preserving
+duplicate options, flag-like values and existing diagnostics. The ledger's
+`_cli` forwards to this router; lifecycle and file state stay in the ledger.

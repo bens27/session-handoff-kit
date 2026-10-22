@@ -1,0 +1,69 @@
+[
+  {
+    "kind": "adopt",
+    "root": "/project path",
+    "request": "request's id",
+    "script": "/installed hooks/restart_preflight.py",
+    "command": "python3 '/installed hooks/restart_preflight.py' adopt --root '/project path' --request-id 'request'\"'\"'s id'"
+  },
+  {
+    "kind": "adopt",
+    "root": "/project",
+    "request": "r",
+    "script": "/hooks/restart_preflight.py",
+    "command": "python3 /hooks/restart_preflight.py adopt --root /project --request-id r"
+  },
+  {
+    "kind": "handle",
+    "handle": "h-aaaaaaaaaaaaaaaaaaaaaaaa",
+    "script": "/installed hooks/restart_preflight.py",
+    "command": "python3 '/installed hooks/restart_preflight.py' adopt h-aaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "kind": "ledger",
+    "script": "/installed hooks/handoff_ledger.py",
+    "args": [
+      "resume",
+      "/project's/task.md",
+      "--session",
+      "session id",
+      "--fields",
+      "path,body"
+    ],
+    "command": "python3 '/installed hooks/handoff_ledger.py' resume '/project'\"'\"'s/task.md' --session 'session id' --fields path,body"
+  },
+  {
+    "kind": "ledger",
+    "script": "/hooks/handoff_ledger.py",
+    "args": [
+      "prepare",
+      "/task.md",
+      "--session",
+      ""
+    ],
+    "command": "python3 /hooks/handoff_ledger.py prepare /task.md --session ''"
+  },
+  {
+    "kind": "ledger",
+    "script": "/hooks/handoff_ledger.py",
+    "args": [
+      "save",
+      "--session",
+      "id",
+      "--input",
+      "-"
+    ],
+    "command": "python3 /hooks/handoff_ledger.py save --session id --input -"
+  },
+  {
+    "kind": "ledger",
+    "script": "/hooks/handoff_ledger.py",
+    "args": [
+      "repair",
+      "/task.md",
+      "--root",
+      "/project path"
+    ],
+    "command": "python3 /hooks/handoff_ledger.py repair /task.md --root '/project path'"
+  }
+]

@@ -1,6 +1,8 @@
-"""Continuation data that must survive publication and delivery adapters."""
+"""Public output and continuation contracts, independent of lifecycle state."""
 
 import json
+import os
+import shlex
 
 
 DELIVERY_FIELDS = frozenset({
@@ -29,6 +31,66 @@ def project_output(result, fields=None):
     order = {key: i for i, key in enumerate(LEADING)}
     order.update((key, len(LEADING) + 1 + i) for i, key in enumerate(TRAILING))
     return dict(sorted(result.items(), key=lambda item: order.get(item[0], len(LEADING))))
+
+
+# Profiles preserve the distinct, already published CLI wire formats. In
+# particular, raw/preflight output must not acquire protocol field ordering.
+_OUTPUT_PROFILES = {
+    'raw': dict(ensure_ascii=True, sort_keys=False),
+    'protocol': dict(ensure_ascii=False, sort_keys=False),
+    'lane': dict(ensure_ascii=True, sort_keys=True),
+}
+
+
+def render_output(value, *, profile='raw', fields=None, pretty=False):
+    """Encode one public value without a newline or changing the input object."""
+    options = _OUTPUT_PROFILES[profile]
+    if profile == 'protocol':
+        value = project_output(value, fields)
+    elif fields is not None:
+        raise ValueError('Field projection requires the protocol profile.')
+    return json.dumps(value, indent=2 if pretty else None, **options)
+
+
+def emit_output(value, *, profile='raw', fields=None, pretty=False):
+    """Write one complete JSON line; delivery acknowledgement stays with callers."""
+    print(render_output(value, profile=profile, fields=fields, pretty=pretty))
+
+
+def python_command(script, *args):
+    """Quote complete argv; callers retain ownership of installation selection."""
+    return ' '.join(shlex.quote(str(arg)) for arg in ('python3', script) + args)
+
+
+def ledger_command(hooks_dir, *args):
+    return python_command(os.path.join(hooks_dir, 'handoff_ledger.py'), *args)
+
+
+def continuation_command(hooks_dir, operation, path, session, fields=None):
+    args = (operation, path, '--session', session)
+    if fields is not None:
+        args += ('--fields', fields)
+    return ledger_command(hooks_dir, *args)
+
+
+def adopt_command(script, root, request_id):
+    return python_command(os.path.realpath(script), 'adopt', '--root',
+                          os.path.realpath(root), '--request-id', request_id)
+
+
+def handle_command(script, handle):
+    # Handles have already been validated/published by the intent store. Keep
+    # its historical literal suffix instead of changing how callers quote it.
+    return python_command(os.path.realpath(script), 'adopt') + ' ' + handle
+
+
+def command_template(script, args, suffix):
+    """Append a literal instructional fragment, never treat it as executable argv.
+
+    Placeholders such as <draft.json> and [--hold] must stay exactly as printed.
+    Only code-authored suffixes belong here; dynamic values belong in args.
+    """
+    return python_command(script, *args) + ' ' + suffix
 
 
 def continuity_items(value):
@@ -78,3 +140,61 @@ def continuation_document(document, previous=None):
     effective['continuity'] = merge_continuity(
         json.loads(previous.get('continuity', '[]')), document.get('continuity', []))
     return effective
+
+
+DISPATCH_BRANCHES = {'save': 'branches/save.md', 'pressure': 'branches/save.md', 'retrieve': 'branches/resume.md',
+          'resume': 'branches/resume.md', 'autoresume': 'branches/resume.md'}
+# code -> retryable. Only transient read/state failures retry, and only the same request.
+DISPATCH_CODES = {
+    'ok': False, 'recovery': False, 'history_only': False, 'held': False, 'released': False,
+    'no_operation': False, 'not_lifecycle': False, 'lifecycle_unrecognised': False,
+    'no_open_handoff': False, 'no_hold': False,
+    'claimed_elsewhere': False, 'stale_only': False, 'foreign_only': False, 'target_ambiguous': False,
+    'topic_ambiguous': False, 'confirmation_required': False, 'invalid_request': False,
+    'invalid_authorization': False, 'invalid_override': False, 'autoresume_not_enabled': False,
+    'identity_conflict': False, 'identity_required': False, 'target_not_found': False,
+    'target_superseded': False, 'target_closed': False, 'dispatch_pending': False,
+    'dispatch_state_invalid': False, 'restart_successor': False, 'lookup_error': True, 'publication_incomplete': False,
+    'hold_state_unreadable': True, 'state_changed': True,
+}
+DISPATCH_RETRY = dict(max_attempts=3, backoff_seconds=[1, 4, 16], same_request=True)
+
+
+def dispatch_result(outcome, code, request, **extra):
+    operation = request.get('_operation')
+    # Report the validated source on every outcome; only a proceed path may set authorized_to_execute.
+    base = dict(outcome=outcome, code=code, retryable=False, operation=operation,
+                operation_source=request.get('_operation_source'), classification=request.get('_classification'),
+                authorized_to_execute=False, authorization_source=request.get('_authorization'),
+                identity=request.get('_identity') or dict(session='', source='none', provenance='', conflict=None),
+                branch=DISPATCH_BRANCHES.get(operation), restart=dict(eligible='unknown', blockers=[]),
+                next_action=dict(kind='continue', command='', text='Continue the current request.'), recheck=[])
+    base.update(extra)
+    base['retryable'] = DISPATCH_CODES[code]
+    if base['retryable']:
+        base['retry'] = dict(DISPATCH_RETRY)
+    return base
+
+
+def blocked_result(request, code, text, retryable=False, **extra):
+    return dispatch_result('blocked', code, request, retryable=retryable,
+                  next_action=dict(kind='report', command='', text=text), **extra)
+
+
+_EXIT_FAILURES = {
+    'protocol': frozenset(('error', 'blocked', 'invalid', 'conflict', 'needs-context',
+                          'needs-original-draft', 'verification-failed',
+                          'verification-timeout', 'timeout', 'needs-confirmation')),
+    'report': frozenset(('unavailable',)),
+    'dispatch': frozenset(('blocked',)),
+}
+
+
+def exit_status(surface, outcome, operation=None):
+    """Published exit policies differ by CLI and operation; do not unify them."""
+    if surface == 'preflight':
+        expected = {'adopt': 'resumed', 'restart': 'ready'}.get(operation)
+        return int(expected is not None and outcome != expected)
+    if surface == 'protocol' and operation == 'save' and outcome == 'incomplete':
+        return 1
+    return int(outcome in _EXIT_FAILURES[surface])

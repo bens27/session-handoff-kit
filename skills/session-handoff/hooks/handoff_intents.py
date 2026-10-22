@@ -25,11 +25,11 @@ import math
 import os
 from pathlib import Path
 import re
-import shlex
 import stat
 import time
 from datetime import datetime
 
+import handoff_contract as contract
 import handoff_ledger as ledger
 import handoff_protocol as protocol
 from handoff_record import live as _checkpoint_live
@@ -98,9 +98,7 @@ def write(location_, record):
 
 def adopt_command(root, request_id, script=ADOPT_SCRIPT):
     """The one successor command a restart prompt or dispatcher hands over."""
-    return 'python3 %s adopt --root %s --request-id %s' % (
-        shlex.quote(os.path.realpath(script)), shlex.quote(os.path.realpath(root)),
-        shlex.quote(request_id))
+    return contract.adopt_command(script, root, request_id)
 
 
 BINDING_KEYS = ('checkpoint_id', 'path', 'request_id', 'root', 'session', 'terminal')
@@ -146,7 +144,7 @@ def publish_handle(binding):
 
 
 def handle_command(handle, script=ADOPT_SCRIPT):
-    return 'python3 %s adopt %s' % (shlex.quote(os.path.realpath(script)), handle)
+    return contract.handle_command(script, handle)
 
 
 # -- TTL and states --------------------------------------------------------------

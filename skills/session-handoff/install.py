@@ -31,7 +31,7 @@ import time
 RUNTIME_FORMAT = 1
 REQUIRED_RUNTIME = {"SKILL.md", "branches/save.md", "branches/resume.md", "continuation.md", "handoff-template.md", "reference.md",
                     "install.py", "hooks/context_watch.py", "hooks/handoff_ledger.py",
-                    "hooks/handoff_protocol.py", "hooks/handoff_contract.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_record.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
+                    "hooks/handoff_protocol.py", "hooks/handoff_contract.py", "hooks/handoff_cli.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_record.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
 # Explicit product inputs, independent of Git metadata so extracted packages
 # behave exactly like checkouts. Local config, secrets and editor files are not
 # distributable inputs. Update this declaration when adding a product file.

@@ -1,0 +1,355 @@
+[
+  {
+    "script": "handoff_ledger.py",
+    "args": [],
+    "input": null,
+    "stdout": "Preferred workflow: resume [--session S] (one-shot) | lookup | save | prepare | verify | acknowledge | wait | history | report | session.\nRun a command with --help for arguments. Legacy interfaces below:\nhandoff-ledger: track which session handoffs are still open (untransferred).\n\nLayout:\n  ./.handoffs/<YYYYMMDD-HHMM>-<topic>.md   handoff files, named by ending\n                                           date/time, with front matter\n                                           (status: open|resumed|superseded|abandoned,\n                                           description: one-line summary,\n                                           skills: comma-separated skill names,\n                                           references: comma-separated paths,\n                                           project: absolute project root,\n                                           git: branch@sha when it was written)\n  ./.handoffs/<topic>.md                   legacy undated naming, still scanned\n  ./HANDOFF.md                             legacy single file, topic \"default\"\n\nA handoff is OPEN until a session actually resumes it and marks it, so session\nstarts can announce untransferred work without ever re-announcing what has\nalready been picked up. Re-handing-off the same thread writes a new dated file\nand marks the previous one superseded.\n\nThe project root is the nearest ancestor of the working directory that has a\n./.handoffs/ directory (or whose per-project fallback directory holds a handoff\nrecording it as `project:`), stopping at $HOME; otherwise the directory itself.\nA session started in a subfolder therefore still finds the project's handoffs.\n\nSubcommands:\n  list [dir] [--json] [--max-age-days N]   print open handoffs (default dir: .)\n  resolve <topic-or-path> [dir] [--json]   compact authoritative metadata;\n                                            use history for older records\n  new-path <topic> [dir] [--json]          print deterministic path data for a new handoff\n                                           (--json adds the handoff template)\n  claim <path> [--owner X]                 stamp a handoff as being resumed now, so a\n                                            parallel session start does not announce it;\n                                            refuses a live claim held by another owner\n  release <path> [--owner X]               drop a claim without resuming\n  resume <path> [--owner X]                legacy direct transfer; all callers\n                                            respect a live claim's owner\n  supersede <path> [--by <new-path>]       mark a handoff replaced by a newer one\n  abandon <path>                           mark a handoff dropped (never to be resumed)\n  save-path [dir]                          print where new handoffs should be saved\n\nStdlib only. Also importable: scan(root, max_age_days, stats=None),\nproject_root(start), mark_resumed(path), mark_superseded(path).\n\n",
+    "stderr": "",
+    "code": 0
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "--help"
+    ],
+    "input": null,
+    "stdout": "Preferred workflow: resume [--session S] (one-shot) | lookup | save | prepare | verify | acknowledge | wait | history | report | session.\nRun a command with --help for arguments. Legacy interfaces below:\nhandoff-ledger: track which session handoffs are still open (untransferred).\n\nLayout:\n  ./.handoffs/<YYYYMMDD-HHMM>-<topic>.md   handoff files, named by ending\n                                           date/time, with front matter\n                                           (status: open|resumed|superseded|abandoned,\n                                           description: one-line summary,\n                                           skills: comma-separated skill names,\n                                           references: comma-separated paths,\n                                           project: absolute project root,\n                                           git: branch@sha when it was written)\n  ./.handoffs/<topic>.md                   legacy undated naming, still scanned\n  ./HANDOFF.md                             legacy single file, topic \"default\"\n\nA handoff is OPEN until a session actually resumes it and marks it, so session\nstarts can announce untransferred work without ever re-announcing what has\nalready been picked up. Re-handing-off the same thread writes a new dated file\nand marks the previous one superseded.\n\nThe project root is the nearest ancestor of the working directory that has a\n./.handoffs/ directory (or whose per-project fallback directory holds a handoff\nrecording it as `project:`), stopping at $HOME; otherwise the directory itself.\nA session started in a subfolder therefore still finds the project's handoffs.\n\nSubcommands:\n  list [dir] [--json] [--max-age-days N]   print open handoffs (default dir: .)\n  resolve <topic-or-path> [dir] [--json]   compact authoritative metadata;\n                                            use history for older records\n  new-path <topic> [dir] [--json]          print deterministic path data for a new handoff\n                                           (--json adds the handoff template)\n  claim <path> [--owner X]                 stamp a handoff as being resumed now, so a\n                                            parallel session start does not announce it;\n                                            refuses a live claim held by another owner\n  release <path> [--owner X]               drop a claim without resuming\n  resume <path> [--owner X]                legacy direct transfer; all callers\n                                            respect a live claim's owner\n  supersede <path> [--by <new-path>]       mark a handoff replaced by a newer one\n  abandon <path>                           mark a handoff dropped (never to be resumed)\n  save-path [dir]                          print where new handoffs should be saved\n\nStdlib only. Also importable: scan(root, max_age_days, stats=None),\nproject_root(start), mark_resumed(path), mark_superseded(path).\n\n",
+    "stderr": "",
+    "code": 0
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "unknown"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "unknown subcommand: unknown\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "list",
+      "--json",
+      "--max-age-days",
+      "bad"
+    ],
+    "input": null,
+    "stdout": "[]\n",
+    "stderr": "",
+    "code": 0
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "list",
+      "--json",
+      "--max-age-days"
+    ],
+    "input": null,
+    "stdout": "[]\n",
+    "stderr": "",
+    "code": 0
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "list",
+      "--json",
+      "--pretty"
+    ],
+    "input": null,
+    "stdout": "[]\n",
+    "stderr": "",
+    "code": 0
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "list",
+      "--json",
+      "--max-age-days",
+      "--pretty"
+    ],
+    "input": null,
+    "stdout": "[]\n",
+    "stderr": "",
+    "code": 0
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resolve"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py resolve <topic-or-path> [dir] [--json]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resolve",
+      "--json"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py resolve <topic-or-path> [dir] [--json]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resolve",
+      "missing-topic",
+      "--json"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no handoffs found for topic: missing-topic\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "new-path"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py new-path <topic> [dir] [--json]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "new-path",
+      "bad topic"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "invalid topic: use a short kebab-case topic\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "new-path",
+      "--json"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py new-path <topic> [dir] [--json]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resume"
+    ],
+    "input": null,
+    "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\"}\n",
+    "stderr": "",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resume",
+      "missing.md"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no such handoff: missing.md\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resume",
+      "missing.md",
+      "--owner"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py resume <path> [--owner X]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "resume",
+      "missing.md",
+      "--owner",
+      "x"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no such handoff: missing.md\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "claim"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py claim <path>\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "claim",
+      "missing.md",
+      "--owner"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py claim <path> [--owner X]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "claim",
+      "--owner",
+      "x"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py claim <path>\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "claim",
+      "missing.md",
+      "--owner",
+      "--by"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no such handoff: missing.md\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "release"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py release <path>\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "release",
+      "missing.md"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no such handoff: missing.md\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "release",
+      "--scope",
+      "bad"
+    ],
+    "input": null,
+    "stdout": "{\"outcome\": \"blocked\", \"code\": \"invalid_request\", \"retryable\": false, \"action\": \"Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.\"}\n",
+    "stderr": "",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "release",
+      "--owner"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py release <path> [--owner X]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "supersede"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py supersede <path>\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "supersede",
+      "missing.md",
+      "--by"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py supersede <path> [--by <new-path>]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "supersede",
+      "missing.md",
+      "--by",
+      "new.md"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no such handoff: missing.md\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "supersede",
+      "--owner"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py supersede <path> [--owner X]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "abandon",
+      "missing.md",
+      "--owner"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "usage: handoff_ledger.py abandon <path> [--owner X]\n",
+    "code": 1
+  },
+  {
+    "script": "handoff_ledger.py",
+    "args": [
+      "abandon",
+      "missing.md",
+      "--owner",
+      "x",
+      "--owner",
+      "y"
+    ],
+    "input": null,
+    "stdout": "",
+    "stderr": "no such handoff: missing.md\n",
+    "code": 1
+  }
+]

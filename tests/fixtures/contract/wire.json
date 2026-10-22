@@ -1,0 +1,283 @@
+{
+  "baseline": "5f8c0808b8b2cf932bce4de518f789037b5d980c",
+  "render": [
+    {
+      "profile": "protocol",
+      "fields": null,
+      "pretty": false,
+      "value": {
+        "body": "R\u00e9sum\u00e9\n",
+        "extra": "omitted",
+        "skills": [
+          "caf\u00e9"
+        ],
+        "outcome": "resumed",
+        "path": "/tmp/a b.md",
+        "action": "Continue",
+        "references": [],
+        "next_step": "Go",
+        "verification": {
+          "ok": true
+        }
+      },
+      "stdout": "{\"outcome\": \"resumed\", \"action\": \"Continue\", \"next_step\": \"Go\", \"path\": \"/tmp/a b.md\", \"extra\": \"omitted\", \"verification\": {\"ok\": true}, \"references\": [], \"skills\": [\"caf\u00e9\"], \"body\": \"R\u00e9sum\u00e9\\n\"}\n"
+    },
+    {
+      "profile": "protocol",
+      "fields": "path,body",
+      "pretty": false,
+      "value": {
+        "body": "R\u00e9sum\u00e9\n",
+        "extra": "omitted",
+        "skills": [
+          "caf\u00e9"
+        ],
+        "outcome": "resumed",
+        "path": "/tmp/a b.md",
+        "action": "Continue",
+        "references": [],
+        "next_step": "Go",
+        "verification": {
+          "ok": true
+        }
+      },
+      "stdout": "{\"outcome\": \"resumed\", \"action\": \"Continue\", \"next_step\": \"Go\", \"path\": \"/tmp/a b.md\", \"verification\": {\"ok\": true}, \"references\": [], \"skills\": [\"caf\u00e9\"], \"body\": \"R\u00e9sum\u00e9\\n\"}\n"
+    },
+    {
+      "profile": "raw",
+      "fields": null,
+      "pretty": false,
+      "value": {
+        "body": "R\u00e9sum\u00e9\n",
+        "extra": "omitted",
+        "skills": [
+          "caf\u00e9"
+        ],
+        "outcome": "resumed",
+        "path": "/tmp/a b.md",
+        "action": "Continue",
+        "references": [],
+        "next_step": "Go",
+        "verification": {
+          "ok": true
+        }
+      },
+      "stdout": "{\"body\": \"R\\u00e9sum\\u00e9\\n\", \"extra\": \"omitted\", \"skills\": [\"caf\\u00e9\"], \"outcome\": \"resumed\", \"path\": \"/tmp/a b.md\", \"action\": \"Continue\", \"references\": [], \"next_step\": \"Go\", \"verification\": {\"ok\": true}}\n"
+    },
+    {
+      "profile": "raw",
+      "fields": null,
+      "pretty": true,
+      "value": {
+        "body": "R\u00e9sum\u00e9\n",
+        "extra": "omitted",
+        "skills": [
+          "caf\u00e9"
+        ],
+        "outcome": "resumed",
+        "path": "/tmp/a b.md",
+        "action": "Continue",
+        "references": [],
+        "next_step": "Go",
+        "verification": {
+          "ok": true
+        }
+      },
+      "stdout": "{\n  \"body\": \"R\\u00e9sum\\u00e9\\n\",\n  \"extra\": \"omitted\",\n  \"skills\": [\n    \"caf\\u00e9\"\n  ],\n  \"outcome\": \"resumed\",\n  \"path\": \"/tmp/a b.md\",\n  \"action\": \"Continue\",\n  \"references\": [],\n  \"next_step\": \"Go\",\n  \"verification\": {\n    \"ok\": true\n  }\n}\n"
+    },
+    {
+      "profile": "lane",
+      "fields": null,
+      "pretty": false,
+      "value": {
+        "body": "R\u00e9sum\u00e9\n",
+        "extra": "omitted",
+        "skills": [
+          "caf\u00e9"
+        ],
+        "outcome": "resumed",
+        "path": "/tmp/a b.md",
+        "action": "Continue",
+        "references": [],
+        "next_step": "Go",
+        "verification": {
+          "ok": true
+        }
+      },
+      "stdout": "{\"action\": \"Continue\", \"body\": \"R\\u00e9sum\\u00e9\\n\", \"extra\": \"omitted\", \"next_step\": \"Go\", \"outcome\": \"resumed\", \"path\": \"/tmp/a b.md\", \"references\": [], \"skills\": [\"caf\\u00e9\"], \"verification\": {\"ok\": true}}\n"
+    },
+    {
+      "profile": "raw",
+      "fields": null,
+      "pretty": true,
+      "value": [
+        {
+          "path": "\u00e9"
+        }
+      ],
+      "stdout": "[\n  {\n    \"path\": \"\\u00e9\"\n  }\n]\n"
+    }
+  ],
+  "cli": [
+    {
+      "script": "handoff_ledger.py",
+      "args": [
+        "save",
+        "--template"
+      ],
+      "input": null,
+      "stdout": "{\"topic\": \"task-checkpoint\", \"description\": \"Replace with the actual task state.\", \"body\": \"## Objective\\nState the authorized goal.\\n## Constraints\\nList the limits the next session must keep.\\n## Current state\\nRecord verified evidence.\\n## Decisions\\nRecord choices already made and why.\\n## Pending operations\\nName any operation started but not confirmed, or None.\\n## Next steps\\nName the exact next action; put files it edits or depends on in references as path#Lstart-Lend.\\n\", \"references\": [], \"skills\": [], \"continuity\": [{\"id\": \"goal\", \"text\": \"Replace with the original authorized goal and durable constraints.\", \"status\": \"open\"}]}\n",
+      "stderr": "",
+      "code": 0
+    },
+    {
+      "script": "handoff_ledger.py",
+      "args": [
+        "report",
+        "--log",
+        "/nonexistent-contract-log"
+      ],
+      "input": null,
+      "stdout": "{\"outcome\": \"no-data\", \"action\": \"No telemetry log exists; no delivery measurements are available.\"}\n",
+      "stderr": "",
+      "code": 0
+    },
+    {
+      "script": "handoff_ledger.py",
+      "args": [
+        "dispatch",
+        "--input",
+        "-"
+      ],
+      "input": "{",
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"invalid_request\", \"retryable\": false, \"operation\": null, \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"Unreadable request: Expecting property name enclosed in double quotes: line 1 column 2 (char 1).\"}, \"recheck\": []}\n",
+      "stderr": "",
+      "code": 1
+    },
+    {
+      "script": "restart_preflight.py",
+      "args": [
+        "adopt"
+      ],
+      "input": "{}",
+      "stdout": "{\"outcome\": \"blocked\", \"dispatch\": false, \"reason\": \"adopt requires a short handle, legacy binding JSON, or --root and --request-id.\", \"host_confirmed\": false}\n",
+      "stderr": "",
+      "code": 1
+    },
+    {
+      "script": "handoff_ledger.py",
+      "args": [
+        "list",
+        "--json"
+      ],
+      "input": null,
+      "stdout": "[]\n",
+      "stderr": "",
+      "code": 0
+    },
+    {
+      "script": "handoff_ledger.py",
+      "args": [
+        "resolve"
+      ],
+      "input": null,
+      "stdout": "",
+      "stderr": "usage: handoff_ledger.py resolve <topic-or-path> [dir] [--json]\n",
+      "code": 1
+    },
+    {
+      "script": "handoff_ledger.py",
+      "args": [
+        "dispatch",
+        "--input",
+        "-"
+      ],
+      "input": "{\"prompt\": \"resume later\"}",
+      "stdout": "{\"outcome\": \"ask\", \"code\": \"lifecycle_unrecognised\", \"retryable\": false, \"operation\": null, \"operation_source\": null, \"classification\": \"lifecycle_unrecognised\", \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"ask\", \"command\": \"\", \"text\": \"Do you want to save a checkpoint, resume one, or retrieve one, or neither?\", \"options\": [{\"operation\": \"save\", \"label\": \"Save a checkpoint\", \"description\": \"Save the current work for a later session.\"}, {\"operation\": \"resume\", \"label\": \"Resume a checkpoint\", \"description\": \"Continue work from a saved checkpoint.\"}, {\"operation\": \"retrieve\", \"label\": \"Retrieve a checkpoint\", \"description\": \"Read a saved checkpoint without continuing its work.\"}, {\"operation\": \"none\", \"label\": \"Neither\", \"description\": \"Continue the current request without a handoff action.\"}]}, \"recheck\": []}\n",
+      "stderr": "",
+      "code": 0
+    }
+  ],
+  "hook": [
+    {
+      "agent": "claude",
+      "event": "PostToolUse",
+      "mode": "block",
+      "stdout": "{\"decision\": \"block\", \"reason\": \"R\\u00e9sum\\u00e9 \\\"quoted\\\"\\nnext\"}\n",
+      "code": 0
+    },
+    {
+      "agent": "claude",
+      "event": "UserPromptSubmit",
+      "mode": "warn",
+      "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"R\\u00e9sum\\u00e9 \\\"quoted\\\"\\nnext\"}}\n",
+      "code": 0
+    },
+    {
+      "agent": "codex",
+      "event": "PostToolUse",
+      "mode": "warn",
+      "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"R\\u00e9sum\\u00e9 \\\"quoted\\\"\\nnext\"}}\n",
+      "code": 0
+    },
+    {
+      "agent": "codex",
+      "event": "UserPromptSubmit",
+      "mode": "warn",
+      "stdout": "R\u00e9sum\u00e9 \"quoted\"\nnext\n",
+      "code": 0
+    }
+  ],
+  "opening": [
+    {
+      "args": [
+        "resume contract-task",
+        {
+          "outcome": "available",
+          "items": [
+            {
+              "topic": "contract-task",
+              "path": "/project's/task.md",
+              "created": "",
+              "parked": "2026-10-20T12:00:00",
+              "last_resumed": "2026-10-21T12:00:00",
+              "ended": "2026-10-20T12:00:00",
+              "age_days": 2,
+              "description": "R\u00e9sum\u00e9 task",
+              "terminal": "term"
+            }
+          ],
+          "total": 1,
+          "stale": 0
+        },
+        "session id"
+      ],
+      "stdout": "Handoff 'contract-task' (created 2026-10-20T12:00:00, parked 2026-10-20T12:00:00, last resumed 2026-10-21T12:00:00, 2d old) \u2014 R\u00e9sum\u00e9 task. Note: parked 2 days (saved 2026-10-20T12:00:00). Run python3 <HOOKS>/handoff_ledger.py resume '/project'\"'\"'s/task.md' --session 'session id'. It claims, verifies and acknowledges in one call; then continue with ## Next steps in its body."
+    },
+    {
+      "args": [
+        "retrieve contract-task",
+        {
+          "outcome": "available",
+          "items": [
+            {
+              "topic": "contract-task",
+              "path": "/project's/task.md",
+              "created": "",
+              "parked": "2026-10-20T12:00:00",
+              "last_resumed": "2026-10-21T12:00:00",
+              "ended": "2026-10-20T12:00:00",
+              "age_days": 2,
+              "description": "R\u00e9sum\u00e9 task",
+              "terminal": "term"
+            }
+          ],
+          "total": 1,
+          "stale": 0
+        },
+        "session id"
+      ],
+      "stdout": "Handoff 'contract-task' (created 2026-10-20T12:00:00, parked 2026-10-20T12:00:00, last resumed 2026-10-21T12:00:00, 2d old) \u2014 R\u00e9sum\u00e9 task. Note: parked 2 days (saved 2026-10-20T12:00:00). Run python3 <HOOKS>/handoff_ledger.py prepare '/project'\"'\"'s/task.md' --session 'session id'. Retrieve only; leave execution skills, verification and next steps until continuation is authorized."
+    }
+  ]
+}

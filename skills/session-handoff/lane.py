@@ -30,6 +30,7 @@ import tempfile
 
 # Git error handling lives in the workspace seam, installed beside this script.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks"))
+from handoff_contract import emit_output  # noqa: E402
 import handoff_workspace as workspace  # noqa: E402
 
 
@@ -39,7 +40,7 @@ class Usage(Exception):
 
 def emit(code, outcome, **fields):
     fields = dict(outcome=outcome, **fields)
-    print(json.dumps(fields, sort_keys=True))
+    emit_output(fields, profile='lane')
     return code
 
 

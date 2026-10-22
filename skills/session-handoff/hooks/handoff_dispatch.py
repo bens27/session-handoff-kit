@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import sys
 
 import handoff_identity
@@ -18,28 +17,15 @@ import handoff_ledger as ledger
 import handoff_workspace as workspace
 from handoff_record import Record
 import handoff_protocol as protocol
+from handoff_contract import (
+    DISPATCH_BRANCHES as BRANCH, DISPATCH_CODES as CODES, DISPATCH_RETRY as RETRY,
+    dispatch_result as result, blocked_result as blocked, python_command, emit_output, exit_status)
 
 LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'handoff_ledger.py')
 OPERATIONS = ('save', 'pressure', 'retrieve', 'resume', 'autoresume')
-BRANCH = {'save': 'branches/save.md', 'pressure': 'branches/save.md', 'retrieve': 'branches/resume.md',
-          'resume': 'branches/resume.md', 'autoresume': 'branches/resume.md'}
 REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authorization', 'override', 'host',
                           'request_id', 'reuse', 'expect', 'topic'))
 
-# code -> retryable. Only transient read/state failures retry, and only the same request.
-CODES = {
-    'ok': False, 'recovery': False, 'history_only': False, 'held': False, 'released': False,
-    'no_operation': False, 'not_lifecycle': False, 'lifecycle_unrecognised': False,
-    'no_open_handoff': False, 'no_hold': False,
-    'claimed_elsewhere': False, 'stale_only': False, 'foreign_only': False, 'target_ambiguous': False,
-    'topic_ambiguous': False, 'confirmation_required': False, 'invalid_request': False,
-    'invalid_authorization': False, 'invalid_override': False, 'autoresume_not_enabled': False,
-    'identity_conflict': False, 'identity_required': False, 'target_not_found': False,
-    'target_superseded': False, 'target_closed': False, 'dispatch_pending': False,
-    'dispatch_state_invalid': False, 'restart_successor': False, 'lookup_error': True, 'publication_incomplete': False,
-    'hold_state_unreadable': True, 'state_changed': True,
-}
-RETRY = dict(max_attempts=3, backoff_seconds=[1, 4, 16], same_request=True)
 HOST_KEYS = frozenset(('restart_capable', 'workers', 'hold', 'restart_request_id'))
 
 NEUTRAL = re.compile(r'^\s*(handoff-status:|\[context-watch\]\s*handoff saved\b)', re.I)
@@ -125,7 +111,7 @@ def classify(prompt):
 
 
 def _command(*args):
-    return ' '.join(shlex.quote(str(a)) for a in ('python3', LEDGER) + args)
+    return python_command(LEDGER, *args)
 
 
 def autoresume_configured():
@@ -133,26 +119,6 @@ def autoresume_configured():
     import context_watch
     return context_watch.autoresume_on()
 
-
-def result(outcome, code, request, **extra):
-    operation = request.get('_operation')
-    # Report the validated source on every outcome; only a proceed path may set authorized_to_execute.
-    base = dict(outcome=outcome, code=code, retryable=False, operation=operation,
-                operation_source=request.get('_operation_source'), classification=request.get('_classification'),
-                authorized_to_execute=False, authorization_source=request.get('_authorization'),
-                identity=request.get('_identity') or dict(session='', source='none', provenance='', conflict=None),
-                branch=BRANCH.get(operation), restart=dict(eligible='unknown', blockers=[]),
-                next_action=dict(kind='continue', command='', text='Continue the current request.'), recheck=[])
-    base.update(extra)
-    base['retryable'] = CODES[code]
-    if base['retryable']:
-        base['retry'] = dict(RETRY)
-    return base
-
-
-def blocked(request, code, text, retryable=False, **extra):
-    return result('blocked', code, request, retryable=retryable,
-                  next_action=dict(kind='report', command='', text=text), **extra)
 
 
 def dispatch(request, root='.'):
@@ -754,11 +720,11 @@ def cli(argv):
             raw = protocol.read_cli_input(a.input)
             request = json.loads(raw)
         except (OSError, ValueError) as exc:
-            print(json.dumps(blocked({}, 'invalid_request', 'Unreadable request: %s.' % exc)))
+            emit_output(blocked({}, 'invalid_request', 'Unreadable request: %s.' % exc))
             return 1
         out = dispatch(request, a.root)
-        print(json.dumps(out, indent=2 if a.pretty else None))
-        return 0 if out['outcome'] != 'blocked' else 1
+        emit_output(out, pretty=a.pretty)
+        return exit_status('dispatch', out['outcome'])
     if cmd in ('hold', 'release'):
         import argparse
         p = argparse.ArgumentParser(prog='handoff_ledger.py ' + cmd)
@@ -770,10 +736,10 @@ def cli(argv):
         a = p.parse_args(args)
         reason = getattr(a, 'reason', None)
         if not SCOPE.fullmatch(a.scope) or (cmd == 'hold' and not reason.strip()):
-            print(json.dumps(dict(outcome='blocked', code='invalid_request', retryable=False,
-                                  action='Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.')))
+            emit_output(dict(outcome='blocked', code='invalid_request', retryable=False,
+                                  action='Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.'))
             return 1
-        print(json.dumps(set_hold(handoff_identity.project_root(a.root), a.scope, reason and reason.strip()[:300]), indent=2 if a.pretty else None))
+        emit_output(set_hold(handoff_identity.project_root(a.root), a.scope, reason and reason.strip()[:300]), pretty=a.pretty)
         return 0
     print('unknown subcommand: %s' % cmd, file=sys.stderr)
     return 1
