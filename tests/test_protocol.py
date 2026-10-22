@@ -613,7 +613,7 @@ with patch('time.time', return_value=float(sys.argv[2])):
         self.assertNotIn(Path(foreign).name, out)
         self.assertNotIn(Path(normal).name, out)
         self.assertIn(' repair ', out)
-        self.assertIn('Do not clear', out)
+        self.assertIn('do not clear', out.lower())
         self.env['AGENTSROOM_AGENT_ID'] = 'agent-c'
         self.assertEqual(self.hook('SessionStart', source='startup'), {})
 
@@ -1324,6 +1324,7 @@ with patch('time.time', return_value=float(sys.argv[2])):
         out = json.loads(self.cli('prepare', first['path'], '--session', 'one', ok=False).stdout)
         self.assertEqual(out['outcome'], 'incomplete', out)
         self.assertIn('retry', out['action'])
+        self.assertIn('repair', out['recovery']['command'])
 
     def test_new_path_rejects_a_topic_that_is_not_kebab_case(self):
         for topic in ('../../x', 'Has Space', ''):

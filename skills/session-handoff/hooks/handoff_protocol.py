@@ -143,15 +143,8 @@ def hook_opening_note(event):
     record = own[0]
     fm, path = record['fm'], record['path']
     if fm.get('status') == 'unpublished':
-        if not os.path.isfile(recovery_path(root, path)):
-            return ('handoff-status: Incomplete checkpoint %s has no durable publication intent; retry the original save request: '
-                    'python3 %s save --session %s --request-id <original-request-id> --input <original-draft.json>. '
-                    'Keep the session; do not clear.'
-                    % (json.dumps(path), shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
-                       shlex.quote(fm.get('session_id') or session)))
-        return ('handoff-status: Incomplete checkpoint %s; run python3 %s repair %s. Do not clear.'
-                % (json.dumps(path), shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py')),
-                   shlex.quote(path)))
+        recovery = publication_recovery(root, path)
+        return 'handoff-status: ' + recovery['text']
     if event.get('hook_event_name') == 'SessionStart':
         return ''
     # resolve() follows a topic's newest successor, even when a path was supplied.
@@ -173,6 +166,38 @@ def hook_opening_note(event):
     return ('The session-handoff skill does not need to load. Run %s; follow its outcome/action, '
             'then continue with ## Next steps in the returned body. Run it exactly as given, with no head, '
             'pipe or redirect: its output is the complete required package.' % command)
+
+
+def publication_recovery(root, path):
+    """Describe a concrete recovery without blessing changed or legacy content."""
+    repairable = False
+    fm = {}
+    try:
+        text = read_text(path)
+        fm = ledger.parse_front_matter(text)
+        intent = load_state_json(recovery_path(root, path))
+        key = hashlib.sha256((os.path.realpath(ledger.project_root(root)) + '\0' + os.path.realpath(path)).encode()).hexdigest()
+        repairable = (fm.get('status') == 'open' and intent.get('path') == os.path.realpath(path)
+                      and os.path.realpath(intent.get('root', '')) == os.path.realpath(ledger.project_root(root))
+                      and ledger.valid_seal(intent.get('seal'), key, hashlib.sha256(text.encode()).hexdigest()))
+    except (OSError, ValueError, TypeError):
+        pass
+    cli = 'python3 ' + shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
+    abandon = cli + ' abandon ' + shlex.quote(path)
+    command = (cli + ' repair ' + shlex.quote(path) + ' --root ' + shlex.quote(ledger.project_root(root))
+               if repairable else abandon)
+    text = ('Incomplete checkpoint %s. ' % json.dumps(path))
+    if repairable:
+        text += 'In the publishing terminal, complete the unchanged publication with: %s. ' % command
+    else:
+        original = '%s save --session %s --request-id <original-request-id> --input <original-draft.json>' % (
+            cli, shlex.quote(fm.get('session_id') or ''))
+        text += ('No authenticated intent matches the current checkpoint. Preserve it for inspection; '
+                 'if available, retry the original save request: %s. '
+                 'Otherwise ask the user before explicitly abandoning it with: %s. '
+                 'Abandonment closes the record without trusting or inheriting its content. ' % (original, abandon))
+    text += 'Keep the session; do not clear. An unchanged resume retry cannot repair publication.'
+    return dict(path=path, kind='repair' if repairable else 'abandon', command=command, text=text)
 
 
 def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None):
@@ -201,7 +226,7 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
     outcome = ('error' if stats['errors'] else 'incomplete' if stats['incomplete'] else 'available' if items else
                'claimed' if stats['claimed'] else 'stale' if stats['stale'] else 'none')
     actions = {
-        'incomplete': 'A checkpoint publication is incomplete or changed. Keep the draft/session; retry the original save request, or inspect history to repair it. Do not clear.',
+        'incomplete': 'Select an incomplete publication for recovery.',
         'none': 'No open handoff found. Continue the current task; for an explicit retrieval request report this result. Use history to inspect closed work.',
         'claimed': 'The handoff is held by another session. Continue unrelated work or wait for release; do not adopt it.',
         'stale': 'Only stale handoffs remain. Run lookup --max-age-days 9999 to select one explicitly.',
@@ -210,6 +235,9 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
     }
     result = dict(outcome=outcome, action=actions[outcome], items=items[max(0, offset):max(0, offset)+5], total=len(items),
                   stale=stats['stale'], claimed=stats['claimed'], incomplete=stats['incomplete'], errors=stats['errors'][:5])
+    if outcome == 'incomplete':
+        result['recovery'] = [publication_recovery(root, p) for p in stats['incomplete_paths'][:5]]
+        result['action'] = result['recovery'][0]['text']
     if selected:
         result['selected'] = selected
     if hidden:
@@ -852,8 +880,8 @@ def repair(path, root, session):
         try:
             recovery = load_state_json(recovery_path(root, path))
         except FileNotFoundError:
-            return dict(outcome='needs-original-draft', path=path,
-                        action='No durable publication intent exists for this legacy save. Retry the original save request ID and draft; preserve the checkpoint and current session. Do not clear.')
+            recovery = publication_recovery(root, path)
+            return dict(outcome='needs-original-draft', path=path, recovery=recovery, action=recovery['text'])
         key = hashlib.sha256((os.path.realpath(root) + '\0' + path).encode()).hexdigest()
         text = read_text(path)
         if not ledger.valid_seal(recovery['seal'], key, hashlib.sha256(text.encode()).hexdigest()):
@@ -998,7 +1026,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
     if not path:
         return dict(outcome='none', action='No saved handoff matches the requested target %r. Use lookup only to select different saved work explicitly; native conversation recovery is independent.' % str(requested)[:200])
     if resolved['chain'][-1]['status'] == 'unpublished':
-        return dict(outcome='incomplete', path=path, action='The newest checkpoint for this topic was never fully published (interrupted save). Keep the draft/session; retry the original save request to finish it, or inspect history to repair it. Do not clear.')
+        recovery = publication_recovery(root, path)
+        return dict(outcome='incomplete', path=path, recovery=recovery, action=recovery['text'])
     if resolved['chain'][-1]['status'] != 'open':
         return dict(outcome='closed', action='This topic is already transferred or closed. Use history for inspection; do not adopt it.')
     supplied = catalog is not None

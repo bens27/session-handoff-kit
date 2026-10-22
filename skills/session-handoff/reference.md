@@ -291,7 +291,9 @@ than stay silent.
 
 Publication receipts: generated checkpoints carry a `.published` sidecar binding
 the publication ID to its content fingerprint. Until that receipt is durable,
-lookup reports `incomplete` and automatic clearing is blocked. Retrying the same
+lookup reports `incomplete` for open work and automatic clearing is blocked. Closed
+records stay closed even when edited after publication; inspect them through history.
+Their content remains subject to trust checks. Retrying the same
 request completes an interrupted receipt. Legacy checkpoints without publication
 IDs remain readable. Keep receipt sidecars with generated checkpoint files.
 
@@ -350,7 +352,11 @@ apply to deliberate cross-terminal adoption.
 If publication stopped before the document reached disk, retain the draft and
 retry the same save request. If the document exists without its publication
 receipt, it remains incomplete; use authenticated `repair` or the original save
-request. A missing/deleted or truncated checkpoint is not silently rebuilt from
+request. If no authenticated intent matches the current file and the original
+request is unavailable, ask before running the emitted `abandon PATH` command. It
+needs only that file, closes the record and inherits nothing from it. Hooks and
+dispatch emit the same recovery choice; `publication_incomplete` is non-retryable
+without a state change. A missing/deleted or truncated checkpoint is not silently rebuilt from
 an intent or transfer receipt. Restore verified original bytes/draft explicitly
 before repair; preserve evidence and native history meanwhile. Pending restart
 intent is not proof of saved context or permission to redispatch; keep host-side

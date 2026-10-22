@@ -29,7 +29,7 @@ CODES = {
     'invalid_authorization': False, 'invalid_override': False, 'autoresume_not_enabled': False,
     'identity_conflict': False, 'identity_required': False, 'target_not_found': False,
     'target_superseded': False, 'target_closed': False, 'dispatch_pending': False,
-    'dispatch_state_invalid': False, 'restart_successor': False, 'lookup_error': True, 'publication_incomplete': True,
+    'dispatch_state_invalid': False, 'restart_successor': False, 'lookup_error': True, 'publication_incomplete': False,
     'hold_state_unreadable': True, 'state_changed': True,
 }
 RETRY = dict(max_attempts=3, backoff_seconds=[1, 4, 16], same_request=True)
@@ -248,14 +248,20 @@ def select_target(root, request, session):
             return info, ('blocked', 'target_superseded', 'This checkpoint was superseded by %s. Exact targets never switch; '
                           'ask the user before using the newer one.' % resolved['authoritative'])
         status = next(c['status'] for c in chain if c['path'] == path)
+        if status == 'unpublished':
+            recovery = protocol.publication_recovery(root, path)
+            info['recovery'] = [recovery]
+            return info, ('blocked', 'publication_incomplete', recovery['text'])
         if status != 'open':
             if operation == 'retrieve':
                 return info, ('proceed', 'history_only', 'Closed checkpoint (%s): inspection only.' % status)
             return info, ('blocked', 'target_closed', 'This checkpoint is %s; it cannot be resumed again.' % status)
         return info, None
     found = protocol.lookup(root, session=session)
-    if found['outcome'] in ('error', 'incomplete'):
-        return None, ('blocked', 'lookup_error' if found['outcome'] == 'error' else 'publication_incomplete', found['action'], True)
+    if found['outcome'] == 'error':
+        return None, ('blocked', 'lookup_error', found['action'], True)
+    if found['outcome'] == 'incomplete':
+        return dict(recovery=found['recovery']), ('blocked', 'publication_incomplete', found['action'])
     mine = [i for i in found['items'] if i.get('mine')]
     selected = found.get('selected')
     if selected:
@@ -623,6 +629,12 @@ def route(request, root):
         if target and target.get('path') and os.path.isfile(target['path']):
             target['fingerprint'] = protocol.snapshot(target['path'])
     if decision and decision[1] != 'history_only':
+        if decision[1] == 'publication_incomplete':
+            recovery = target['recovery'][0]
+            return result('blocked', 'publication_incomplete', request, target=target,
+                          authorization_source=request.get('_authorization'), next_action=dict(
+                              kind='ask' if recovery['kind'] == 'abandon' else 'run',
+                              command=recovery['command'], text=recovery['text']))
         return _stop(request, decision, target=target)
     try:
         holds = read_holds(root)

@@ -391,9 +391,11 @@ def _records(root, errors=None):
             fm = parse_front_matter(text)
             if in_fallback and fm.get("project") and not _same_dir(fm["project"], root):
                 continue
-            if fm.get('checkpoint_id') and not publication_valid(path, text, fm):
-                # Explicit abandonment closes interrupted work; it never makes it trusted.
-                fm['status'] = 'abandoned' if fm.get('status') == 'abandoned' else 'unpublished'
+            if (fm.get('checkpoint_id') and fm.get('status') not in ('resumed', 'superseded', 'abandoned')
+                    and not publication_valid(path, text, fm)):
+                # Receipt damage cannot reopen closed work. Trust is checked separately
+                # before content can be executed or inherited.
+                fm['status'] = 'unpublished'
             name_ended, name_topic = _name_parts(path)
             topic = fm.get("topic") or name_topic
             if _is_legacy_single_file(path, legacy) and "topic" not in fm:
@@ -442,10 +444,12 @@ def scan(root, max_age_days=14, stats=None):
             duplicates += 1
         latest[r["topic"]] = r
     found, stale, claimed, incomplete = [], 0, 0, 0
+    incomplete_paths = []
     for r in latest.values():
         fm = r["fm"]
         if fm.get('status') == 'unpublished':
             incomplete += 1
+            incomplete_paths.append(r['path'])
             continue
         if not _is_open(fm):
             continue
@@ -464,7 +468,7 @@ def scan(root, max_age_days=14, stats=None):
                           age_days=round(age, 1), problems=r["problems"][:8]))
     found.sort(key=lambda h: (h["ended"], h["path"]), reverse=True)
     if stats is not None:
-        stats.update(stale=stale, claimed=claimed, incomplete=incomplete, duplicates=duplicates, errors=errors)
+        stats.update(stale=stale, claimed=claimed, incomplete=incomplete, incomplete_paths=incomplete_paths, duplicates=duplicates, errors=errors)
     return found
 
 

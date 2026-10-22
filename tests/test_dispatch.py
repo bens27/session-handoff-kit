@@ -787,10 +787,6 @@ class RecheckTests(Base):
         r = self.dispatch(operation='resume', expect={'state': token})
         self.assertEqual(r['code'], 'state_changed')
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class PressureTests(Base):
     """Audit 3: pressure stops new work and saves the in-flight operation."""
 
@@ -886,3 +882,101 @@ class RestartEligibilityTests(Base):
         e = self.eligibility({'restart_capable': True, 'workers': [{'name': 'no-id'}]})
         self.assertIs(e['eligible'], False)
         self.assertIn('worker_inventory_invalid', e['blockers'])
+
+
+class ClosedPublicationTests(Base):
+    def test_resumed_pressure_checkpoint_does_not_block_fresh_session(self):
+        self.env['AGENTSROOM_AGENT_ID'] = 'term-a'
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session', reason='context-pressure')
+        self.record_hook_session('first-successor')
+        first = self.cli('resume', path, '--session', 'first-successor')
+        self.assertEqual(first['outcome'], 'resumed', first)
+        self.assertIn('status: resumed', Path(path).read_text())
+        self.record_hook_session('fresh-session')
+        fresh = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertEqual(fresh['outcome'], 'none', fresh)
+        self.assertFalse(fresh['retryable'], fresh)
+
+    def test_edited_resumed_checkpoint_does_not_block_fresh_session(self):
+        self.env['AGENTSROOM_AGENT_ID'] = 'term-a'
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session', reason='context-pressure')
+        self.record_hook_session('first-successor')
+        self.assertEqual(self.cli('resume', path, '--session', 'first-successor')['outcome'], 'resumed')
+        checkpoint = Path(path)
+        checkpoint.write_text(checkpoint.read_text() + '\n## UPDATE 10:57\nSupersedes the earlier next steps.\n')
+        self.record_hook_session('fresh-session')
+        for remove_intent in (False, True):
+            with self.subTest(remove_intent=remove_intent):
+                if remove_intent:
+                    for intent in (self.home / '.local/state/session-handoff/publications').glob('*.json'):
+                        intent.unlink()
+                fresh = self.dispatch(operation='resume', authorization={'source': 'user'})
+                self.assertEqual(fresh['outcome'], 'none', fresh)
+                self.assertFalse(fresh['retryable'], fresh)
+
+
+        for event in ('SessionStart', 'UserPromptSubmit'):
+            note = subprocess.run([sys.executable, str(WATCH), 'opening-note'], cwd=self.root,
+                                  env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
+                                  input=json.dumps(dict(hook_event_name=event, cwd=str(self.root),
+                                                        session_id='fresh-session')),
+                                  capture_output=True, text=True, check=True).stdout
+            self.assertEqual(note, '')
+        self.assertEqual(self.cli('prepare', path, '--session', 'fresh-session')['outcome'], 'closed')
+        self.assertEqual(self.dispatch(operation='resume', target=path)['code'], 'target_closed')
+        self.assertEqual(self.dispatch(operation='retrieve', target=path)['code'], 'history_only')
+        self.assertEqual(self.cli('history')['items'][0]['status'], 'resumed')
+        current = self.save(topic='new-work', session='fresh-session')
+        fresh = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertEqual(fresh['outcome'], 'proceed', fresh)
+        self.assertEqual(fresh['target']['path'], current)
+
+    def test_incomplete_publication_has_runnable_repair_without_same_request_retry(self):
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session')
+        Path(path + '.published').unlink()
+        self.record_hook_session('fresh-session')
+        decision = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertEqual(decision['code'], 'publication_incomplete', decision)
+        self.assertFalse(decision['retryable'], decision)
+        command = shlex.split(decision['next_action']['command'])
+        self.assertIn('repair', command)
+        repaired = self.cli(*command[2:])
+        self.assertEqual(repaired['outcome'], 'saved', repaired)
+        self.assertEqual(self.dispatch(operation='resume')['outcome'], 'proceed')
+
+    def test_explicit_incomplete_target_offers_abandon_when_intent_cannot_repair(self):
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session')
+        published_before = Path(path + '.published').read_bytes()
+        Path(path).write_text(Path(path).read_text() + '\nChanged after publication.\n')
+        for intent in (self.home / '.local/state/session-handoff/publications').glob('*.json'):
+            intent.unlink()
+        self.record_hook_session('fresh-session')
+        decision = self.dispatch(operation='resume', target=path, authorization={'source': 'user'})
+        self.assertEqual(decision['code'], 'publication_incomplete', decision)
+        self.assertFalse(decision['retryable'], decision)
+        self.assertEqual(decision['authorization_source'], 'user')
+        self.assertFalse(decision['authorized_to_execute'])
+        self.assertEqual(decision['next_action']['kind'], 'ask')
+        command = shlex.split(decision['next_action']['command'])
+        self.assertEqual(command[-2:], ['abandon', path])
+        for event in ('SessionStart', 'UserPromptSubmit'):
+            output = subprocess.run([sys.executable, str(WATCH), 'opening-note'], cwd=self.root,
+                                    env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
+                                    input=json.dumps(dict(hook_event_name=event, cwd=str(self.root),
+                                                          session_id='fresh-session')),
+                                    capture_output=True, text=True, check=True).stdout
+            self.assertIn(decision['next_action']['command'], output)
+        # Explicit abandonment is a separate user decision, simulated here only in the fixture.
+        abandoned = subprocess.run(command, cwd=self.root, env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
+                                   capture_output=True, text=True)
+        self.assertEqual(abandoned.returncode, 0, abandoned.stderr)
+        self.assertEqual(self.dispatch(operation='resume')['outcome'], 'none')
+        self.assertEqual(Path(path + '.published').read_bytes(), published_before)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -389,13 +389,22 @@ no original draft or request ID. Intent storage failure degrades to publication
 with an explicit retain-original-request/draft warning. Intents contain hashes
 rather than checkpoint text, failed destinations remove theirs, and subsequent
 save/resume operations prune intents older than 30 days. Missing intent on legacy saves remains blocked
-and requires the original save request. That retry keeps its original `--session` despite a newer hook
+and offers the original save request or explicit `abandon PATH`; abandonment needs only the checkpoint file
+and closes it without trusting its content. Hooks, lookup and dispatch share concrete recovery guidance:
+use `repair PATH` only with authenticated intent matching the current bytes; otherwise ask before
+abandoning. `publication_incomplete` is not retryable by an unchanged resume request. That save retry
+keeps its original `--session` despite a newer hook
 pointer only when session and request ID name an unpublished checkpoint this same terminal wrote; otherwise
 hook identity still wins. A save whose topic or predecessor resolves to unpublished work returns
 `incomplete` with the repair/original-save command, the explicit `abandon PATH` escape and the
 distinct-topic option, and publishes nothing, so no successor silently inherits from an untrusted,
 unfinished record. Explicit abandonment lists the interrupted record as `abandoned` (it stays
 untrusted and unresumable) and lifts the gate; a successor of it inherits nothing and is warned. Neither CLI nor skill bypasses host permission denial.
+
+Closed records (`resumed`, `superseded`, `abandoned`) stay closed when publication receipts
+are missing or their body has changed. They remain available through history, cannot be
+selected for a fresh resume, and cannot create an incomplete-publication gate. Preserving
+closed state does not establish content trust or transfer ownership.
 
 Lineage is explicit through `predecessor`; branch equality never supersedes work. A resumed predecessor
 can be continued only by the session that resumed it (others get `conflict`), and a
