@@ -818,10 +818,17 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    authorizes. Exact `resume <target>` and `retrieve <target>` also classify
    and select a target: one unquoted, whitespace-free `.md` path, kebab-case
    topic, or readable name. A readable name must match an existing topic
-   after save's slug normalization; otherwise it must match the full stored
-   description of an open checkpoint, case-insensitively. Partial matches do
-   not select. Multiple open topic heads give `ask`/`topic_ambiguous`; multiple
-   exact descriptions give `ask`/`target_ambiguous`, never execution authority.
+   after save's slug normalization, or the full stored description of an open
+   checkpoint, case-insensitively. Partial matches do not select. If topic and
+   description identify different checkpoints, neither takes precedence:
+   return `ask`/`target_ambiguous` with both. Multiple open topic heads give
+   `ask`/`topic_ambiguous`; multiple exact descriptions also give
+   `ask`/`target_ambiguous`, never execution authority. A unique description
+   match proceeds only if owned: a tagged checkpoint must match this terminal;
+   an untagged one must match the resolved session. A foreign description
+   returns `ask`/`foreign_only` with candidates and no execution authority;
+   the user must explicitly select its path or topic. Non-path text matching
+   no topic or description (such as `resume later`) gives `none`/`no_operation`.
    A bare readable choice can accompany an explicit `resume`/`retrieve`
    operation; bare choice text alone does not authorize resume, which still
    needs `{"source": "user"}`. Verbs are case-insensitive; path case is preserved.

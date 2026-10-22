@@ -169,6 +169,15 @@ class TriggerClassificationTests(Base):
                 self.assertEqual(r['classification'], operation)
                 self.assertEqual(r['operation'], operation)
 
+    def test_unmatched_opening_prose_does_not_route_to_a_target(self):
+        self.record_hook_session('sess-a')
+        self.save()
+        for prompt in ('resume now', 'resume later', 'resume it', 'retrieve everything'):
+            with self.subTest(prompt=prompt):
+                r = self.dispatch(prompt=prompt)
+                self.assertEqual((r['outcome'], r['code']), ('none', 'no_operation'))
+                self.assertFalse(r['authorized_to_execute'])
+
     def test_non_lifecycle_text_never_acts(self):
         for prompt, label in self.NEGATIVE.items():
             with self.subTest(prompt=prompt):
@@ -286,6 +295,59 @@ class TargetSelectionTests(Base):
         self.assertEqual((ambiguous['outcome'], ambiguous['code']), ('ask', 'target_ambiguous'))
         self.assertEqual({c['path'] for c in ambiguous['target']['candidates']}, {first, second})
         self.assertFalse(ambiguous['authorized_to_execute'])
+
+    def test_foreign_description_match_requires_a_choice_without_execution(self):
+        self.record_hook_session('sess-a')
+        self.save(topic='parser')
+        foreign = self.save(topic='other-work', description='the parser fix', session='sess-b', terminal='term-b')
+        r = self.dispatch(prompt='Resume the parser fix')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'foreign_only'))
+        self.assertEqual([c['path'] for c in r['target']['candidates']], [foreign])
+        self.assertFalse(r['target']['candidates'][0]['mine'])
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertEqual(r['next_action']['command'], '')
+
+    def test_foreign_readable_description_cannot_bypass_ownership_via_its_slug(self):
+        self.record_hook_session('sess-a')
+        self.save(topic='parser')
+        foreign = self.save(topic='the-parser-fix', description='the parser fix',
+                            session='sess-b', terminal='term-b')
+        r = self.dispatch(prompt='Resume the parser fix')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'foreign_only'))
+        self.assertFalse(r['authorized_to_execute'])
+        explicit = self.dispatch(prompt='Resume the-parser-fix')
+        self.assertEqual(explicit['outcome'], 'proceed', explicit)
+        self.assertEqual(explicit['target']['path'], foreign)
+
+    def test_description_ownership_uses_terminal_before_session(self):
+        self.record_hook_session('successor')
+        owned = self.save(topic='own-work', description='the owned parser fix', session='predecessor')
+        r = self.dispatch(prompt='Resume the owned parser fix')
+        self.assertEqual(r['outcome'], 'proceed', r)
+        self.assertEqual(r['target']['path'], owned)
+        self.assertTrue(r['authorized_to_execute'])
+        foreign = self.save(topic='other-work', description='the other parser fix',
+                            session='successor', terminal='term-b')
+        r = self.dispatch(prompt='Resume the other parser fix')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'foreign_only'))
+        self.assertEqual(r['target']['candidates'][0]['path'], foreign)
+        self.assertFalse(r['authorized_to_execute'])
+        untagged = self.save(topic='untagged-work', description='the legacy parser fix',
+                             session='successor', terminal='')
+        r = self.dispatch(prompt='Resume the legacy parser fix')
+        self.assertEqual(r['outcome'], 'proceed', r)
+        self.assertEqual(r['target']['path'], untagged)
+
+    def test_topic_and_description_collision_asks_without_preferring_foreign_topic(self):
+        self.record_hook_session('sess-a')
+        owned = self.save(topic='own-work', description='Deploy fix')
+        foreign = self.save(topic='deploy-fix', session='sess-b', terminal='term-b')
+        r = self.dispatch(prompt='Resume Deploy fix')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'))
+        self.assertEqual({c['path'] for c in r['target']['candidates']}, {owned, foreign})
+        self.assertEqual({c['path'] for c in r['target']['candidates'] if c['mine']}, {owned})
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertEqual(r['next_action']['command'], '')
 
     def test_readable_topic_with_multiple_open_heads_still_asks(self):
         self.record_hook_session('sess-a')

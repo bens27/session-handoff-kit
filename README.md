@@ -833,9 +833,14 @@ only the `branch` file the result names.
 - **Targets.** Exact `resume <target>` and `retrieve <target>` prompts select
   an unquoted, whitespace-free `.md` checkpoint path, a kebab-case topic,
   or a readable name such as `Resume Slice 5A review`. Readable names must
-  match a stored topic after save's slug normalization, or otherwise the full
-  description of an open checkpoint (case-insensitive, no partial matching).
-  Multiple open topic heads or duplicate descriptions still ask for a choice.
+  match a stored topic after save's slug normalization, or the full description
+  of an open checkpoint (case-insensitive, no partial matching). If topic and
+  description name different checkpoints, both are offered and neither takes
+  precedence. Multiple open topic heads or duplicate descriptions also ask.
+  A unique description match proceeds only when owned by this terminal (or,
+  for an untagged checkpoint, this session). A foreign description gives
+  `ask`/`foreign_only`; name its exact path or topic to select it explicitly.
+  Unmatched non-path prose such as `resume later` gives `none`/`no_operation`.
   A bare readable choice is also accepted with an explicit `resume`/`retrieve`
   operation; resume still needs `{"source": "user"}` authorization.
   Command verbs are case-insensitive; path targets keep their case. Relative

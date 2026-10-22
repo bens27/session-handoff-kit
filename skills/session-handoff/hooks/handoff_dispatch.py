@@ -63,23 +63,32 @@ def targeted_command(prompt, root=None):
     if not re.search(r'\s', target) and target.endswith('.md'):
         return operation, target
     if root is None:
-        return (operation, target) if ledger.TOPIC_RE.fullmatch(target) else None
-    if root is not None:
-        topic = ledger.slugify_topic(target)
-        errors = []
-        records = ledger._records(handoff_identity.project_root(root), errors)
-        if errors:
-            return None
-        if topic and any(r['topic'] == topic for r in records):
+        return None
+    topic = ledger.slugify_topic(target)
+    errors = []
+    records = ledger._records(handoff_identity.project_root(root), errors)
+    if errors:
+        return None
+    topic_records = [r for r in records if r['topic'] == topic]
+    matches = [r for r in records if r['fm'].get('status', 'open') == 'open'
+               and r['fm'].get('description', '').casefold() == target.casefold()]
+    if topic_records:
+        heads = [r for r in topic_records if r['fm'].get('status', 'open') == 'open']
+        conflict = any(r['topic'] != topic for r in matches)
+        if not conflict and (target == topic or not matches or len(heads) > 1):
             return operation, topic
-        matches = [dict(path=r['path'], topic=r['topic'], ended=r['ended'],
-                        description=r['fm'].get('description', ''),
-                        terminal=r['fm'].get('terminal'), session_id=r['fm'].get('session_id'))
-                   for r in records if r['fm'].get('status', 'open') == 'open'
-                   and r['fm'].get('description', '').casefold() == target.casefold()]
-        if matches:
-            return operation, matches[0]['path'] if len(matches) == 1 else matches
-    return (operation, target) if ledger.TOPIC_RE.fullmatch(target) else None
+        if conflict:
+            # A topic and a displayed description can name different work.
+            matches += heads or [max(topic_records, key=lambda r: (r['ended'], r['path']))]
+        # An overlapping readable description still needs its ownership check;
+        # spelling the canonical topic explicitly is a separate selection.
+    if matches:
+        unique = {r['path']: r for r in matches}
+        return operation, [dict(path=r['path'], topic=r['topic'], ended=r['ended'],
+                                description=r['fm'].get('description', ''),
+                                terminal=r['fm'].get('terminal'), session_id=r['fm'].get('session_id'))
+                           for r in unique.values()]
+    return None
 
 
 def classify(prompt):
@@ -277,8 +286,14 @@ def select_target(root, request, session):
         candidates = [_candidate(dict(item, mine=(bool(terminal) and item['terminal'] == terminal
                       if item.get('terminal') else bool(session) and item.get('session_id') == session)))
                       for item in request['_prompt_candidates'][:5]]
-        return dict(candidates=candidates), ('ask', 'target_ambiguous',
-                                            'Several open checkpoints have that exact description; ask the user which one.')
+        total = len(request['_prompt_candidates'])
+        if total > 1:
+            return dict(candidates=candidates, total=total), ('ask', 'target_ambiguous',
+                    'That name matches %d checkpoints (showing %d); ask the user which one.' % (total, len(candidates)))
+        if not candidates[0]['mine']:
+            return dict(candidates=candidates), ('ask', 'foreign_only',
+                                                'That description belongs to another session; ask the user to name its path or topic.')
+        target = candidates[0]['path']
     if target is not None:
         if not isinstance(target, str) or not target.strip():
             return None, ('blocked', 'invalid_request', 'target must be a nonempty path or topic.')
