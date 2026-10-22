@@ -57,7 +57,8 @@ class Base(unittest.TestCase):
                        capture_output=True, text=True, timeout=60, check=True)
 
     def save(self, topic='parser', session='sess-a', terminal='term-a', body=BODY, **extra):
-        doc = dict(topic=topic, description=topic.title(), body=body, **extra)
+        doc = dict(topic=topic, description=topic.title(), body=body)
+        doc.update(extra)
         digest = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:12]
         result = self.cli('save', '.', '--session', session, '--request-id', 'req-%s-%s-%s' % (topic, session, digest),
                           input=json.dumps(doc), terminal=terminal)
@@ -258,6 +259,61 @@ class TargetSelectionTests(Base):
         r = self.dispatch(prompt='Resume ' + first, operation='retrieve')
         self.assertEqual(r['target']['path'], first)
         self.assertFalse(r['authorized_to_execute'])
+
+    def test_readable_topic_choice_resolves_one_of_two_candidates(self):
+        self.record_hook_session('sess-a')
+        chosen = self.save(topic='Slice 5A review')
+        self.save(topic='different-work')
+        self.assertEqual(self.dispatch(prompt='Resume')['code'], 'target_ambiguous')
+        for fields in (dict(prompt='Resume Slice 5A review'),
+                       dict(prompt='Slice 5A review', operation='resume', authorization={'source': 'user'})):
+            with self.subTest(fields=fields):
+                r = self.dispatch(**fields)
+                self.assertEqual(r['outcome'], 'proceed', r)
+                self.assertEqual(r['target']['path'], chosen)
+                self.assertTrue(r['authorized_to_execute'])
+
+    def test_exact_displayed_title_selects_unique_candidate_and_asks_on_duplicates(self):
+        self.record_hook_session('sess-a')
+        title = 'Slice 5A review'
+        first = self.save(topic='review-one', description=title)
+        self.save(topic='different-work')
+        chosen = self.dispatch(prompt='Resume ' + title)
+        self.assertEqual(chosen['outcome'], 'proceed', chosen)
+        self.assertEqual(chosen['target']['path'], first)
+        second = self.save(topic='review-two', description=title)
+        ambiguous = self.dispatch(prompt='Resume ' + title)
+        self.assertEqual((ambiguous['outcome'], ambiguous['code']), ('ask', 'target_ambiguous'))
+        self.assertEqual({c['path'] for c in ambiguous['target']['candidates']}, {first, second})
+        self.assertFalse(ambiguous['authorized_to_execute'])
+
+    def test_readable_topic_with_multiple_open_heads_still_asks(self):
+        self.record_hook_session('sess-a')
+        head = self.save(topic='Slice 5A review')
+        fork = Path(head).with_name('20991231-235959-slice-5a-review.md')
+        fork.write_text(''.join(line for line in Path(head).read_text().splitlines(True)
+                                if not line.startswith(('checkpoint_id:', 'content_hash:', 'session_id:'))))
+        r = self.dispatch(prompt='Resume Slice 5A review')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'topic_ambiguous'))
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertEqual(r['next_action']['command'], '')
+
+    def test_readable_name_safeguards_preserve_explicit_target_and_authority(self):
+        self.record_hook_session('sess-a')
+        chosen = self.save(topic='Slice 5A review')
+        other = self.save(topic='other')
+        r = self.dispatch(prompt='Resume Slice 5A review', target=other)
+        self.assertEqual(r['target']['path'], other)
+        r = self.dispatch(prompt='Retrieve Slice 5A review')
+        self.assertEqual(r['target']['path'], chosen)
+        self.assertFalse(r['authorized_to_execute'])
+        for fields in (dict(prompt='Slice 5A review'),
+                       dict(prompt='Slice 5A review', operation='resume'),
+                       dict(prompt='Resume Slice 5A'),
+                       dict(prompt="Resume 'Slice 5A review'"),
+                       dict(prompt='Explain Resume Slice 5A review')):
+            with self.subTest(fields=fields):
+                self.assertFalse(self.dispatch(**fields)['authorized_to_execute'])
 
     def test_prompt_path_is_relative_to_dispatch_root(self):
         self.record_hook_session('sess-a')

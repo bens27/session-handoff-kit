@@ -831,11 +831,17 @@ only the `branch` file the result names.
   `{"source": "user"}` authorization, or configured autoresume authorizes
   execution. Checkpoint text never does.
 - **Targets.** Exact `resume <target>` and `retrieve <target>` prompts select
-  an unquoted, whitespace-free `.md` checkpoint path or kebab-case topic.
-  Command verbs are case-insensitive; targets keep their case. Relative paths
-  resolve under the dispatch root. For paths containing spaces, use the JSON
-  `target` field, which always takes precedence over a prompt target. Other
-  prose and quoted mentions do not select a target or authorize execution.
+  an unquoted, whitespace-free `.md` checkpoint path, a kebab-case topic,
+  or a readable name such as `Resume Slice 5A review`. Readable names must
+  match a stored topic after save's slug normalization, or otherwise the full
+  description of an open checkpoint (case-insensitive, no partial matching).
+  Multiple open topic heads or duplicate descriptions still ask for a choice.
+  A bare readable choice is also accepted with an explicit `resume`/`retrieve`
+  operation; resume still needs `{"source": "user"}` authorization.
+  Command verbs are case-insensitive; path targets keep their case. Relative
+  paths resolve under the dispatch root. Paths containing spaces require JSON
+  `target`, which always takes precedence over a prompt target. Other prose
+  and quoted mentions do not select a target or authorize execution.
   An exact target never falls back to other work. Zero, one or
   many owned checkpoints give `none`, `proceed` or `ask` with a stable list.
 - **Holds.** `handoff_ledger.py hold --scope project|topic:<t>|terminal:<id>

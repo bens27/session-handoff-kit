@@ -50,17 +50,36 @@ SAVE = re.compile(r'^(park|save|checkpoint)( (this|the|my|a))? (work|session|han
                   r'|^hand off( (this|the|my))? (work|session)$|^(save|write)( a| the)? handoff$', re.I)
 
 
-def targeted_command(prompt):
-    """Parse only a complete opening command with one unquoted path or topic."""
+def targeted_command(prompt, root=None):
+    """Parse an exact opening command; readable names must match stored metadata."""
     if not isinstance(prompt, str) or QUOTED.search(prompt):
         return None
-    match = re.fullmatch(r'(resume|retrieve)\s+(\S+)', prompt.strip(), re.I)
+    match = re.fullmatch(r'(resume|retrieve)\s+(.+)', prompt.strip(), re.I)
     if not match or protocol.generic_intent(prompt):
         return None
     operation, target = match.group(1).lower(), match.group(2)
-    if target.endswith('.md') or ledger.TOPIC_RE.fullmatch(target):
+    if target.startswith(("'", '‘')) or target.endswith(("'", '’')):
+        return None
+    if not re.search(r'\s', target) and target.endswith('.md'):
         return operation, target
-    return None
+    if root is None:
+        return (operation, target) if ledger.TOPIC_RE.fullmatch(target) else None
+    if root is not None:
+        topic = ledger.slugify_topic(target)
+        errors = []
+        records = ledger._records(handoff_identity.project_root(root), errors)
+        if errors:
+            return None
+        if topic and any(r['topic'] == topic for r in records):
+            return operation, topic
+        matches = [dict(path=r['path'], topic=r['topic'], ended=r['ended'],
+                        description=r['fm'].get('description', ''),
+                        terminal=r['fm'].get('terminal'), session_id=r['fm'].get('session_id'))
+                   for r in records if r['fm'].get('status', 'open') == 'open'
+                   and r['fm'].get('description', '').casefold() == target.casefold()]
+        if matches:
+            return operation, matches[0]['path'] if len(matches) == 1 else matches
+    return (operation, target) if ledger.TOPIC_RE.fullmatch(target) else None
 
 
 def classify(prompt):
@@ -128,6 +147,13 @@ def dispatch(request, root='.'):
     if prompt is not None and not isinstance(prompt, str):
         return blocked({}, 'invalid_request', 'prompt must be a string.')
     request['_classification'] = classify(prompt) if prompt else None
+    targeted = targeted_command(prompt, root)
+    if targeted:
+        request['_classification'] = targeted[0]
+    elif (prompt and request.get('operation') in ('resume', 'retrieve')
+          and (request.get('operation') == 'retrieve' or request.get('authorization') == {'source': 'user'})
+          and not protocol.generic_intent(prompt)):
+        targeted = targeted_command(request['operation'] + ' ' + prompt, root)
     operation = request.get('operation')
     if operation is not None:
         if operation not in OPERATIONS:
@@ -137,9 +163,11 @@ def dispatch(request, root='.'):
         operation = request['_classification']
         request['_operation_source'] = 'prompt'
     request['_operation'] = operation
-    targeted = targeted_command(prompt)
     if targeted and operation in ('resume', 'retrieve') and 'target' not in request:
-        request['target'] = targeted[1]
+        if isinstance(targeted[1], list):
+            request['_prompt_candidates'] = targeted[1]
+        else:
+            request['target'] = targeted[1]
     authorization = request.get('authorization')
     if authorization is not None and authorization != {'source': 'user'}:
         return blocked(request, 'invalid_authorization',
@@ -244,6 +272,13 @@ def intent_target_request(root, request, host):
 def select_target(root, request, session):
     """Exact path/topic never falls back; otherwise zero/one/many owned is deterministic."""
     operation, target = request['_operation'], request.get('target')
+    if request.get('_prompt_candidates'):
+        terminal = protocol.terminal_id()
+        candidates = [_candidate(dict(item, mine=(bool(terminal) and item['terminal'] == terminal
+                      if item.get('terminal') else bool(session) and item.get('session_id') == session)))
+                      for item in request['_prompt_candidates'][:5]]
+        return dict(candidates=candidates), ('ask', 'target_ambiguous',
+                                            'Several open checkpoints have that exact description; ask the user which one.')
     if target is not None:
         if not isinstance(target, str) or not target.strip():
             return None, ('blocked', 'invalid_request', 'target must be a nonempty path or topic.')

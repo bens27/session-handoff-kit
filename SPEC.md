@@ -816,10 +816,17 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    text give `none`. Execution needs user authorization (an exact prompt or
    `{"source": "user"}`) or configured autoresume. Checkpoint content never
    authorizes. Exact `resume <target>` and `retrieve <target>` also classify
-   and select a target: one unquoted, whitespace-free `.md` path or kebab-case
-   topic. Verbs are case-insensitive; targets are preserved. Relative paths
-   resolve under the dispatch root. An explicit JSON `target` wins; an
-   explicit `operation` still wins over the prompt verb.
+   and select a target: one unquoted, whitespace-free `.md` path, kebab-case
+   topic, or readable name. A readable name must match an existing topic
+   after save's slug normalization; otherwise it must match the full stored
+   description of an open checkpoint, case-insensitively. Partial matches do
+   not select. Multiple open topic heads give `ask`/`topic_ambiguous`; multiple
+   exact descriptions give `ask`/`target_ambiguous`, never execution authority.
+   A bare readable choice can accompany an explicit `resume`/`retrieve`
+   operation; bare choice text alone does not authorize resume, which still
+   needs `{"source": "user"}`. Verbs are case-insensitive; path case is preserved.
+   Relative paths resolve under the dispatch root. An explicit JSON `target`
+   wins; an explicit `operation` still wins over the prompt verb.
    Paths containing spaces require JSON `target`. Missing, superseded and
    closed prompt targets follow the same exact-target rules with no fallback.
 2. Identity resolves in this order: hook record, then host
