@@ -93,6 +93,93 @@ class PointerTests(unittest.TestCase):
         self.assertTrue(ready['dispatch'], ready)
         self.assertEqual(len(pointers.scan(self.root)['candidates']), 1)
 
+    def test_prune_removes_old_unreadable_pointer_and_stops_diagnostics(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        location.write_text('{broken')
+        os.utime(location, (1, 1))
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'invalid-pointer')
+        pointers.prune(self.root, [])
+        self.assertFalse(location.exists())
+        self.assertEqual(pointers.scan(self.root), dict(candidates=[], diagnostics=[]))
+
+    def test_prune_removes_old_orphan_but_keeps_recent_orphan(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        self.intent_file().unlink()
+        os.utime(location, (100, 100))
+        pointers.prune(self.root, [], now=150, grace_seconds=60)
+        self.assertTrue(location.exists())
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'incomplete-index')
+        pointers.prune(self.root, [], now=161, grace_seconds=60)
+        self.assertFalse(location.exists())
+        self.assertEqual(pointers.scan(self.root), dict(candidates=[], diagnostics=[]))
+
+    def test_prune_keeps_recent_unreadable_pointer(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        location.write_text('{broken')
+        pointers.prune(self.root, [])
+        self.assertTrue(location.exists())
+
+    def test_prune_keeps_old_pointer_with_existing_intent(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        os.utime(location, (1, 1))
+        pointers.prune(self.root, [])
+        self.assertTrue(location.exists())
+
+    def test_prune_refuses_symlinked_directory(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        directory = location.parent
+        moved = directory.with_name('elsewhere')
+        directory.rename(moved)
+        directory.symlink_to(moved)
+        pointers.prune(self.root, ['restart-1'])
+        self.assertTrue(location.exists())
+
+    def test_prune_cleans_permission_denied_pointer_after_grace(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        os.utime(location, (1, 1))
+        with patch.object(pointers, 'read_pointer', side_effect=PermissionError('unreadable')):
+            pointers.prune(self.root, [])
+        self.assertFalse(location.exists())
+        self.assertEqual(pointers.scan(self.root), dict(candidates=[], diagnostics=[]))
+
+    def test_prune_preserves_foreign_owned_unreadable_entry(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        location.write_text('{broken')
+        os.utime(location, (1, 1))
+        real_lstat = Path.lstat
+        def foreign_lstat(path):
+            info = real_lstat(path)
+            if path == location:
+                fields = list(info)
+                fields[4] = os.getuid() + 1
+                return os.stat_result(fields)
+            return info
+        with patch.object(Path, 'lstat', foreign_lstat):
+            pointers.prune(self.root, [])
+        self.assertTrue(location.exists())
+
+    def test_prune_preserves_pointer_with_invalid_intent(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        os.utime(location, (1, 1))
+        self.intent_file().write_text('{broken')
+        pointers.prune(self.root, [])
+        self.assertTrue(location.exists())
+
+    def test_prune_removes_pointer_for_explicitly_pruned_intent_without_grace(self):
+        ready = self.preflight()
+        location = self.pointer_file(ready)
+        self.intent_file().unlink()
+        pointers.prune(self.root, ['restart-1'])
+        self.assertFalse(location.exists())
+
     def test_missing_marker_permits_exactly_one_reservation(self):
         ready = self.preflight()
         record = restart.status(self.root, 'restart-1')

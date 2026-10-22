@@ -292,19 +292,41 @@ def scan(root, session=None):
     return dict(candidates=candidates, diagnostics=diagnostics)
 
 
-def prune(root, request_ids):
-    """Remove pointers of pruned settled intents."""
+def prune(root, request_ids, *, now=None, grace_seconds=24 * 60 * 60):
+    """Remove pruned intents' pointers and stale unreadable/orphaned index entries.
+
+    Call with the intent registry lock held, as for ``intents.prune_settled``.
+    ``grace_seconds`` configures the 24-hour default repair window; age uses lstat
+    mtime, never untrusted pointer content. Existing (even invalid) intents stay.
+    Unsafe directories and foreign-owned entries are never cleaned up.
+    """
+    if (type(grace_seconds) not in (int, float) or not 0 <= grace_seconds < float('inf')):
+        raise ValueError('invalid-pointer-grace')
+    now = time.time() if now is None else now
     try:
         with _check_dirs(root) as directory_fd:
             for name in os.listdir(directory_fd):
                 if not name.endswith('.json'):
                     continue
                 try:
-                    data = read_pointer(name, dir_fd=directory_fd)
-                    if data['request_id'] in request_ids:
-                        os.unlink(name, dir_fd=directory_fd)
-                except (OSError, ValueError, UnicodeDecodeError):
-                    continue
+                    info = os.lstat(name, dir_fd=directory_fd)
+                    if info.st_uid != os.getuid() or stat.S_ISDIR(info.st_mode):
+                        continue
+                    stale = now - info.st_mtime > grace_seconds
+                    try:
+                        data = read_pointer(name, dir_fd=directory_fd)
+                    except (OSError, ValueError, UnicodeDecodeError):
+                        if not stale:
+                            continue
+                    else:
+                        if data['root'] != os.path.realpath(root):
+                            continue
+                        if data['request_id'] not in request_ids:
+                            if not stale or intents.status(root, data['request_id']) is not None:
+                                continue
+                    os.unlink(name, dir_fd=directory_fd)
+                except (OSError, ValueError):
+                    pass  # Best-effort cleanup; preserve unreadable intent state.
     except (OSError, ValueError):
         pass
 
