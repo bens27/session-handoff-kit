@@ -916,7 +916,6 @@ class ClosedPublicationTests(Base):
                 self.assertEqual(fresh['outcome'], 'none', fresh)
                 self.assertFalse(fresh['retryable'], fresh)
 
-
         for event in ('SessionStart', 'UserPromptSubmit'):
             note = subprocess.run([sys.executable, str(WATCH), 'opening-note'], cwd=self.root,
                                   env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
@@ -976,6 +975,30 @@ class ClosedPublicationTests(Base):
         self.assertEqual(abandoned.returncode, 0, abandoned.stderr)
         self.assertEqual(self.dispatch(operation='resume')['outcome'], 'none')
         self.assertEqual(Path(path + '.published').read_bytes(), published_before)
+
+
+    def test_save_incomplete_uses_the_same_recovery_as_lookup(self):
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session')
+        Path(path + '.published').unlink()
+        draft = dict(topic='parser', description='Continue parsing', body=BODY + 'More work.\n')
+        for state in ('intact-intent', 'changed-content', 'missing-intent'):
+            with self.subTest(state=state):
+                if state == 'changed-content':
+                    Path(path).write_text(Path(path).read_text() + 'Changed instructions.\n')
+                if state == 'missing-intent':
+                    for intent in (self.home / '.local/state/session-handoff/publications').glob('*.json'):
+                        intent.unlink()
+                out = self.cli('save', '.', '--session', 'saving-session', '--request-id', 'new-request',
+                               input=json.dumps(draft))
+                self.assertEqual(out['outcome'], 'incomplete', out)
+                recovery = self.cli('lookup')['recovery'][0]
+                self.assertEqual(out['recovery'], recovery)
+                self.assertTrue(out['action'].startswith(recovery['text']), out)
+                self.assertIn('distinct topic', out['action'])
+                self.assertEqual(recovery['kind'], 'repair' if state == 'intact-intent' else 'abandon')
+                if state == 'intact-intent':
+                    self.assertIn('--root', shlex.split(recovery['command']))
 
 
 if __name__ == '__main__':

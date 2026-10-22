@@ -667,14 +667,10 @@ def save(root, session, request_id, document):
         if unfinished:
             # A successor of unpublished work would be untrusted lineage that drops its
             # dependencies and register; the interrupted save must finish first.
-            saved = ledger._read_fm(unfinished).get('session_id') or session
-            ledger_cli = shlex.quote(os.path.join(hooks_dir(), 'handoff_ledger.py'))
-            return dict(outcome='incomplete', path=unfinished,
-                        action='The newest checkpoint for this lineage was never fully published. Keep this draft and finish that save first: '
-                               'python3 %s repair %s when a durable intent exists, else python3 %s save --session %s --request-id <original-request-id> --input <original-draft.json>. '
-                               'If neither is possible, discard it explicitly with python3 %s abandon %s (nothing is inherited from it), '
-                               'or save independent work under a distinct topic. Do not publish a successor of unpublished work; do not clear.'
-                               % (ledger_cli, shlex.quote(unfinished), ledger_cli, shlex.quote(saved), ledger_cli, shlex.quote(unfinished)))
+            recovery = publication_recovery(root, unfinished)
+            return dict(outcome='incomplete', path=unfinished, recovery=recovery,
+                        action=recovery['text'] + ' Keep this draft, or save independent work under a distinct topic. '
+                               'Do not publish a successor of unpublished work.')
         if current and not predecessor:
             # Continuing your own lineage needs no lookup: same session or terminal.
             fm = next((r['fm'] for r in records if r['path'] == current), {})
