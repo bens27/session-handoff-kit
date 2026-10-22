@@ -689,7 +689,7 @@ def cli():
             result = restart(args.root, workers, args.host_capable, args.hold, args.path)
             print(json.dumps(result))
             return 0 if result['outcome'] == 'ready' else 1
-        data = protocol.load_state_json(args.input) if args.input else protocol.decode_state_json(sys.stdin.read())
+        data = protocol.load_state_json(args.input) if args.input else protocol.decode_state_json(protocol.read_cli_input('-'))
         function = {'preflight': preflight, 'status': status,
                     'refusal': record_refusal, 'successor': confirm_successor,
                     'acceptance': record_acceptance}[args.operation]

@@ -583,6 +583,25 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                                   request_id='cli-1', workers=[])), text=True, capture_output=True)
         self.assertEqual(json.loads(result.stdout)['reason'], 'host-capability-absent')
 
+    def test_cli_stdin_is_strict_utf8_regardless_of_process_encoding(self):
+        import json
+        import subprocess
+        self.assertEqual(self.preflight(request_id='cli-utf8')['outcome'], 'ready')
+        command = [sys.executable, str(HOOKS / 'restart_preflight.py'), 'refusal']
+        env = dict(os.environ, PYTHONIOENCODING='latin-1')
+        args = dict(root=self.root, request_id='cli-utf8', reason='Café naïve')
+        run = subprocess.run(command, input=json.dumps(args, ensure_ascii=False).encode('utf-8'),
+                             env=env, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(restart.status(self.root, 'cli-utf8')['refusal'], 'Café naïve')
+        bad = subprocess.run(command, input=json.dumps(args, ensure_ascii=False).encode('latin-1'),
+                             env=env, capture_output=True)
+        blocked = json.loads(bad.stdout)
+        self.assertEqual((bad.returncode, blocked['outcome'], blocked['dispatch']), (1, 'blocked', False))
+        self.assertIn('utf-8', blocked['reason'])
+        self.assertNotIn(b'Traceback', bad.stderr)
+        self.assertEqual(restart.status(self.root, 'cli-utf8')['refusal'], 'Café naïve')
+
     def test_cli_ready_delivers_exact_successor_prompt_but_pending_cannot_redispatch(self):
         import json
         import subprocess
