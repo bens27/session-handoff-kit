@@ -1207,5 +1207,47 @@ class ClosedPublicationTests(Base):
                     self.assertIn('--root', shlex.split(recovery['command']))
 
 
+class StoppedAuthorizationSourceTests(Base):
+    """Every stopped outcome reports the validated authorization source, never execution authority."""
+
+    def test_every_stop_code_keeps_the_validated_source(self):
+        sys.path.insert(0, str(HOOKS))
+        try:
+            import handoff_dispatch as d
+        finally:
+            sys.path.remove(str(HOOKS))
+        for code in sorted(set(d.CODES) - {'ok'}):
+            for source in ('user', 'config', None):
+                request = dict(_operation='resume', _authorization=source)
+                for helper in ('result', 'blocked', '_stop'):
+                    with self.subTest(code=code, source=source, helper=helper):
+                        if helper == 'result':
+                            out = d.result('none', code, request)
+                        elif helper == 'blocked':
+                            out = d.blocked(request, code, 'stopped')
+                        else:
+                            out = d._stop(request, ('ask', code, 'stopped'))
+                        self.assertEqual(out['authorization_source'], source, out)
+                        self.assertFalse(out['authorized_to_execute'], out)
+
+    def test_foreign_only_keeps_user_authorization_without_executing(self):
+        self.save(session='sess-b', terminal='term-b')
+        self.record_hook_session('sess-a')
+        for request in (dict(prompt='continue the handoff'),
+                        dict(operation='resume', authorization={'source': 'user'})):
+            with self.subTest(request=request):
+                r = self.dispatch(request)
+                self.assertEqual((r['outcome'], r['code']), ('ask', 'foreign_only'), r)
+                self.assertEqual(r['authorization_source'], 'user', r)
+                self.assertFalse(r['authorized_to_execute'], r)
+
+    def test_no_open_handoff_keeps_user_authorization_without_executing(self):
+        self.record_hook_session('sess-a')
+        r = self.dispatch(operation='resume', authorization={'source': 'user'})
+        self.assertEqual(r['outcome'], 'none', r)
+        self.assertEqual(r['authorization_source'], 'user', r)
+        self.assertFalse(r['authorized_to_execute'], r)
+
+
 if __name__ == '__main__':
     unittest.main()

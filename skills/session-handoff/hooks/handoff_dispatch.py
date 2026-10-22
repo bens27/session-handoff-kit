@@ -125,9 +125,10 @@ def autoresume_configured():
 
 def result(outcome, code, request, **extra):
     operation = request.get('_operation')
+    # Report the validated source on every outcome; only a proceed path may set authorized_to_execute.
     base = dict(outcome=outcome, code=code, retryable=False, operation=operation,
                 operation_source=request.get('_operation_source'), classification=request.get('_classification'),
-                authorized_to_execute=False, authorization_source=None,
+                authorized_to_execute=False, authorization_source=request.get('_authorization'),
                 identity=request.get('_identity') or dict(session='', source='none', provenance='', conflict=None),
                 branch=BRANCH.get(operation), restart=dict(eligible='unknown', blockers=[]),
                 next_action=dict(kind='continue', command='', text='Continue the current request.'), recheck=[])
@@ -606,8 +607,7 @@ def route(request, root):
     if decision and decision[1] != 'history_only':
         if decision[1] == 'publication_incomplete':
             recovery = target['recovery'][0]
-            return result('blocked', 'publication_incomplete', request, target=target,
-                          authorization_source=request.get('_authorization'), next_action=dict(
+            return result('blocked', 'publication_incomplete', request, target=target, next_action=dict(
                               kind='ask' if recovery['kind'] == 'abandon' else 'run',
                               command=recovery['command'], text=recovery['text']))
         return _stop(request, decision, target=target)
