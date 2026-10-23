@@ -117,6 +117,34 @@ class SuccessorIdentityRootTests(unittest.TestCase):
         result = self.adopt(self.live)
         self.assertEqual(result['outcome'], 'resumed', result)
 
+    def backdate(self, root, session):
+        context_watch.write_terminal_pointer(str(root), session)
+        path = Path(handoff_identity.terminal_pointer_path(str(root), 'term'))
+        data = json.loads(path.read_text())
+        data['ts'] = self.dispatched_at - 3600
+        path.write_text(json.dumps(data))
+
+    def assert_stale_blocked(self, result, root):
+        self.assertEqual((result['outcome'], result['stage'], result['reason']),
+                         ('blocked', 'identity', 'successor-identity-mismatch'), result)
+        self.assertIn('pointer at %s predates dispatch' % root, result['detail'])
+        self.assertEqual(restart.status(str(self.worktree), 'req-1')['state'], 'pending')
+        self.assertNotIn('successor_session', restart.status(str(self.worktree), 'req-1'))
+
+    def test_live_root_pointer_older_than_dispatch_is_not_the_successor(self):
+        # Reviewer M1: a third session of this terminal, recorded before the restart.
+        self.backdate(self.live, 'stale')
+        self.assert_stale_blocked(self.adopt(self.live), self.live)
+
+    def test_binding_root_pointer_older_than_dispatch_is_not_the_successor(self):
+        context_watch.write_terminal_pointer(str(self.live), 'old')
+        self.backdate(self.worktree, 'stale')
+        self.assert_stale_blocked(self.adopt(self.live), self.worktree)
+
+    def test_roots_checked_lists_every_root(self):
+        result = self.adopt(self.live)
+        self.assertEqual(result['identity']['observed']['roots_checked'], [str(self.live), str(self.worktree)])
+
 
 if __name__ == '__main__':
     unittest.main()

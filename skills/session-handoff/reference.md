@@ -554,8 +554,13 @@ afterwards). `adopt` reads that identity from its own working-directory root
 first: a successor launched at the live root while the intent is bound to a
 linked worktree is still found. It falls back to the bound root's pointer only
 when that pointer names a session other than the predecessor; the binding root
-still supplies ledger and intent. When neither names a successor, the refusal
-says `no successor observation at <roots>; pointer still names the predecessor`.
+still supplies ledger and intent. A hook pointer naming another session counts
+only if written after `dispatch_started_at`; an older one is reported as
+`pointer at <root> predates dispatch`. When no root names a successor, the
+refusal says `no successor observation at <roots>; pointer still names the
+predecessor`, listing every root checked. Run `adopt` from the directory the
+successor was launched in, before any `cd`: a moved cwd hides the launch root
+and adopt then refuses rather than guessing.
 The handle resolves through `~/.local/state/session-handoff/restart-handles/`
 to root and request_id, then the ledger supplies the checkpoint, predecessor and
 terminal. This uses the same HOME across predecessor and successor and works from
