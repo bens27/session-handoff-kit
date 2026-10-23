@@ -17,7 +17,7 @@ import math
 import stat
 import shlex
 
-from handoff_contract import emit_output, exit_status
+from handoff_contract import emit_output, exit_status, project_output
 import handoff_holds as holds_store
 import handoff_identity
 import handoff_intents as intents
@@ -701,7 +701,7 @@ def cli():
                 raise ValueError('adopt requires a short handle, legacy binding JSON, or --root and --request-id.')
             else:
                 result = adopt(args.root, args.request_id)
-            emit_output(result)
+            emit_output(project_output(result))
             return exit_status('preflight', result.get('outcome'), 'adopt')
         if args.operation == 'restart':
             if not args.root:

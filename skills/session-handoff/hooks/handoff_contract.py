@@ -34,7 +34,8 @@ def project_output(result, fields=None):
 
 
 # Profiles preserve the distinct, already published CLI wire formats. In
-# particular, raw/preflight output must not acquire protocol field ordering.
+# particular, non-delivery preflight output retains raw ordering. Adopt applies
+# project_output first, retaining raw escaping but leading with continuation text.
 _OUTPUT_PROFILES = {
     'raw': dict(ensure_ascii=True, sort_keys=False),
     'protocol': dict(ensure_ascii=False, sort_keys=False),

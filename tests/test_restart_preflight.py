@@ -800,7 +800,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
 
 class AdoptTests(unittest.TestCase):
     """Item 1+2: one successor command retrieves, records receipt and resumes."""
-    BODY = '## Objective\nFix it\n## Current state\nSaved UNIQUE-BODY-MARKER\n## Next steps\nTest it\n'
+    BODY = '## Objective\nFix it\n## Current state\nSaved UNIQUE-BODY-MARKER café\n## Next steps\nTest it\n'
 
     def setUp(self):
         import json
@@ -977,6 +977,24 @@ class AdoptTests(unittest.TestCase):
         self.assertEqual(restart.status(self.root, 'req-1')['host_acceptance']['source'],
                          'claude-native-transcript')
 
+    def test_adopt_cli_leads_with_next_step_before_delivery_body(self):
+        self.pointer('new')
+        fixture = json.loads((Path(__file__).parent / 'fixtures/contract/adopt.json').read_text())
+        expected_keys = list(json.loads(fixture['stdout']))
+        for attempt in ('first delivery', 'same-successor replay'):
+            with self.subTest(attempt=attempt):
+                code, raw, out = self.adopt()
+                self.assertEqual((code, out['outcome']), (0, 'resumed'), out)
+                self.assertEqual(list(out)[:5],
+                                 ['outcome', 'action', 'next_step', 'path', 'next_step_section'])
+                self.assertEqual(list(out)[-3:], ['references', 'skills', 'body'])
+                self.assertEqual(list(out), expected_keys)
+                self.assertEqual(out['next_step'].strip(), 'Test it')
+                self.assertIn('UNIQUE-BODY-MARKER', out['body'])
+                self.assertEqual(raw.count('UNIQUE-BODY-MARKER'), 1)
+                self.assertIn('café', out['body'])
+                self.assertTrue(raw.isascii(), 'Adopt must retain its original JSON escaping.')
+
     def test_adopt_delivers_body_once_and_records_retrieval_without_prompt_echo(self):
         self.pointer('new')
         code, raw, out = self.adopt()
@@ -1035,6 +1053,7 @@ class AdoptTests(unittest.TestCase):
         self.pointer('new')
         code, raw, out = self.adopt()
         self.assertEqual((code, out['outcome'], out['stage']), (1, 'held', 'hold'), out)
+        self.assertEqual(list(out), ['outcome', 'action', 'stage', 'holds', 'restart', 'report', 'host_confirmed'])
         self.assertNotIn('UNIQUE-BODY-MARKER', raw)
         self.assertEqual(restart.status(self.root, 'req-1')['state'], 'retrieved')
         self.assertNotIn('claim_owner', Path(self.path).read_text())
