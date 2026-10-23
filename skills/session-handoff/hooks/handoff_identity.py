@@ -151,13 +151,17 @@ def project_root(start):
     naming it as project, stopping at $HOME; else start. A linked Git worktree
     is a boundary: use its root if no nearer handoff convention exists, and
     never discover its main checkout's ledger. Other Git repositories retain
-    convention-based discovery: a folder of projects can itself be a repo."""
+    convention-based discovery: a folder of projects can itself be a repo.
+    Fallback handoffs never make a system temp base (/tmp, /var/tmp,
+    gettempdir()) a project: scratch dirs under it must not inherit that ledger."""
     start = os.path.abspath(start)
     worktree = linked_worktree_root(start)
     home = os.path.abspath(os.path.expanduser("~"))
+    bases = temp_bases()
     d = start
     while d != home:
-        if os.path.isdir(os.path.join(d, ".handoffs")) or ((d != start or worktree is not None) and fallback_claims(d)):
+        if os.path.isdir(os.path.join(d, ".handoffs")) or (
+                (d != start or worktree is not None) and os.path.realpath(d) not in bases and fallback_claims(d)):
             return d
         if worktree and same_dir(d, worktree):
             return d

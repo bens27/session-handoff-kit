@@ -222,5 +222,38 @@ class SessionFallbackOrder(Case):
         self.assertNotEqual(inherited[0]['HANDOFF_TERMINAL_ID'], inherited[1]['HANDOFF_TERMINAL_ID'])
 
 
+class TempBaseIsNeverAProject(Case):
+    """94cac477: a fallback claim naming a temp base must not capture scratch dirs under it."""
+
+    def claim(self, directory):
+        fdir = identity.fallback_dir(directory)
+        os.makedirs(fdir, exist_ok=True)
+        with open(os.path.join(fdir, '20261001-0000-old.md'), 'w') as f:
+            f.write('---\nproject: %s\n---\nOld handoff.\n' % directory)
+
+    def test_scratch_dir_under_claimed_temp_base_stays_its_own_root(self):
+        base = os.path.join(self.tmp, 'tmpbase')
+        os.makedirs(base)
+        self.claim(base)
+        scratch = tempfile.mkdtemp(dir=base)
+        with patch.object(identity, 'temp_bases', return_value={os.path.realpath(base)}):
+            self.assertTrue(identity.under_temp_base(scratch))
+            self.assertEqual(identity.project_root(scratch), scratch)
+            nested = os.path.join(scratch, 'sub')
+            os.makedirs(nested)
+            self.assertEqual(identity.project_root(nested), nested)
+            # Intended: a .handoffs/ convention at a temp base is still discovered.
+            os.makedirs(os.path.join(base, '.handoffs'))
+            self.assertEqual(identity.project_root(scratch), base)
+
+    def test_claimed_ordinary_ancestor_is_still_discovered(self):
+        parent = os.path.join(self.tmp, 'work')
+        child = os.path.join(parent, 'sub')
+        os.makedirs(child)
+        self.claim(parent)
+        with patch.object(identity, 'temp_bases', return_value={os.path.join(self.tmp, 'tmpbase')}):
+            self.assertEqual(identity.project_root(child), parent)
+
+
 if __name__ == '__main__':
     unittest.main()

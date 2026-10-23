@@ -705,7 +705,9 @@ instead. The pointer must be a private, user-owned regular file naming a
 user-owned project directory outside temporary bases. Without a valid pointer,
 a temp-base root or scratch directory inside one is refused, even if it holds
 `.handoffs/` or `.git`; pass an explicit root (`save <root>`, including `save .`)
-to intentionally save there. Redirects appear in JSON `warnings`. Emitted
+to intentionally save there. Redirects appear in JSON `warnings`.
+Root discovery ignores fallback handoffs that name a temp base itself as their
+project, so scratch directories below it never inherit that fallback ledger. Emitted
 commands name one hooks directory: the installed `~/.agents/skills/session-handoff/hooks`
 when it resolves to these hooks, else their real path.
 
