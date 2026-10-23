@@ -459,6 +459,25 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
         return record
 
 
+def successor_roots(binding_root):
+    """Where a successor's identity may be recorded: its own working directory's
+    root first, then the binding root (deduplicated by canonical root)."""
+    roots, seen = [], set()
+    try:
+        here = [os.path.realpath(os.getcwd())]
+    except OSError:
+        here = []
+    for where in here + [binding_root]:
+        try:
+            key = handoff_identity.canonical_root(where)
+        except (OSError, ValueError):
+            continue
+        if key not in seen:
+            seen.add(key)
+            roots.append(where)
+    return roots or [binding_root]
+
+
 def adopt(root, request_id, binding=None):
     """Successor's single atomic command: identity, retrieval, receipt, resume.
 
@@ -471,11 +490,19 @@ def adopt(root, request_id, binding=None):
         return dict(outcome='blocked', stage=stage, reason=str(reason)[:500], host_confirmed=False,
                     action='Preserve state and report; never restart, dispatch another intent or pick another checkpoint.')
     root = os.path.realpath(root)
-    info = protocol.session_info(root)
-    session, terminal = info['session_id'], protocol.terminal_id()
-    if (info['identity_source'] not in ('hook', 'host') or not session
-            or info['host_session_id'] not in ('', session)):
+    # The successor's hooks record it under its OWN root (where it was launched),
+    # which differs from the binding root when the predecessor restarted from a
+    # linked worktree (9fe919eb). Look there first; the binding root is the fallback.
+    observed = []
+    for where in successor_roots(root):
+        info = protocol.session_info(where)
+        if (info['identity_source'] in ('hook', 'host') and info['session_id']
+                and info['host_session_id'] in ('', info['session_id'])):
+            observed.append((where, info))
+    if not observed:
         return blocked('identity', 'identity-not-recorded-by-hook-or-host')
+    identity_root, info = observed[0]
+    session, terminal = info['session_id'], protocol.terminal_id()
     try:
         record = status(root, request_id)
     except ValueError as exc:
@@ -484,11 +511,19 @@ def adopt(root, request_id, binding=None):
         return blocked('intent', 'no-pending-restart-intent')
     if binding is not None and any(binding.get(k) != record.get(k) for k in BINDING_KEYS):
         return blocked('binding', 'binding-does-not-match-recorded-intent')
+    # Explicit rule, never a silent pick: the own-root observation wins; the
+    # binding root counts only when it names a session other than the predecessor.
+    if session == record['session']:
+        for where, other in observed[1:]:
+            if other['session_id'] != record['session']:
+                identity_root, info, session = where, other, other['session_id']
+                break
     identity_facts = dict(
         expected=dict(predecessor_session=record['session'], terminal=record['terminal'],
                       successor_session='different from predecessor'),
         observed=dict(session=session, terminal=terminal, host_session=info['host_session_id'],
-                      source=info['identity_source']))
+                      source=info['identity_source'], root=identity_root,
+                      roots_checked=[where for where, _ in observed]))
 
     def prepare_blocked(reason, prepared=None):
         command = adopt_command(root, request_id)
@@ -522,8 +557,15 @@ def adopt(root, request_id, binding=None):
     workspace_facts = dict(path=workspace, exists=not missing,
                            git=fm.get('workspace_git') or fm.get('git', ''), recovery_root=root)
     if not terminal or terminal != record['terminal'] or session == record['session']:
-        return dict(blocked('identity', 'successor-identity-mismatch'), identity=identity_facts,
-                    workspace=workspace_facts)
+        result = dict(blocked('identity', 'successor-identity-mismatch'), identity=identity_facts,
+                      workspace=workspace_facts)
+        if terminal and terminal == record['terminal']:
+            # The predecessor's own late hooks (e.g. PostToolUse of the restart
+            # call) can refresh its pointer after dispatch, so a timestamp cannot
+            # tell the two apart; the session can.
+            result['detail'] = ('no successor observation at %s; pointer still names the predecessor'
+                                % ', '.join(where for where, _ in observed))
+        return result
     if missing:
         return dict(blocked('workspace', 'workspace-missing'), identity=identity_facts,
                     workspace=workspace_facts,

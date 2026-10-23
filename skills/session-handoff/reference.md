@@ -549,7 +549,13 @@ The restart prompt is one sentence: `Continue the handoff: run exactly python3
 no pipe or clipping, and follow its returned action, holds and authorization.
 The prefix is `handoff_contract.RESTART_PROMPT_PREFIX`. When a prompt starts with
 it, the UserPromptSubmit hook records the successor session in the terminal
-pointer before `adopt` reads it.
+pointer before the first tool call (PostToolUse and later prompts refresh it
+afterwards). `adopt` reads that identity from its own working-directory root
+first: a successor launched at the live root while the intent is bound to a
+linked worktree is still found. It falls back to the bound root's pointer only
+when that pointer names a session other than the predecessor; the binding root
+still supplies ledger and intent. When neither names a successor, the refusal
+says `no successor observation at <roots>; pointer still names the predecessor`.
 The handle resolves through `~/.local/state/session-handoff/restart-handles/`
 to root and request_id, then the ledger supplies the checkpoint, predecessor and
 terminal. This uses the same HOME across predecessor and successor and works from
