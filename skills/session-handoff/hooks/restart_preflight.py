@@ -481,9 +481,9 @@ def successor_roots(binding_root):
 def pointer_ts(where, terminal):
     """Write time of the hook pointer for this terminal at `where`, or None."""
     try:
-        with open(handoff_identity.terminal_pointer_path(where, terminal), encoding='utf-8') as fh:
-            value = json.load(fh).get('ts')
-    except (OSError, ValueError, AttributeError):
+        value = handoff_identity._read_terminal_pointer(
+            handoff_identity.terminal_pointer_path(where, terminal)).get('ts')
+    except (OSError, ValueError):
         return None
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -524,17 +524,19 @@ def adopt(root, request_id, binding=None):
     # an older one is some earlier session of this terminal, not the successor.
     # The predecessor is excluded by session, not time (its own late PostToolUse
     # of the restart call post-dates dispatch).
+    # No dispatch marker (an intent that crashed before it): fail closed.
     dispatched, stale = record.get('dispatch_started_at'), []
-    if isinstance(dispatched, (int, float)) and terminal:
-        fresh = []
-        for where, other in observed:
-            if other['identity_source'] == 'hook' and other['session_id'] != record['session']:
-                written = pointer_ts(where, terminal)
-                if written is None or written <= dispatched:
-                    stale.append(where)
-                    continue
-            fresh.append((where, other))
-        observed = fresh
+    if not isinstance(dispatched, (int, float)) or isinstance(dispatched, bool):
+        dispatched = None
+    fresh = []
+    for where, other in observed:
+        if other['identity_source'] == 'hook' and other['session_id'] != record['session']:
+            written = pointer_ts(where, terminal) if terminal else None
+            if dispatched is None or written is None or written <= dispatched:
+                stale.append(where)
+                continue
+        fresh.append((where, other))
+    observed = fresh
     # Explicit rule, never a silent pick: the own-root observation wins; another
     # root counts only when it names a session other than the predecessor.
     identity_root, info = next(((w, o) for w, o in observed if o['session_id'] != record['session']),

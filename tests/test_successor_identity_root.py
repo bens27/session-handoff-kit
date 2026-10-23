@@ -21,6 +21,7 @@ HOOKS = Path(__file__).resolve().parents[1] / 'skills/session-handoff/hooks'
 sys.path.insert(0, str(HOOKS))
 
 import context_watch  # noqa: E402
+import handoff_intents as intents  # noqa: E402
 import handoff_identity  # noqa: E402
 import handoff_protocol as protocol  # noqa: E402
 import restart_preflight as restart  # noqa: E402
@@ -140,6 +141,16 @@ class SuccessorIdentityRootTests(unittest.TestCase):
         context_watch.write_terminal_pointer(str(self.live), 'old')
         self.backdate(self.worktree, 'stale')
         self.assert_stale_blocked(self.adopt(self.live), self.worktree)
+
+    def test_missing_dispatch_marker_fails_closed(self):
+        # Reviewer N1: an intent that crashed before its dispatch marker gives no
+        # time to judge a pointer by, so no hook-recorded candidate may adopt it.
+        location = intents.location(str(self.worktree), 'req-1')
+        record = json.loads(Path(location).read_text())
+        record.pop('dispatch_started_at')
+        intents.write(location, record)
+        self.session_start(self.live)
+        self.assert_stale_blocked(self.adopt(self.live), self.live)
 
     def test_roots_checked_lists_every_root(self):
         result = self.adopt(self.live)
