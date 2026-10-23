@@ -2,8 +2,15 @@
 
 import json
 import os
+import re
 import shlex
 
+
+# The successor prompt restart_preflight hands to agents_restart. context_watch
+# recognizes it at the start of a prompt (case and leading space ignored) to
+# record the successor session before its transcript exists.
+RESTART_PROMPT_PREFIX = 'Continue the handoff: run exactly '
+RESTART_PROMPT_RE = re.compile(r'\s*' + re.escape(RESTART_PROMPT_PREFIX), re.I)
 
 DELIVERY_FIELDS = frozenset({
     'path', 'body', 'references', 'skills', 'next_step_section', 'verification',

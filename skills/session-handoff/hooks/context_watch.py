@@ -122,10 +122,11 @@ LEDGER = canonical_ledger()
 if os.path.dirname(LEDGER) not in sys.path:
     sys.path.insert(0, os.path.dirname(LEDGER))
 try:
-    from handoff_contract import emit_output, render_output, python_command, command_template
+    from handoff_contract import emit_output, render_output, python_command, command_template, RESTART_PROMPT_RE
 except ImportError:
     if __name__ != '__main__':
         raise
+    RESTART_PROMPT_RE = None
     # A lone copied watcher must still report an incomplete installation. The
     # unavailable contract cannot encode its own missing-install diagnostic.
     render_output = json.dumps
@@ -866,6 +867,12 @@ def lean_resume_prompt(prompt):
                              str(prompt or ''), re.I))
 
 
+def restart_prompt(prompt):
+    """The successor prompt restart_preflight builds (shared prefix, matched at the
+    start only). Identity-only: unlike a lean prompt it changes no routing."""
+    return bool(RESTART_PROMPT_RE and RESTART_PROMPT_RE.match(str(prompt or '')))
+
+
 def bounded_opening_note(evt):
     """Isolate filesystem inspection so a broken/slow store cannot block a prompt."""
     try:
@@ -1272,6 +1279,10 @@ def main():
         # exists. Keep the command's session and the terminal pointer aligned.
         write_terminal_pointer(evt.get('cwd') or os.getcwd(), session_key(evt))
         _OPENING_NOTE = bounded_opening_note(evt)
+    elif event_name == 'UserPromptSubmit' and restart_prompt(evt.get('prompt')):
+        # The kit's own restart prompt is the successor's first identity
+        # observation: record it before adopt reads the pointer (14752baa).
+        write_terminal_pointer(evt.get('cwd') or os.getcwd(), session_key(evt))
     # A first prompt may precede the transcript file; PostToolUse never does.
     if (TAIL_STATUS and event_name in ("PostToolUse", "UserPromptSubmit")
             and not (TAIL_STATUS == "missing" and event_name == "UserPromptSubmit")

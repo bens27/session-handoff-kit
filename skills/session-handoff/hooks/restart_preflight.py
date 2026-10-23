@@ -17,7 +17,7 @@ import math
 import stat
 import shlex
 
-from handoff_contract import emit_output, exit_status, project_output
+from handoff_contract import RESTART_PROMPT_PREFIX, emit_output, exit_status, project_output
 import handoff_holds as holds_store
 import handoff_identity
 import handoff_intents as intents
@@ -274,7 +274,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             return dict(blocked('pointer-write-failed'), stage='pointer', detail=str(exc)[:200],
                         action='Preserve the checkpoint; retry the same request after restoring the pointer index.')
         try:
-            prompt = 'Continue the handoff: run exactly ' + binding_command(
+            prompt = RESTART_PROMPT_PREFIX + binding_command(
                 dict(binding, checkpoint_id=record['checkpoint_id']))
         except (OSError, ValueError, ledger.ConflictError) as exc:
             return dict(blocked('restart-handle-unavailable'), stage='restart-handle-unavailable',

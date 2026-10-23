@@ -429,7 +429,12 @@ requires retry or release; it never silently marks work resumed.
 advisory package-size threshold; exceeding it emits a warning, delivers the
 complete result and still acknowledges successful resumption. `--session` defaults to
 `$HANDOFF_SESSION_ID`, then the hook's per-terminal pointer (24 h); save's
-request ID defaults to a hash of the draft. Save resolves the project from the
+request ID defaults to a hash of the draft. The hooks refresh that pointer on
+SessionStart (`startup`/`clear`), on any UserPromptSubmit or PostToolUse once the
+transcript reports usage, and before any transcript exists on two prompts: a lean
+"continue the handoff" prompt, and a prompt starting with the restart prompt
+prefix `handoff_contract.RESTART_PROMPT_PREFIX` (case and leading space ignored).
+The second only records identity; it changes no routing (14752baa). Save resolves the project from the
 predecessor (an explicit root that disagrees is a `conflict` naming both),
 treats this session's or terminal's own authoritative checkpoint as the default
 predecessor, defaults `verify` to the user-level config `"verify"` then the trusted predecessor's,

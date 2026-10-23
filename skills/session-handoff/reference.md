@@ -547,6 +547,9 @@ successors still perform the inbox read before continuing.
 The restart prompt is one sentence: `Continue the handoff: run exactly python3
 <hooks>/restart_preflight.py adopt h-<24 hex>`. Run that command bare, with
 no pipe or clipping, and follow its returned action, holds and authorization.
+The prefix is `handoff_contract.RESTART_PROMPT_PREFIX`. When a prompt starts with
+it, the UserPromptSubmit hook records the successor session in the terminal
+pointer before `adopt` reads it.
 The handle resolves through `~/.local/state/session-handoff/restart-handles/`
 to root and request_id, then the ledger supplies the checkpoint, predecessor and
 terminal. This uses the same HOME across predecessor and successor and works from
