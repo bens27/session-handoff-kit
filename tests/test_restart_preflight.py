@@ -1007,6 +1007,38 @@ class AdoptTests(unittest.TestCase):
             terminal='term', state='retrieved', host_confirmed=False))
         self.assertEqual(restart.status(self.root, 'req-1')['successor_session'], 'new')
 
+    def test_adopt_delivery_metric_survives_successor_pressure_save(self):
+        import subprocess
+        self.pointer('new')
+        for attempt in ('first delivery', 'same-successor replay'):
+            with self.subTest(attempt=attempt):
+                code, raw, adopted = self.adopt(AGENTSROOM_AGENT_ID='term')
+                self.assertEqual((code, adopted['outcome']), (0, 'resumed'), adopted)
+                # The emitted JSON includes adopt's envelope and ASCII escaping (café).
+                expected_bytes = len(raw.rstrip('\n').encode('utf-8'))
+                expected_tokens = (expected_bytes + 3) // 4
+                trace = Path(self.root) / 'new.jsonl'
+                trace.write_text('\n'.join(json.dumps({'message': {'model': 'claude-fable-5-1',
+                    'usage': {'input_tokens': tokens}}}) for tokens in (22771, 140000)))
+                env = dict(self.env, AGENTSROOM_AGENT_ID='term')
+                hook = subprocess.run([sys.executable, str(HOOKS / 'context_watch.py')],
+                    input=json.dumps(dict(hook_event_name='PostToolUse', session_id='new',
+                                          cwd=self.root, transcript_path=str(trace))),
+                    env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+                self.assertEqual(hook.returncode, 0, hook.stderr)
+                saved = subprocess.run([sys.executable, str(HOOKS / 'handoff_ledger.py'),
+                                        'save', self.root, '--session', 'new'],
+                    input=json.dumps(dict(topic='work', body=self.BODY + attempt + '\n')),
+                    env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+                self.assertEqual(saved.returncode, 0, saved.stderr + saved.stdout)
+                self.assertIn('diagnostics', json.loads(saved.stdout)['transition'],
+                              dict(saved=saved.stdout, hook=hook.stdout))
+                diag = json.loads(saved.stdout)['transition']['diagnostics']
+                self.assertEqual(diag['resume_delivery_tokens'], expected_tokens)
+                self.assertEqual(adopted['metrics']['delivery_bytes'], expected_bytes)
+                self.assertEqual(adopted['metrics']['estimated_delivery_tokens'], expected_tokens)
+                # Replaying the original adopt remains valid after a successor save.
+
     def test_adopt_refuses_unrecorded_foreign_or_predecessor_identity_and_preserves_state(self):
         cases = [
             ('environment-only session', None, dict(HANDOFF_SESSION_ID='new')),

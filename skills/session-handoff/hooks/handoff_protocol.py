@@ -286,8 +286,43 @@ def workspace_changes_hash(root):
         return ''
 
 
+def audit_anchors(body):
+    """Bounded declared source evidence, not a semantic verification of findings.
+
+    Only Findings bullets of the form '- `relative/file.ext:42`: conclusion'
+    count. Store anchor identities, so prose rewrites cannot renew evidence.
+    An empty string means unknown; JSON [] is a known empty baseline.
+    """
+    if len(body.encode('utf-8')) > 65536:
+        return ''
+    anchors = set()
+    findings, fence = False, None
+    for line in body.splitlines():
+        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if marker:
+            token = marker[1]
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence:
+            continue
+        if line.startswith('## '):
+            findings = bool(re.fullmatch(r'## Findings(?: .*)?', line))
+        if not findings:
+            continue
+        match = re.fullmatch(r'- `((?:[\w-]+/)*[\w.-]+\.[\w-]+):([1-9][0-9]*)`: (\S.*)', line)
+        if match and len(line.encode('utf-8')) <= 1024:
+            anchor = match[1] + ':' + match[2]
+            anchors.add(hashlib.sha256(anchor.encode('utf-8')).hexdigest())
+            if len(anchors) > 64:
+                return ''
+    return json.dumps(sorted(anchors))
+
+
 def save_progress(root, current, continuity, previous, baseline=False):
-    """Changed draft hash AND (changed register, forward commits, or working files).
+    """Changed draft hash AND changed register, commits, files, or new audit anchors.
 
     The caller supplies a trusted same-topic pressure predecessor, or with baseline=True
     the checkpoint this session resumed under a valid transfer receipt.
@@ -302,6 +337,18 @@ def save_progress(root, current, continuity, previous, baseline=False):
             continuity_items(json.loads(previous.get('continuity', '[]'))), key=lambda x: x['id'])
     except (ValueError, TypeError, RecursionError):
         register_changed = False  # Malformed evidence is unknown, never progress.
+    def anchors(fields):
+        try:
+            value = json.loads(fields.get('audit_anchors', ''))
+            if isinstance(value, list) and len(value) <= 64 and all(
+                    isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in value):
+                return set(value)
+        except (ValueError, TypeError, RecursionError):
+            pass
+        return None
+    old_anchors, new_anchors = anchors(previous), anchors(current)
+    audit_changed = (eligible and old_anchors is not None and new_anchors is not None
+                     and bool(new_anchors - old_anchors))
     before, after = previous.get('workspace_changes_hash'), current.get('workspace_changes_hash')
     files_changed = eligible and bool(before) and bool(after) and before != after
     commits = False
@@ -310,10 +357,10 @@ def save_progress(root, current, continuity, previous, baseline=False):
         new = current.get('git', '').rsplit('@', 1)[-1]
         if old != new and re.fullmatch(r'[0-9a-f]{7,64}', old) and re.fullmatch(r'[0-9a-f]{7,64}', new):
             commits = workspace.is_ancestor(root, old, new)
-    return dict(present=bool(changed and (register_changed or commits or files_changed)),
+    return dict(present=bool(changed and (register_changed or commits or files_changed or audit_changed)),
                 predecessor_known=bool(eligible), content_changed=bool(changed),
                 continuity_changed=bool(register_changed), new_commits=commits,
-                files_changed=bool(files_changed))
+                files_changed=bool(files_changed), audit_changed=bool(audit_changed))
 
 
 def predecessor_progress(root, fields, continuity):
@@ -721,6 +768,7 @@ def save(root, session, request_id, document):
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
         fields['workspace_changes_hash'] = workspace_changes_hash(root)
+        fields['audit_anchors'] = audit_anchors(body)
         workspace = os.path.realpath(note.get('cwd') or root)
         fields['workspace'] = workspace
         fields['workspace_git'] = ledger._git_position(workspace)
@@ -1671,7 +1719,7 @@ def telemetry(operation, root, session, result):
         pass  # optional analytics never makes a completed checkpoint fail
 
 
-def delivery_metrics(result, root, session, fields=None):
+def delivery_metrics(result, root, session, fields=None, *, profile='protocol'):
     """Exact JSON bytes, estimated tokens and headroom against a sampled occupancy.
 
     Only emitted bytes are added to the host sample: loaded workflow and reused
@@ -1679,7 +1727,7 @@ def delivery_metrics(result, root, session, fields=None):
     """
     metrics = result['metrics']
     def serialized_size():
-        return len(render_output(result, profile='protocol', fields=fields).encode())
+        return len(render_output(result, profile=profile, fields=fields).encode())
     note = ledger.read_session_note(root, session=session)
     observed, threshold = note.get('observed_occupancy_tokens'), note.get('threshold')
     if type(observed) is int and type(threshold) is int:

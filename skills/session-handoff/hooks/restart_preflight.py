@@ -655,6 +655,10 @@ def adopt(root, request_id, binding=None):
         result = delivered
         result['action'] = protocol.INBOX_FIRST + ' ' + result.get('action', '')
     result['restart'], result['report'] = identity, report
+    if result['outcome'] == 'resumed':
+        # Account for the final adopt envelope and its ASCII-escaped wire format,
+        # then persist against the same root/session the successor save reads.
+        protocol.delivery_metrics(result, root, session, profile='raw')
     return result
 
 

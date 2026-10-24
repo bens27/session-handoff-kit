@@ -182,6 +182,94 @@ with patch('time.time', return_value=stamp):
         self.assertIn('Thrash warning:', notice)
         self.assertNotIn('automatic handoff paused (', notice)
 
+    def test_anchored_readonly_audit_counts_as_progress_after_resume(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart', startup=22771)
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2', startup=22771)
+        audit = (BODY + '\n## Findings\n'
+                 '- `app/adapter.py:42`: the legacy translation has no production callers.\n'
+                 '\n## Decisions\n'
+                 '- Remove the obsolete adapter after caller migration, keeping the compatibility entry point.\n')
+        out = self.save(session='s2', body=audit)
+        diag = out['transition']['diagnostics']
+        self.assertIn('rapid-resume', diag['reasons'])
+        self.assertEqual(out['transition']['kind'], 'agents_restart', diag)
+        self.assertTrue(diag['progress']['present'])
+        self.assertFalse(diag['progress']['new_commits'])
+        self.assertFalse(diag['progress']['files_changed'])
+        self.assertTrue(diag['progress']['audit_changed'])
+        retry = self.save(session='s2', body=audit)
+        self.assertEqual(retry['path'], out['path'])
+        self.assertEqual(retry['transition']['kind'], 'agents_restart')
+
+    def test_audit_rewording_reordering_and_removal_do_not_establish_progress(self):
+        findings = ('\n## Findings\n'
+                    '- `app/adapter.py:42`: the legacy adapter has no callers.\n'
+                    '- `app/router.py:9`: migration remains pending.\n')
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save(body=BODY + findings)
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        changed = ('\n## Findings\n'
+                   '- `app/router.py:9`: migrate this entry point next.\n'
+                   '- `app/adapter.py:42`: confirmed no callers remain.\n')
+        for body in (BODY + changed, BODY):
+            out = self.save(session='s2', body=body)
+            diag = out['transition']['diagnostics']
+            self.assertEqual(out['transition']['kind'], 'paused', diag)
+            self.assertFalse(diag['progress']['audit_changed'])
+
+    def test_unstructured_fenced_empty_and_overflow_audits_do_not_establish_progress(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        anchor = '- `app/adapter.py:42`: no callers remain.\n'
+        for extra in (anchor, '\n## Findings\n- completed an audit.\n',
+                      '\n```markdown\n## Findings\n' + anchor + '```\n',
+                      '\n## Findings\n- `app/adapter.py:42`: \n',
+                      '\n## Findings\n' + anchor.rstrip() + 'x' * 1024 + '\n',
+                      '\n## Findings\n' + anchor + 'x' * 65536,
+                      '\n## Findings\n' + ''.join(
+                          '- `app/adapter.py:%d`: no callers remain.\n' % n for n in range(1, 66)),
+                      '\n## Findings\n' + anchor):  # unknown baseline cannot prove progress
+            with self.subTest(extra=extra[:80]):
+                self.clock += 1  # Distinct publication times select the immediate baseline.
+                out = self.save(session='s2', body=BODY + extra)
+                diag = out['transition']['diagnostics']
+                self.assertEqual(out['transition']['kind'], 'paused', diag)
+                self.assertFalse(diag['progress']['audit_changed'])
+
+    def test_audit_progress_cannot_bypass_cooldown_or_budget(self):
+        def audit(n):
+            return BODY + '\n## Findings\n- `app/adapter.py:%d`: no callers remain.\n' % n
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.hook(130000, session='s2')
+        out = self.save(session='s2', body=audit(1))
+        self.assertTrue(out['transition']['diagnostics']['progress']['audit_changed'])
+        self.assertEqual(out['transition']['diagnostics']['pause_reasons'], ['restart-cooldown'])
+        self.clock += 3601
+        for step in range(6):
+            out = self.save(session='s2', body=audit(step + 2))
+            self.assertEqual(out['transition']['kind'], 'agents_restart' if step < 5 else 'paused')
+            self.clock += 200
+        self.assertTrue(out['transition']['diagnostics']['progress']['audit_changed'])
+        self.assertIn('restart-budget', out['transition']['diagnostics']['pause_reasons'])
+
     def test_body_only_changes_do_not_establish_progress(self):
         self.hook(140000)
         self.save(body=BODY + 'first\n')

@@ -603,7 +603,8 @@ of one topic within 1800 seconds (`repeated-topic`) pauses only without progress
 `save_progress` defines progress once: the draft `content_hash` changed AND at
 least one of these changed since the trusted same-topic pressure predecessor:
 the effective continuity register (ignoring item order), a strictly newer Git
-commit descending from its recorded commit, or observed Git working-file evidence.
+commit descending from its recorded commit, observed Git working-file evidence,
+or a newly recorded source anchor in audit findings.
 Working-file evidence hashes modified/deleted/untracked nonignored file names
 and contents (symlinks use their link text), excluding top-level `.handoffs`,
 `.agentsroom` and `.git` paths only. Git directory entries ending in `/` (such as
@@ -611,7 +612,20 @@ untracked nested repositories or linked worktrees) are skipped; their contents
 are not evidence of progress in the parent repository. Hashing is bounded to
 2 MB of content and 200 KB of paths. Git failures,
 missing legacy hashes, or exceeded bounds are unknown and do not prove progress.
-Body/description changes alone do not establish progress. An absent or untrusted
+Audit evidence uses bullets in `## Findings` of the form
+``- `relative/file.ext:42`: conclusion``.
+Paths use slash-separated word/hyphen directories and a filename with an extension;
+line numbers are positive decimal integers. The conclusion must be nonempty.
+Fenced code is excluded. SHA-256 identities of distinct path/line anchors are stored
+as the sealed `audit_anchors` JSON list; the body is not duplicated. At least one
+anchor must be absent from the trusted baseline's list. Reordering, removing, or
+rewording existing anchors does not establish audit progress. Extraction is bounded
+to 64 KiB of UTF-8 body, 1024 bytes per qualifying bullet, and 64 distinct anchors.
+An oversized bullet is skipped; exceeding the body or anchor bound stores unknown
+evidence. Missing legacy or malformed lists are unknown, including as a baseline.
+This records declared audit evidence, not verification that a source exists or a
+conclusion is correct. Ordinary body/description changes alone do not establish
+progress. An absent or untrusted
 same-topic pressure predecessor cannot prove progress on its own; the baseline then
 falls back to the newest trusted checkpoint whose transfer this session holds a valid receipt for (any topic or reason),
 and the same changed-hash-plus-evidence rule applies against it. Only a newer commit
@@ -627,6 +641,7 @@ A topic listed in the `continuous_topics` setting (string list, from
 `~/.context-watch/thresholds.json` or `<root>/.context-watch.json`) is exempt from
 pausing on `rapid-resume` and `repeated-topic`; the reasons are still reported and
 `continuous_topic` is true in the diagnostics. Hard limits below are unaffected.
+Sharing a topic with a predecessor alone does not set `continuous_topic`.
 A repository `.context-watch.json` is honored for this key (project scope is intentional), so a repository
 can relax the soft pause for its listed topics; `restart-budget` and `restart-cooldown` stay hard stops.
 Required body headings (`## Objective`, `## Current state`, `## Next steps`) match
@@ -641,9 +656,15 @@ Stop and the headless runner honor its pause; explicit continuation can resume
 it. The runner exits 75. Host refusal preserves the open checkpoint for the
 same manual recovery instead of repeated restart attempts.
 
-Resume measures exact serialized `delivery_bytes` separately from complete
+Resume and restart adoption measure exact serialized `delivery_bytes` (excluding
+the terminating newline) separately from complete
 context `package_bytes` (which also accounts for workflow and reused content).
-Estimated tokens use UTF-8 bytes/4. With an available hook occupancy sample,
+`estimated_tokens` estimates that package; `estimated_delivery_tokens` estimates
+the emitted JSON, including its own metrics and, for adoption, the restart
+envelope and ASCII escaping. Both token estimates use UTF-8 bytes/4, rounded up.
+Successful deliveries persist the latter as `resume_delivery_tokens` in the
+successor's root/session note for later save diagnostics, including adopt replays.
+With an available hook occupancy sample,
 post-resume occupancy adds only newly delivered tokens; remaining working room
 is the handoff threshold minus that estimate, with a warning below 60000 tokens.
 Window/source and threshold/source are reported; unmeasured future schemas and

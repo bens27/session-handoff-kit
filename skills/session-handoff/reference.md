@@ -155,8 +155,11 @@ or custom catalogs, rather than loading them on every successful one-shot resume
 Save pauses for rapid/repeated context-pressure saves only when the current
 checkpoint shows no progress against its trusted same-topic pressure predecessor.
 Progress is a changed draft content hash AND a changed effective continuity
-register, forward Git commits, or changed observed working-file hashes. Body-only
-rewrites do not count. Unknown/legacy evidence does not count. File hashing skips
+register, forward Git commits, changed observed working-file hashes, or a new
+source anchor declared under `## Findings` as ``- `relative/file.ext:42`: conclusion``.
+Audit evidence records bounded path/line identities: rewording, reordering or
+removing existing anchors does not count. Ordinary body rewrites and unknown/legacy
+evidence do not count. File hashing skips
 Git directory entries and excludes only top-level `.handoffs`, `.agentsroom` and
 `.git` paths. With no same-topic pressure predecessor, the baseline is the
 checkpoint this session resumed under a valid transfer receipt. A branch name change alone does not count; a newer descendant
@@ -170,7 +173,9 @@ before saving; the save result decides whether progress warrants continuation.
 Long-running orchestrators that resume one topic by design can list it in
 `"continuous_topics": ["<topic>"]` in `~/.context-watch/thresholds.json` or
 `<root>/.context-watch.json`: for those topics `rapid-resume` and `repeated-topic`
-stay in the diagnostics (`continuous_topic: true`) but never pause. Required headings
+stay in the diagnostics (`continuous_topic: true`) but never pause. That flag means
+an explicit configured exemption; sharing a predecessor's topic alone leaves it false.
+Required headings
 match `## Objective`, `## Current state`, `## Next steps` exactly at their start;
 trailing text after a space (for example `## Current state (main abc123)`) is allowed.
 When this terminal owns several open checkpoints, resume asks the user to choose
@@ -230,8 +235,11 @@ host input samples, never checkpoint or verification contents. Startup baseline
 and later input samples are separate; cached tokens still occupy context.
 Events carry protocol `version` and `origin` (`live` by default; fixture callers
 set `CONTEXT_WATCH_ORIGIN=test`). Tests disable the production sinks.
-`metrics.delivery_bytes` is the actual serialized resume JSON size, including
-metrics. `estimated_delivery_tokens` uses UTF-8 bytes/4. When a hook sample exists,
+`metrics.delivery_bytes` is the actual serialized resume/adopt JSON size, including
+metrics, excluding the final newline. Adopt includes its restart envelope and ASCII
+escaping. `estimated_delivery_tokens` uses UTF-8 bytes/4 rounded up; successful
+delivery stores it as `resume_delivery_tokens` for successor save diagnostics.
+`estimated_tokens` estimates the complete package instead. When a hook sample exists,
 resume also reports its occupancy, threshold, window and source, then adds only
 estimated delivery tokens to estimate post-resume occupancy and working room.
 Under 60,000 remaining tokens produces an advisory warning. Schema loads, future
