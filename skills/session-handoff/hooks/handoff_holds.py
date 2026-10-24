@@ -18,8 +18,8 @@ import handoff_workspace as workspace
 SCOPE = re.compile(r'project|topic:[a-z0-9]+(?:-[a-z0-9]+)*|terminal:[\w.:-]{1,120}')
 
 
-def _holds_dir(root):
-    return os.path.join(root, '.handoffs', 'holds')
+def _holds_dir(root, create=False):
+    return handoff_identity.local_state_dir(root, 'holds', create=create)
 
 
 def _hold_roots(root):
@@ -43,8 +43,8 @@ def read_holds(root):
     for origin in _hold_roots(root):
         try:
             names = sorted(os.listdir(_holds_dir(origin)))
-        except FileNotFoundError:
-            continue
+        except (FileNotFoundError, handoff_identity.UntrustedStateDir):
+            continue  # a planted temp-base .handoffs carries no holds
         for name in names:
             if not name.endswith('.json'):
                 continue
@@ -77,7 +77,7 @@ def set_hold(root, scope, reason=None):
         except FileNotFoundError:
             return dict(outcome='none', code='no_hold', scope=scope, action='No hold for %s; nothing to release.' % scope)
         return dict(outcome='released', code='released', scope=scope, action='Released %s. Re-dispatch before acting.' % scope)
-    os.makedirs(_holds_dir(root), exist_ok=True)
+    _holds_dir(root, create=True)
     protocol.write_json(path, dict(scope=scope, reason=reason, created=time.time(), terminal=protocol.terminal_id()))
     return dict(outcome='held', code='held', scope=scope, path=path,
                 action='Held %s. Lifecycle execution and restarts stay blocked until an explicit release.' % scope)

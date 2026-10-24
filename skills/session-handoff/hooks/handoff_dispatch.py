@@ -200,7 +200,10 @@ def synthetic_identity(root):
     if not terminal:
         return ''
     path = _identity_file(root, terminal)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        handoff_identity.local_state_dir(root, 'dispatch', create=True)
+    except handoff_identity.UntrustedStateDir:
+        return ''  # never adopt or persist an identity under a planted .handoffs
     with ledger.locked(path + '.lock'):
         try:
             value = protocol.load_state_json(path, 4096).get('session')

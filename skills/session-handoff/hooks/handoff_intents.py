@@ -30,6 +30,7 @@ import time
 from datetime import datetime
 
 import handoff_contract as contract
+import handoff_identity
 import handoff_ledger as ledger
 import handoff_protocol as protocol
 from handoff_record import live as _checkpoint_live
@@ -54,10 +55,7 @@ RESTART_TOOLS = ('mcp__AgentsRoom-MCP__agents_restart', 'mcp__AgentsRoom_MCP__ag
 
 def directory(root, create=True):
     """The canonical intent directory; created unless a read-only caller asks not to."""
-    path = Path(root).resolve() / '.handoffs' / 'restart'
-    if create:
-        path.mkdir(parents=True, exist_ok=True)
-    return path
+    return Path(handoff_identity.local_state_dir(str(Path(root).resolve()), 'restart', create=create))
 
 
 def location(root, request_id):

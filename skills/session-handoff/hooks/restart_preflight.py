@@ -120,7 +120,10 @@ def preflight(root, path, session, terminal, request_id, workers=None,
            for value in (session, terminal, request_id)):
         return blocked('invalid-identifier')
     root, path = os.path.realpath(root), os.path.realpath(path)
-    location = _location(root, request_id)
+    try:
+        location = _location(root, request_id)
+    except handoff_identity.UntrustedStateDir:
+        return blocked(handoff_identity.UntrustedStateDir.reason)
     binding = dict(root=root, path=path, session=session, terminal=terminal,
                    request_id=request_id)
     # The durable registry lock also covers different checkpoints and callers

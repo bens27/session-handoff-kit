@@ -774,6 +774,10 @@ def save(root, session, request_id, document):
                                seal=ledger.seal(recovery_id, digest)))
                 except OSError:
                     intent_warning.append('Publication recovery intent is unavailable; retain the original request ID and draft for legacy retry.')
+                if os.path.join(os.path.realpath(os.path.dirname(directory)), os.path.basename(directory)) == os.path.join(os.path.realpath(root), '.handoffs'):
+                    # 887c009c: create it 0o700 and re-check right before writing, so a
+                    # .handoffs planted at a temp base after the destination check is refused.
+                    handoff_identity.local_state_dir(os.path.realpath(root), '', create=True)
                 publish(path, text)
                 write_json(path + '.published', ledger.seal(identity, ledger.content_fingerprint(text)))
                 # The successor's predecessor field is the committed lineage record.

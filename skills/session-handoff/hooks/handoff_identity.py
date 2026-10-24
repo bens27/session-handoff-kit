@@ -75,6 +75,37 @@ def handoffs_dir_usable(root):
     return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022
 
 
+class UntrustedStateDir(OSError):
+    """An exact temp base whose .handoffs fails handoffs_dir_usable."""
+    reason = 'untrusted-temp-handoffs'
+
+    def __init__(self, root):
+        super().__init__('untrusted-temp-handoffs: %s' % os.path.join(root, '.handoffs'))
+
+
+def local_state_dir(root, sub, create=False):
+    """The one chokepoint for <root>/.handoffs/<sub> state (887c009c).
+
+    At an exact temp base, a missing .handoffs is created 0o700 only when create
+    is set, and .handoffs is then re-checked, so one planted before or during
+    creation is refused: UntrustedStateDir, with nothing read or written there.
+    """
+    hdir = os.path.join(root, '.handoffs')
+    if os.path.realpath(root) in temp_bases():
+        if create:
+            try:
+                os.mkdir(hdir, 0o700)
+            except FileExistsError:
+                pass
+        if not handoffs_dir_usable(root):
+            if create or os.path.lexists(hdir):
+                raise UntrustedStateDir(root)
+    path = os.path.join(hdir, sub) if sub else hdir
+    if create:
+        os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _sha1(text, length):
     return hashlib.sha1(text.encode('utf-8', 'replace')).hexdigest()[:length]
 

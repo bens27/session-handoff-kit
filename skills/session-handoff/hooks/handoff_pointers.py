@@ -16,6 +16,7 @@ import re
 import stat
 import time
 
+import handoff_identity
 import handoff_intents as intents
 import handoff_ledger as ledger
 import handoff_workspace as workspace
@@ -57,6 +58,9 @@ def _check_dirs(root, create=False):
     hfd = os.open(handoffs, flags)
     try:
         _safe_dir(hfd, private=False)
+        # 887c009c: at an exact temp base, handoffs_dir_usable's 0o022 rule, on the pinned fd.
+        if os.path.realpath(root) in handoff_identity.temp_bases() and os.fstat(hfd).st_mode & 0o022:
+            raise ValueError('unsafe-pointer-dir')
         if create:
             try:
                 os.mkdir('pointers', 0o700, dir_fd=hfd)

@@ -711,7 +711,12 @@ project, so scratch directories below it never inherit that fallback ledger.
 At a temp base itself, `.handoffs/` is discovered, listed, read or written only
 when it is a real directory (not a symlink) owned by the current user with
 owner-only write (no group or other write bits; the project pointer's owner
-rule); otherwise it is ignored and saves use the fallback. Emitted
+rule); otherwise it is ignored and saves use the fallback. The same rule
+covers its state subdirectories (`dispatch/`, `restart/`, `holds/`, `pointers/`):
+an untrusted copy is never read or written, synthetic identities and holds
+ignore it, and restart preflight blocks with `untrusted-temp-handoffs`. When
+a save creates `.handoffs/` at a temp base it uses mode 0700 and re-checks it
+just before writing, so one planted after the destination check is refused. Emitted
 commands name one hooks directory: the installed `~/.agents/skills/session-handoff/hooks`
 when it resolves to these hooks, else their real path.
 
