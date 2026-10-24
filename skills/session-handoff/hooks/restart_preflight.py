@@ -656,8 +656,12 @@ def adopt(root, request_id, binding=None):
         result['action'] = protocol.INBOX_FIRST + ' ' + result.get('action', '')
     result['restart'], result['report'] = identity, report
     if result['outcome'] == 'resumed':
-        # Account for the final adopt envelope and its ASCII-escaped wire format,
-        # then persist against the same root/session the successor save reads.
+        # Repair the observed successor note from the original transfer clock.
+        try:
+            protocol.record_resume_note(identity_root or root, session, Record.load(record['path']).fm)
+        except (OSError, ValueError):
+            pass  # Optional note repair must not fail an already successful transfer.
+        # Account for the final adopt envelope and its ASCII-escaped wire format.
         protocol.delivery_metrics(result, identity_root or root, session, profile='raw')
     return result
 

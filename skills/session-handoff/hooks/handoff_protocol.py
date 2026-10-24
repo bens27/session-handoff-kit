@@ -321,24 +321,58 @@ def workspace_changes_hash(root):
         return ''
 
 
-def audit_anchors(body):
+def audit_source_lines(root, path, remaining):
+    """Read a bounded regular file below root without following any symlink.
+
+    Each path component is opened relative to the preceding directory descriptor.
+    Return (line count, bytes read); inaccessible/nonregular paths cannot ground an anchor.
+    """
+    import stat
+    from contextlib import ExitStack
+    parts = path.split('/')
+    if any(part in ('', '.', '..') for part in parts):
+        return 0, 0
+    try:
+        with ExitStack() as stack:
+            def opened(name, flags, **kwargs):
+                fd = os.open(name, flags | os.O_NOFOLLOW, **kwargs)
+                stack.callback(os.close, fd)
+                return fd
+            directory = opened(root, os.O_RDONLY | os.O_DIRECTORY)
+            for part in parts[:-1]:
+                directory = opened(part, os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
+            fd = opened(parts[-1], os.O_RDONLY | os.O_NONBLOCK, dir_fd=directory)
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return 0, 0
+            limit = min(262144, remaining)
+            with os.fdopen(os.dup(fd), 'rb', buffering=0) as source:
+                data = source.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError('Audit source read budget exceeded')
+            return data.count(b'\n') + bool(data and not data.endswith(b'\n')), len(data)
+    except (OSError, NotImplementedError):
+        return 0, 0
+
+
+def audit_anchors(root, body):
     """Bounded declared source evidence, not a semantic verification of findings.
 
-    Only Findings bullets of the form '- `relative/file.ext:42`: conclusion'
-    count. Store anchor identities, so prose rewrites cannot renew evidence.
-    An empty string means unknown; JSON [] is a known empty baseline.
+    Only Findings bullets with a relative source path and in-range line count.
+    Store anchor identities, so prose rewrites cannot renew evidence.
+    Return a capped JSON identity sample and overflow count. Empty strings mean
+    unknown; JSON [] with zero overflow is a known empty baseline.
     """
     if len(body.encode('utf-8')) > 65536:
-        return ''
-    anchors = set()
+        return '', ''
+    anchors, sources, remaining = set(), {}, 1048576
     findings, fence = False, None
     for line in body.splitlines():
-        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
         if marker:
             token = marker[1]
             if fence is None:
                 fence = token
-            elif token[0] == fence[0] and len(token) >= len(fence):
+            elif token[0] == fence[0] and len(token) >= len(fence) and not marker[2].strip():
                 fence = None
             continue
         if fence:
@@ -347,13 +381,19 @@ def audit_anchors(body):
             findings = bool(re.fullmatch(r'## Findings(?: .*)?', line))
         if not findings:
             continue
-        match = re.fullmatch(r'- `((?:[\w-]+/)*[\w.-]+\.[\w-]+):([1-9][0-9]*)`: (\S.*)', line)
+        match = re.fullmatch(r'- `([\w.-]+(?:/[\w.-]+)*):([1-9][0-9]*)`: (\S.*)', line)
         if match and len(line.encode('utf-8')) <= 1024:
+            if match[1] not in sources:
+                try:
+                    sources[match[1]], used = audit_source_lines(root, match[1], remaining)
+                except ValueError:
+                    return '', ''
+                remaining -= used
+            if int(match[2]) > sources[match[1]]:
+                continue
             anchor = match[1] + ':' + match[2]
             anchors.add(hashlib.sha256(anchor.encode('utf-8')).hexdigest())
-            if len(anchors) > 64:
-                return ''
-    return json.dumps(sorted(anchors))
+    return json.dumps(sorted(anchors)[:64]), str(max(0, len(anchors) - 64))
 
 
 def save_progress(root, current, continuity, previous, baseline=False):
@@ -375,15 +415,19 @@ def save_progress(root, current, continuity, previous, baseline=False):
     def anchors(fields):
         try:
             value = json.loads(fields.get('audit_anchors', ''))
-            if isinstance(value, list) and len(value) <= 64 and all(
-                    isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in value):
-                return set(value)
+            overflow = str(fields.get('audit_anchor_overflow', '0'))
+            if (isinstance(value, list) and len(value) <= 64 and all(
+                    isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in value)
+                    and len(set(value)) == len(value)
+                    and re.fullmatch(r'0|[1-9][0-9]{0,4}', overflow)
+                    and (overflow == '0' or len(value) == 64)):
+                return len(value) + int(overflow)
         except (ValueError, TypeError, RecursionError):
             pass
         return None
     old_anchors, new_anchors = anchors(previous), anchors(current)
     audit_changed = (eligible and old_anchors is not None and new_anchors is not None
-                     and bool(new_anchors - old_anchors))
+                     and new_anchors > old_anchors)
     before, after = previous.get('workspace_changes_hash'), current.get('workspace_changes_hash')
     files_changed = eligible and bool(before) and bool(after) and before != after
     commits = False
@@ -803,7 +847,7 @@ def save(root, session, request_id, document):
         if document.get('reason') == 'user-parked':
             fields['reason'] = 'user-parked'
         fields['workspace_changes_hash'] = workspace_changes_hash(root)
-        fields['audit_anchors'] = audit_anchors(body)
+        fields['audit_anchors'], fields['audit_anchor_overflow'] = audit_anchors(root, body)
         workspace = os.path.realpath(note.get('cwd') or root)
         fields['workspace'] = workspace
         fields['workspace_git'] = ledger._git_position(workspace)
@@ -1264,6 +1308,22 @@ def prepared_receipt(path, root, session):
     return receipt
 
 
+def record_resume_note(root, session, fm):
+    """Persist the transfer's original clock in the observed successor's note.
+
+    Transfer ownership is checked by the caller. Replays retain the sealed
+    acknowledgement timestamp rather than restarting the rapid-resume clock.
+    """
+    import time
+    try:
+        resumed_at = datetime.fromisoformat(fm['resumed']).timestamp()
+        note = ledger.read_session_note(root, session=session)
+        note.update(session_id=session, ts=time.time(), resumed_at=resumed_at, resumed_topic=fm.get('topic'))
+        write_json(handoff_identity.session_note_path(root, session), note)
+    except (OSError, ValueError, KeyError):
+        pass  # Transfer succeeded; optional diagnostics must not fail resume.
+
+
 def acknowledge(path, root, session):
     root = handoff_identity.project_root(root)
     if not os.path.exists(path):
@@ -1284,13 +1344,7 @@ def acknowledge(path, root, session):
         ledger._set_fields(path, [('status', 'resumed'), ('resumed', resumed_at), ('resumed_by', session),
                                   ('transfer_receipt', 'signed')],
                            ('status:', 'resumed:', 'resumed_by:', 'transfer_receipt:', 'claimed:', 'claim_owner:'))
-        import time
-        note = ledger.read_session_note(root, session=session)
-        note.update(session_id=session, ts=time.time(), resumed_at=time.time(), resumed_topic=fm.get('topic'))
-        try:
-            write_json(handoff_identity.session_note_path(root, session), note)
-        except OSError:
-            pass  # Transfer succeeded; optional diagnostics must not turn it into a failed resume.
+        record_resume_note(root, session, dict(fm, resumed=resumed_at))
     return dict(outcome='resumed', path=path, action='Transfer acknowledged. Continue the authorized next step.')
 
 

@@ -155,11 +155,21 @@ or custom catalogs, rather than loading them on every successful one-shot resume
 Save pauses for rapid/repeated context-pressure saves only when the current
 checkpoint shows no progress against its trusted same-topic pressure predecessor.
 Progress is a changed draft content hash AND a changed effective continuity
-register, forward Git commits, changed observed working-file hashes, or a new
-source anchor declared under `## Findings` as ``- `relative/file.ext:42`: conclusion``.
-Audit evidence records bounded path/line identities: rewording, reordering or
-removing existing anchors does not count. Ordinary body rewrites and unknown/legacy
-evidence do not count. File hashing skips
+register, forward Git commits, changed observed working-file hashes, or a strictly larger count of grounded
+source anchors declared under `## Findings` as ``- `relative/file.ext:42`: conclusion``.
+Audit anchors require readable regular files under the save workspace root and
+in-range positive line numbers. Relative path segments allow word characters,
+dots and hyphens, including dotted directories and extensionless filenames;
+absolute paths, empty/`.`/`..` segments and all symlinks are excluded. Fenced
+examples are excluded; closing fences allow only whitespace after the matching
+marker. Extraction bounds are 64 KiB of body, 1024 bytes per bullet, 256 KiB per
+source and 1 MiB total source content (plus a one-byte oversize probe). Metadata
+stores a sorted sample of up to 64 distinct path/line hashes plus an overflow
+count, so progress can continue past 64 anchors. The total count must grow:
+rewording, reordering, removing, bumping a line or rotating anchors at the same
+count does not count. This grounds declared evidence, not the conclusion's
+correctness. Ordinary body rewrites and unknown evidence do not count; legacy
+valid lists without overflow use zero. File hashing skips
 Git directory entries and excludes only top-level `.handoffs`, `.agentsroom` and
 `.git` paths. With no same-topic pressure predecessor, the baseline is the
 checkpoint this session resumed under a valid transfer receipt. A branch name change alone does not count; a newer descendant
@@ -193,7 +203,9 @@ the topics it lists; `restart-budget` and `restart-cooldown` remain hard stops r
 Five previous AgentsRoom restart intents within an hour or another session's
 intent within two minutes remain hard stops, even with progress. Intent counts
 are terminal-local and cannot observe restarts outside this kit. Durable resume
-timestamps back up temporary notes. An identical retry preserves a recorded pause;
+timestamps back up temporary notes. Restart adoption records the original
+acknowledgement clock and topic in the observed successor's root/session note;
+same-successor replay preserves that clock, including worktree-bound transfers. An identical retry preserves a recorded pause;
 a transferred/closed checkpoint returns transition `none` and cannot restart work.
 AgentsRoom transition candidates carry `requires_preflight: true`; host dispatch
 requires authoritative current identity/capability/inventory/hold observations

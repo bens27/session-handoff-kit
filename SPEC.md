@@ -604,7 +604,7 @@ of one topic within 1800 seconds (`repeated-topic`) pauses only without progress
 least one of these changed since the trusted same-topic pressure predecessor:
 the effective continuity register (ignoring item order), a strictly newer Git
 commit descending from its recorded commit, observed Git working-file evidence,
-or a newly recorded source anchor in audit findings.
+or a strictly larger count of grounded source anchors in audit findings.
 Working-file evidence hashes modified/deleted/untracked nonignored file names
 and contents (symlinks use their link text), excluding top-level `.handoffs`,
 `.agentsroom` and `.git` paths only. Git directory entries ending in `/` (such as
@@ -614,17 +614,32 @@ are not evidence of progress in the parent repository. Hashing is bounded to
 missing legacy hashes, or exceeded bounds are unknown and do not prove progress.
 Audit evidence uses bullets in `## Findings` of the form
 ``- `relative/file.ext:42`: conclusion``.
-Paths use slash-separated word/hyphen directories and a filename with an extension;
-line numbers are positive decimal integers. The conclusion must be nonempty.
-Fenced code is excluded. SHA-256 identities of distinct path/line anchors are stored
-as the sealed `audit_anchors` JSON list; the body is not duplicated. At least one
-anchor must be absent from the trusted baseline's list. Reordering, removing, or
-rewording existing anchors does not establish audit progress. Extraction is bounded
-to 64 KiB of UTF-8 body, 1024 bytes per qualifying bullet, and 64 distinct anchors.
-An oversized bullet is skipped; exceeding the body or anchor bound stores unknown
-evidence. Missing legacy or malformed lists are unknown, including as a baseline.
-This records declared audit evidence, not verification that a source exists or a
-conclusion is correct. Ordinary body/description changes alone do not establish
+Paths are relative to the save workspace root, with slash-separated segments of
+word characters, dots and hyphens; extensionless filenames and dotted directories
+are accepted. Empty, `.` and `..` segments and absolute paths are rejected. Every
+component is opened relative to a root directory descriptor without following
+symlinks (including links within the workspace). Only readable regular files
+qualify; directories, FIFOs and other special files do not. Line numbers are
+positive decimal integers within the source's line count; a nonempty unterminated
+final line counts. The conclusion must be nonempty.
+Fenced code is excluded: fences use at most three leading spaces, matching
+backticks or tildes, and a closing run at least as long as the opener with only
+whitespace after it. An info-bearing marker does not close a fence.
+SHA-256 identities of distinct path/line anchors are stored as a deterministic
+sorted sample of at most 64 in the sealed `audit_anchors` JSON list, plus the
+string-valued `audit_anchor_overflow` count beyond the sample. Progress requires
+the total count to grow strictly from the trusted baseline. Rewording, reordering,
+removing, bumping one valid line number or rotating anchors at the same count
+does not establish audit progress. This is conservative declared evidence, not
+semantic proof of a new finding or a correct conclusion.
+Extraction is bounded to 64 KiB of UTF-8 body, 1024 bytes per qualifying bullet,
+256 KiB per source and 1 MiB of source content in total, with a one-byte oversize
+probe. Each distinct source is read once per extraction. An oversized bullet is
+skipped; exceeding the body or source-read bounds stores unknown evidence.
+An empty JSON list with zero overflow is a known empty baseline. Missing or
+malformed anchor lists/counts are unknown; legacy valid lists without overflow
+use zero. Overflow is valid only with a full 64-identity sample.
+Ordinary body/description changes alone do not establish
 progress. An absent or untrusted
 same-topic pressure predecessor cannot prove progress on its own; the baseline then
 falls back to the newest trusted checkpoint whose transfer this session holds a valid receipt for (any topic or reason),
@@ -651,6 +666,10 @@ a different session's intent within 120 seconds (`restart-cooldown`) always
 returns `paused`, regardless of progress. These hard limits are unchanged.
 Intent counts cannot observe restarts outside the kit; the host remains the
 authority for its limits. Durable resume timestamps back up ephemeral notes.
+Successful restart adoption also writes `resumed_at` and `resumed_topic` into the
+observed successor's root/session note, while ledger/receipt ownership stays at
+the binding root. Adoption replays retain the checkpoint's original sealed
+acknowledgement timestamp, preserving the rapid-resume clock.
 A paused checkpoint is fully published and remains open. SessionStart, tmux
 Stop and the headless runner honor its pause; explicit continuation can resume
 it. The runner exits 75. Host refusal preserves the open checkpoint for the

@@ -7,6 +7,7 @@ predecessor (its own PostToolUse of the restart call refreshed it AFTER dispatch
 The fixture uses a real `git worktree add`: a scratch `git init` directory would
 share nothing with the live key and would not reproduce the split.
 """
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -113,6 +114,24 @@ class SuccessorIdentityRootTests(unittest.TestCase):
             self.assertGreater(tokens, 0)
             self.assertEqual(ledger.read_session_note(str(self.live), session='new').get(
                 'resume_delivery_tokens'), tokens)
+
+    def test_live_root_successor_keeps_original_resume_clock_on_replay(self):
+        self.session_start(self.live)
+        first_stamp = None
+        for _ in range(2):
+            result = self.adopt(self.live)
+            self.assertEqual(result['outcome'], 'resumed', result)
+            note = ledger.read_session_note(str(self.live), session='new')
+            self.assertEqual(note.get('resumed_topic'), 'work')
+            stamp = note.get('resumed_at')
+            self.assertIsInstance(stamp, (int, float))
+            fm = protocol.Record.load(self.path).fm
+            self.assertEqual(stamp, datetime.fromisoformat(fm['resumed']).timestamp())
+            if first_stamp is not None:
+                self.assertEqual(stamp, first_stamp)
+            first_stamp = stamp
+            # SessionStart/hook fields and accounting survive a replay repair.
+            self.assertGreater(note['resume_delivery_tokens'], 0)
 
     def test_no_successor_hook_blocks_with_precise_reason(self):
         result = self.adopt(self.live)

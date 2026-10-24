@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HOOKS = Path(__file__).resolve().parents[1] / 'skills/session-handoff/hooks'
 INBOX = ('Read your AgentsRoom inbox with agents_read_inbox and handle relevant pending mail '
@@ -20,6 +21,10 @@ class SessionBloatTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / 'project'
         self.root.mkdir()
+        for name, lines in (('app/adapter.py', 100), ('app/router.py', 10)):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('source line\n' * lines)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(('CODEX_THREAD_ID', 'HANDOFF_', 'CONTEXT_WATCH_', 'AUTORESUME', 'AGENTSROOM_'))}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, AGENTSROOM_AGENT_ID='terminal-a',
@@ -226,7 +231,173 @@ with patch('time.time', return_value=stamp):
             self.assertEqual(out['transition']['kind'], 'paused', diag)
             self.assertFalse(diag['progress']['audit_changed'])
 
-    def test_unstructured_fenced_empty_and_overflow_audits_do_not_establish_progress(self):
+    def assert_anchor_does_not_prove_progress(self, anchor, baseline=''):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save(body=BODY + baseline)
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        out = self.save(session='s2', body=BODY + '\n## Findings\n- `%s`: audited.\n' % anchor)
+        diag = out['transition']['diagnostics']
+        self.assertFalse(diag['progress']['audit_changed'], diag)
+        self.assertEqual(out['transition']['kind'], 'paused', diag)
+
+    def test_fabricated_audit_anchor_does_not_prove_progress(self):
+        self.assert_anchor_does_not_prove_progress('does/not/exist.py:999999')
+
+    def test_out_of_range_audit_anchor_does_not_prove_progress(self):
+        self.assert_anchor_does_not_prove_progress('app/adapter.py:999999')
+
+    def test_bumped_audit_anchor_does_not_prove_progress(self):
+        self.assert_anchor_does_not_prove_progress('app/adapter.py:43',
+            '\n## Findings\n- `app/adapter.py:42`: found a caller.\n')
+
+    def test_rotated_audit_anchor_does_not_prove_progress(self):
+        self.assert_anchor_does_not_prove_progress('app/router.py:9',
+            '\n## Findings\n- `app/adapter.py:42`: found a caller.\n')
+
+    def test_placeholder_audit_anchor_does_not_prove_progress(self):
+        self.assert_anchor_does_not_prove_progress('relative/file.ext:42')
+
+    def test_audit_progress_continues_past_the_stored_anchor_cap(self):
+        def body(count):
+            return BODY + '\n## Findings\n' + ''.join(
+                '- `app/adapter.py:%d`: inspected this caller.\n' % n for n in range(1, count + 1))
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save(body=body(64))
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        for count in (65, 66):
+            self.clock += 1
+            out = self.save(session='s2', body=body(count))
+            diag = out['transition']['diagnostics']
+            self.assertTrue(diag['progress']['audit_changed'], diag)
+            self.assertEqual(out['transition']['kind'], 'agents_restart', diag)
+            fm = Path(out['path']).read_text().split('\n---\n', 1)[0]
+            fields = dict(line.split(': ', 1) for line in fm.splitlines() if ': ' in line)
+            self.assertEqual(len(json.loads(fields['audit_anchors'])), 64)
+            self.assertEqual(int(fields['audit_anchor_overflow']), count - 64)
+
+    def test_dotted_directories_and_extensionless_sources_ground_audit_progress(self):
+        names = ('.github/workflows/ci.yml', 'Makefile', 'Dockerfile', 'src/v1.2/x.py')
+        for name in names:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('inspected line')  # A final line need not end in a newline.
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        out = self.save(session='s2', body=BODY + '\n## Findings\n' + ''.join(
+            '- `%s:1`: inspected.\n' % name for name in names))
+        diag = out['transition']['diagnostics']
+        self.assertTrue(diag['progress']['audit_changed'], diag)
+        fm = Path(out['path']).read_text().split('\n---\n', 1)[0]
+        fields = dict(line.split(': ', 1) for line in fm.splitlines() if ': ' in line)
+        self.assertEqual(len(json.loads(fields['audit_anchors'])), len(names))
+
+    def test_unconfined_and_nonregular_sources_cannot_ground_findings(self):
+        outside = Path(self.tmp.name) / 'outside.py'
+        outside.write_text('outside line\n')
+        (self.root / 'outside-file.py').symlink_to(outside)
+        (self.root / 'outside-dir').symlink_to(outside.parent, target_is_directory=True)
+        (self.root / 'inside-file.py').symlink_to(self.root / 'app/adapter.py')
+        (self.root / 'inside-dir').symlink_to(self.root / 'app', target_is_directory=True)
+        (self.root / 'empty.py').touch()
+        os.mkfifo(self.root / 'pipe')
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        for anchor in ('../outside.py:1', str(outside) + ':1',
+                       'app/../../outside.py:1', './app/adapter.py:1',
+                       'outside-file.py:1', 'outside-dir/outside.py:1',
+                       'inside-file.py:1', 'inside-dir/adapter.py:1',
+                       'app:1', 'pipe:1', 'empty.py:1', 'app/router.py:11'):
+            with self.subTest(anchor=anchor):
+                self.clock += 1
+                out = self.save(session='s2', body=BODY + '\n## Findings\n- `%s`: inspected.\n' % anchor)
+                diag = out['transition']['diagnostics']
+                self.assertFalse(diag['progress']['audit_changed'], diag)
+                self.assertEqual(out['transition']['kind'], 'paused', diag)
+
+    def test_audit_source_reads_are_bounded_and_reused(self):
+        sys.path.insert(0, str(HOOKS))
+        self.addCleanup(sys.path.remove, str(HOOKS))
+        import handoff_protocol as protocol
+        opened, reads = os.fdopen, []
+
+        def tracked(*args, **kwargs):
+            source = opened(*args, **kwargs)
+            reader = mock.Mock(wraps=source)
+            reader.read.side_effect = lambda size: (reads.append(size), source.read(size))[1]
+            context = mock.MagicMock()
+            context.__enter__.return_value = reader
+            context.__exit__.side_effect = lambda *exc: source.close()
+            return context
+
+        for n in range(5):
+            (self.root / ('source%d' % n)).write_bytes(b'x\n' * 131072)
+        findings = lambda names: '## Findings\n' + ''.join(
+            '- `%s:1`: inspected.\n' % name for name in names)
+        with mock.patch.object(protocol.os, 'fdopen', side_effect=tracked):
+            sample, overflow = protocol.audit_anchors(str(self.root), findings(['source0', 'source0']))
+            self.assertEqual((len(json.loads(sample)), overflow), (1, '0'))
+            self.assertEqual(reads, [262145])  # One-byte oversize probe, once per source.
+            reads.clear()
+            self.assertEqual(protocol.audit_anchors(str(self.root), findings(
+                ['source%d' % n for n in range(5)])), ('', ''))
+            self.assertEqual(reads, [262145] * 4 + [1])
+            (self.root / 'source0').write_bytes(b'x' * 262145)
+            reads.clear()
+            self.assertEqual(protocol.audit_anchors(str(self.root), findings(['source0'])), ('', ''))
+            self.assertEqual(reads, [262145])
+
+    def test_legacy_and_malformed_audit_counts_fail_conservatively(self):
+        sys.path.insert(0, str(HOOKS))
+        self.addCleanup(sys.path.remove, str(HOOKS))
+        import handoff_protocol as protocol
+        anchor = 'a' * 64
+        old = dict(topic='work', reason='context-pressure', content_hash='before',
+                   audit_anchors=json.dumps([anchor]))  # Legacy count has implicit zero overflow.
+        new = dict(old, content_hash='after', audit_anchors=json.dumps([anchor, 'b' * 64]),
+                   audit_anchor_overflow='0')
+        self.assertTrue(protocol.save_progress(str(self.root), new, [], old)['audit_changed'])
+        for bad in ('-1', '1.0', 'true', '100000', '01', '1'):
+            with self.subTest(overflow=bad):
+                self.assertFalse(protocol.save_progress(str(self.root), dict(new,
+                    audit_anchor_overflow=bad), [], old)['audit_changed'])
+        for bad in ('', 'null', '{}', json.dumps([anchor, anchor]), json.dumps(['bad'])):
+            with self.subTest(anchors=bad):
+                self.assertFalse(protocol.save_progress(str(self.root), new, [], dict(old,
+                    audit_anchors=bad))['audit_changed'])
+
+    def test_info_bearing_fence_does_not_expose_audit_findings(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        out = self.save(session='s2', body=BODY + '\n```markdown\n```python\n'
+                        '## Findings\n- `app/adapter.py:42`: quoted example.\n```\n')
+        diag = out['transition']['diagnostics']
+        self.assertFalse(diag['progress']['audit_changed'], diag)
+        self.assertEqual(out['transition']['kind'], 'paused', diag)
+
+    def test_unstructured_fenced_empty_and_oversized_audits_do_not_establish_progress(self):
         self.clock = float(int(time.time()))
         self.hook(140000)
         first = self.save()
@@ -240,8 +411,6 @@ with patch('time.time', return_value=stamp):
                       '\n## Findings\n- `app/adapter.py:42`: \n',
                       '\n## Findings\n' + anchor.rstrip() + 'x' * 1024 + '\n',
                       '\n## Findings\n' + anchor + 'x' * 65536,
-                      '\n## Findings\n' + ''.join(
-                          '- `app/adapter.py:%d`: no callers remain.\n' % n for n in range(1, 66)),
                       '\n## Findings\n' + anchor):  # unknown baseline cannot prove progress
             with self.subTest(extra=extra[:80]):
                 self.clock += 1  # Distinct publication times select the immediate baseline.
@@ -252,7 +421,8 @@ with patch('time.time', return_value=stamp):
 
     def test_audit_progress_cannot_bypass_cooldown_or_budget(self):
         def audit(n):
-            return BODY + '\n## Findings\n- `app/adapter.py:%d`: no callers remain.\n' % n
+            return BODY + '\n## Findings\n' + ''.join(
+                '- `app/adapter.py:%d`: no callers remain.\n' % line for line in range(1, n + 1))
         self.clock = float(int(time.time()))
         self.hook(140000)
         first = self.save()
