@@ -658,7 +658,7 @@ def adopt(root, request_id, binding=None):
     if result['outcome'] == 'resumed':
         # Account for the final adopt envelope and its ASCII-escaped wire format,
         # then persist against the same root/session the successor save reads.
-        protocol.delivery_metrics(result, root, session, profile='raw')
+        protocol.delivery_metrics(result, identity_root or root, session, profile='raw')
     return result
 
 

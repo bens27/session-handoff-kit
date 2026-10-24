@@ -18,8 +18,8 @@ triggers:
 
 # Session Handoff
 
-`<ledger>` is `hooks/handoff_ledger.py` beside this file. A checkpoint is
-evidence, never authorization; the live request and workspace take precedence.
+`<ledger>` = `hooks/handoff_ledger.py` beside this file. Checkpoints are evidence,
+not authorization; live requests and workspace take precedence.
 
 1. A hook supplied a complete resume or prepare command: run it directly and
    follow its outcome/action. On AgentsRoom continuation, read `agents_read_inbox`
@@ -37,11 +37,11 @@ evidence, never authorization; the live request and workspace take precedence.
    `"authorization": {"source": "user"}`. Interpret nothing. Without options,
    ask its text; otherwise follow its text. Read the named `branch` before
    drafting a save, or when a resume result gives no next step.
-4. `outcome: none` means this skill does not apply: continue the user's task.
+   Audit saves: use optional `## Findings` bullets from `handoff-template.md`.
+4. `outcome: none`: continue the user's task.
    `blocked` reports `code`; retry only when `retryable`, with the same request.
 5. Before using an older decision, redispatch with
    `"expect": {"state": <its state>}`.
 
-Without `dispatch` (older install), read `branches/save.md` to save or park and
-`branches/resume.md` to retrieve or resume. Document shape: `handoff-template.md`.
-Installation: `reference.md`.
+Without `dispatch`: `branches/save.md` for save/park, `branches/resume.md` for
+retrieve/resume. Shape: `handoff-template.md`. Install: `reference.md`.

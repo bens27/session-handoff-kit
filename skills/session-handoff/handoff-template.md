@@ -60,6 +60,14 @@ Optional sections: `## Decisions and rationale` for a decision that changes the
 next action; `## In flight` for an interrupted operation; `## Gotchas` for a
 replay hazard. Omit them when the core already covers those facts.
 
+For read-only audits, optionally record source findings with this exact bullet
+shape; new path/line anchors can establish audit progress:
+
+```markdown
+## Findings
+- `relative/file.ext:42`: conclusion
+```
+
 When the next steps plan code changes, `## Decisions and rationale` is required:
 one line per change giving the chosen behaviour and its code anchor
 (`path:START-END`, with the excerpt in `references` when the change depends on

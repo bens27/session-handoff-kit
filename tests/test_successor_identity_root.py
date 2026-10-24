@@ -23,6 +23,7 @@ sys.path.insert(0, str(HOOKS))
 import context_watch  # noqa: E402
 import handoff_intents as intents  # noqa: E402
 import handoff_identity  # noqa: E402
+import handoff_ledger as ledger  # noqa: E402
 import handoff_protocol as protocol  # noqa: E402
 import restart_preflight as restart  # noqa: E402
 
@@ -102,6 +103,16 @@ class SuccessorIdentityRootTests(unittest.TestCase):
         self.session_start(self.worktree)
         result = self.adopt(self.worktree)
         self.assertEqual(result['outcome'], 'resumed', result)
+
+    def test_live_root_successor_receives_delivery_metrics_in_its_own_note(self):
+        self.session_start(self.live)
+        for _ in range(2):  # Initial adoption and same-successor replay.
+            result = self.adopt(self.live)
+            self.assertEqual(result['outcome'], 'resumed', result)
+            tokens = result['metrics']['estimated_delivery_tokens']
+            self.assertGreater(tokens, 0)
+            self.assertEqual(ledger.read_session_note(str(self.live), session='new').get(
+                'resume_delivery_tokens'), tokens)
 
     def test_no_successor_hook_blocks_with_precise_reason(self):
         result = self.adopt(self.live)
