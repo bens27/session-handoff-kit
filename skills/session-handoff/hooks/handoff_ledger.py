@@ -60,7 +60,7 @@ from handoff_identity import (  # noqa: F401
     fallback_dir as _fallback_dir, fallback_claims as _fallback_claims,
     linked_worktree_root as _linked_worktree_root, project_root,
     session_note_path, project_pointer_path, read_project_pointer,
-    temp_bases, under_temp_base)
+    temp_bases, under_temp_base, handoffs_dir_usable)
 # The checkpoint record owns status, fingerprint, publication and seal; these
 # names stay importable from the ledger for existing callers.
 import handoff_workspace as workspace
@@ -130,8 +130,9 @@ def _handoff_paths(root, errors=None):
     paths = []
     seen = set()
     fallback = _fallback_dir(root)
-    for hdir in (os.path.join(root, ".handoffs"), fallback):
-        if not os.path.isdir(hdir):
+    local = os.path.join(root, ".handoffs")
+    for hdir in (local, fallback):
+        if not os.path.isdir(hdir) or (hdir == local and not handoffs_dir_usable(root)):
             continue
         try:
             names = sorted(os.listdir(hdir))
@@ -367,8 +368,10 @@ def resolve(topic_or_path, root):
 def save_path(root):
     abs_root = project_root(root)
     hdir = os.path.join(abs_root, ".handoffs")
-    if os.path.isdir(hdir):
+    if handoffs_dir_usable(abs_root):
         return hdir
+    if os.path.lexists(hdir) and os.path.realpath(abs_root) in temp_bases():
+        return _fallback_dir(abs_root)  # an untrusted temp-base .handoffs is never written
     if _linked_worktree_root(abs_root) and not _fallback_claims(abs_root):
         return hdir
     return _fallback_dir(abs_root)

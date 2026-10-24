@@ -255,5 +255,65 @@ class TempBaseIsNeverAProject(Case):
             self.assertEqual(identity.project_root(child), parent)
 
 
+class TempBaseHandoffsTrust(Case):
+    """8a700dba: at an exact temp base, `.handoffs/` counts only if it is a real
+    directory owned by this uid with no group/other write bits."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = os.path.join(self.tmp, 'tmpbase')
+        self.scratch = os.path.join(self.base, 'scratch')
+        os.makedirs(self.scratch)
+        self.hdir = os.path.join(self.base, '.handoffs')
+        bases = patch.object(identity, 'temp_bases', return_value={os.path.realpath(self.base)})
+        bases.start()
+        self.addCleanup(bases.stop)
+
+    def seed(self, make):
+        make()
+        target = os.path.realpath(self.hdir)
+        with open(os.path.join(target, '20261001-0000-planted.md'), 'w') as f:
+            f.write('---\ntopic: planted\nstatus: open\n---\nPlanted.\n')
+
+    def visible(self):
+        return [os.path.basename(p) for p, _ in handoff_ledger._handoff_paths(self.base)[0]]
+
+    def assert_ignored(self):
+        self.assertEqual(identity.project_root(self.scratch), self.scratch)
+        self.assertNotIn('20261001-0000-planted.md', self.visible())
+        self.assertNotEqual(handoff_ledger.save_path(self.base), self.hdir)
+
+    def test_conforming_directory_is_discovered(self):
+        self.seed(lambda: os.mkdir(self.hdir, 0o700))
+        self.assertEqual(identity.project_root(self.scratch), self.base)
+        self.assertIn('20261001-0000-planted.md', self.visible())
+
+    def test_symlink_is_ignored(self):
+        real = os.path.join(self.tmp, 'elsewhere')
+        self.seed(lambda: (os.mkdir(real, 0o700), os.symlink(real, self.hdir)))
+        self.assert_ignored()
+
+    def test_group_or_other_writable_is_ignored(self):
+        for mode in (0o770, 0o707, 0o777):
+            with self.subTest(mode=oct(mode)):
+                if not os.path.isdir(self.hdir):
+                    self.seed(lambda: os.mkdir(self.hdir))
+                os.chmod(self.hdir, mode)
+                self.assert_ignored()
+
+    def test_foreign_owned_is_ignored(self):
+        self.seed(lambda: os.mkdir(self.hdir, 0o700))
+        with patch('os.getuid', return_value=os.getuid() + 1):
+            self.assert_ignored()
+
+    def test_non_temp_project_is_unchanged(self):
+        project = os.path.join(self.tmp, 'proj')
+        os.makedirs(os.path.join(project, '.handoffs'))
+        os.chmod(os.path.join(project, '.handoffs'), 0o777)
+        sub = os.path.join(project, 'sub')
+        os.makedirs(sub)
+        self.assertEqual(identity.project_root(sub), project)
+
+
 if __name__ == '__main__':
     unittest.main()

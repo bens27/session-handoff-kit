@@ -56,6 +56,25 @@ def under_temp_base(path):
     return any(path == b or path.startswith(b + os.sep) for b in temp_bases())
 
 
+def handoffs_dir_usable(root):
+    """True when <root>/.handoffs may be discovered, read or written.
+
+    Anywhere but an exact temp base, a directory is enough. At a temp base
+    (world-writable, e.g. /tmp) another local user could plant it, so it must
+    be a real directory, not a symlink, owned by this uid with owner-only
+    write (no 0o022 bits): the same owner rule as read_project_pointer, which
+    additionally requires 0o077-clean modes on its regular pointer file.
+    """
+    hdir = os.path.join(root, ".handoffs")
+    if os.path.realpath(root) not in temp_bases():
+        return os.path.isdir(hdir)
+    try:
+        info = os.lstat(hdir)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022
+
+
 def _sha1(text, length):
     return hashlib.sha1(text.encode('utf-8', 'replace')).hexdigest()[:length]
 
@@ -160,7 +179,7 @@ def project_root(start):
     bases = temp_bases()
     d = start
     while d != home:
-        if os.path.isdir(os.path.join(d, ".handoffs")) or (
+        if handoffs_dir_usable(d) or (
                 (d != start or worktree is not None) and os.path.realpath(d) not in bases and fallback_claims(d)):
             return d
         if worktree and same_dir(d, worktree):

@@ -707,7 +707,11 @@ a temp-base root or scratch directory inside one is refused, even if it holds
 `.handoffs/` or `.git`; pass an explicit root (`save <root>`, including `save .`)
 to intentionally save there. Redirects appear in JSON `warnings`.
 Root discovery ignores fallback handoffs that name a temp base itself as their
-project, so scratch directories below it never inherit that fallback ledger. Emitted
+project, so scratch directories below it never inherit that fallback ledger.
+At a temp base itself, `.handoffs/` is discovered, listed, read or written only
+when it is a real directory (not a symlink) owned by the current user with
+owner-only write (no group or other write bits; the project pointer's owner
+rule); otherwise it is ignored and saves use the fallback. Emitted
 commands name one hooks directory: the installed `~/.agents/skills/session-handoff/hooks`
 when it resolves to these hooks, else their real path.
 

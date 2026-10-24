@@ -757,7 +757,8 @@ def save(root, session, request_id, document):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
         text = '---\n' + ''.join('%s: %s\n' % pair for pair in fields.items()) + '---\n' + body
         filename = now.strftime('%Y%m%d-%H%M%S-') + topic + '-' + identity[:12] + '.md'
-        destinations = list(dict.fromkeys([ledger.save_path(root), ledger._fallback_dir(root), os.path.join(root, '.handoffs')]))
+        destinations = list(dict.fromkeys([ledger.save_path(root), ledger._fallback_dir(root)] + (
+            [os.path.join(root, '.handoffs')] if ledger.handoffs_dir_usable(root) or not os.path.lexists(os.path.join(root, '.handoffs')) else [])))
         failures = []
         for directory in destinations:
             path = os.path.join(directory, filename)
