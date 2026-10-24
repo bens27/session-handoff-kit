@@ -68,8 +68,10 @@ below half of that, or once occupancy is back within 10,000 tokens of its
 startup floor.
 
 **A blocked restart is offered again.** When `restart_preflight.py restart`
-returns `blocked`, it leaves a marker beside the latch
-(`context-watch-<key>.fired.restart-blocked`); any other outcome removes it,
+returns `blocked` from preflight, it leaves a marker beside the latch
+(`context-watch-<key>.fired.restart-blocked`); a block before preflight and
+any other outcome remove it, so it always describes the latest attempt;
+a malformed marker counts as missing,
 and so do a re-arm and a checkpoint that is no longer literally `open`, belongs
 to another session, or was not saved for context pressure. With reason
 `human-hold` the watcher re-offers the restart once, on the first
@@ -78,6 +80,12 @@ all three: a caller hold (`--hold`, such as an open ask_user card) has seen
 the next `UserPromptSubmit` after the block; no durable hold applies to the
 checkpoint's topic or terminal (unreadable holds count as held); and the
 checkpoint's own hold (`waiting_input` or `automatic_paused`) is unset.
+The hook cannot see an ask_user card, and a mailbox notification also
+arrives as a prompt, so after a caller hold the re-offer does not claim the
+hold cleared: it says a new prompt arrived and to keep waiting (or pass
+`--hold`) while a question to the user is unanswered. Each notice gives the
+full retry command: `restart --root <project>` with the complete `--workers`
+inventory and `--host-capable`.
 For any other block reason, or after the re-offer, the watcher reminds
 every N `UserPromptSubmit` turns (N = 5, `CONTEXT_WATCH_REMIND_TURNS`)
 while occupancy is at or above the threshold. Without a blocked restart the

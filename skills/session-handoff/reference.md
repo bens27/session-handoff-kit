@@ -474,7 +474,9 @@ context-watch latch, and any other result removes it. While this session's
 context-pressure checkpoint stays open, context-watch then re-offers the
 restart once the human hold has cleared (caller `--hold`: the next user
 prompt; durable holds: none applies; checkpoint: `waiting_input` and
-`automatic_paused` unset). For other reasons it reminds every 5 user prompts
+`automatic_paused` unset). A mailbox notification is a prompt too: if a
+question to the user is still unanswered, keep waiting or pass `--hold`.
+A block before preflight removes the marker. For other reasons it reminds every 5 user prompts
 (`CONTEXT_WATCH_REMIND_TURNS`) while occupancy stays over the threshold.
 Refresh the checkpoint if the state moved, then run `restart` again.
 Before creating a request, reconcile existing intents for this terminal in

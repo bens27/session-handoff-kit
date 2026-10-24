@@ -89,6 +89,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -1222,8 +1223,9 @@ def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdow
     """Re-offer a context-pressure restart whose human hold has cleared, or remind
     every RESTART_REMIND_TURNS prompts while it stays blocked (9452e1fe).
 
-    Hold cleared: a caller hold (the ask_user card) clears at the next
-    UserPromptSubmit after the block; a durable hold when none applies to the
+    Hold cleared: a caller hold (the ask_user card) counts as cleared at the next
+    UserPromptSubmit after the block, which the notice hedges because the hook cannot
+    see the card; a durable hold when none applies to the
     checkpoint any more; a checkpoint hold when Record.held is false."""
     path = latch_path(session_id) + ".restart-blocked"
     marker = _read_restart_block(path)
@@ -1236,6 +1238,8 @@ def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdow
         except OSError:
             pass
         return ""
+    if not isinstance(marker.get("path"), str) or not isinstance(marker.get("turns", 0), int):
+        return drop()  # malformed: treat like a missing marker
     try:
         from handoff_record import Record
         record = Record.load(marker.get("path") or "")
@@ -1244,7 +1248,10 @@ def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdow
     if (marker.get("session") != session_id or not record.open_strict
             or record.session_id != session_id or record.fm.get("reason") != "context-pressure"):
         return drop()
-    command = "python3 %s restart" % os.path.join(os.path.dirname(LEDGER), "restart_preflight.py")
+    root = marker.get("root") if isinstance(marker.get("root"), str) and marker.get("root") else cwd
+    command = ("%s --root %s with your complete --workers inventory and --host-capable"
+               % (python_command(os.path.join(os.path.dirname(LEDGER), "restart_preflight.py"), "restart"),
+                  shlex.quote(root)))
     label = LABEL.get(_AGENT, LABEL["claude"])
     note = occupancy_note(occupancy, breakdown)
     message = ""
@@ -1260,12 +1267,19 @@ def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdow
         if not cleared or record.held:
             return ""
         marker.update(reoffered=True, turns=0)
-        message = ("%s This session's context-pressure restart was blocked by a human hold; the "
-                   "hold has cleared. Context occupancy is ~%s tokens (threshold %s). Finish the action in "
-                   "progress, refresh the checkpoint %s if the state moved, then retry: %s. %s"
-                   % (label, format(occupancy, ","), format(limit, ","), marker.get("path"), command, note))
+        if marker.get("caller_hold"):
+            # The hook cannot see an ask_user card: a mailbox notification is a prompt too.
+            status = ("a new prompt arrived since the hold. If a question to the user is still "
+                      "unanswered, keep waiting (or pass --hold); otherwise")
+        else:
+            status = "the hold has cleared."
+        message = ("%s This session's context-pressure restart was blocked by a human hold; %s "
+                   "Context occupancy is ~%s tokens (threshold %s). Finish the action in progress, "
+                   "refresh the checkpoint %s if the state moved, then retry: %s. %s"
+                   % (label, status, format(occupancy, ","), format(limit, ","), marker.get("path"),
+                      command, note))
     elif event_name == "UserPromptSubmit":
-        marker["turns"] = int(marker.get("turns") or 0) + 1
+        marker["turns"] = marker.get("turns", 0) + 1
         if marker["turns"] >= RESTART_REMIND_TURNS and occupancy >= limit:
             marker["turns"] = 0
             message = ("%s The context-pressure restart is still blocked (%s) and occupancy is ~%s "

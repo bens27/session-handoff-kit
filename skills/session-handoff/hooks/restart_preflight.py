@@ -700,9 +700,15 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
     union of the caller's observation and durable dispatcher holds.
     """
     def blocked(reason):
+        if session:  # the marker describes the latest attempt, never an earlier one
+            try:
+                os.remove(restart_block_path(session))
+            except OSError:
+                pass
         return dict(outcome='blocked', dispatch=False, reason=reason, host_confirmed=False,
                     action='Do not call agents_restart. Keep the checkpoint open and report; '
                            'continue manually in a fresh session if needed.')
+    session = ''
     root = os.path.realpath(root)
     info = protocol.session_info(root)
     session, terminal = info['session_id'], protocol.terminal_id()

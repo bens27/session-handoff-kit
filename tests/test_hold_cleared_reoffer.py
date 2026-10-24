@@ -58,20 +58,23 @@ class RestartBlockedReoffer(unittest.TestCase):
         with open(self.transcript, 'a') as fh:
             fh.write(json.dumps(entry) + '\n')
 
-    def hook(self, event):
+    def hook(self, event, prompt='go on'):
         evt = dict(hook_event_name=event, session_id=SESSION, cwd=str(self.root),
                    transcript_path=str(self.transcript))
         if event == 'UserPromptSubmit':
-            evt['prompt'] = 'go on'
+            evt['prompt'] = prompt
         run = subprocess.run([sys.executable, str(HOOKS / 'context_watch.py')], input=json.dumps(evt),
                              env=self.env, capture_output=True, text=True, timeout=60)
         self.assertEqual(run.returncode, 0, run.stderr)
         out = run.stdout.strip()
         return json.loads(out)['hookSpecificOutput']['additionalContext'] if out else ''
 
-    def turn(self, tokens=131000, event='UserPromptSubmit'):
+    def turn(self, tokens=131000, event='UserPromptSubmit', prompt='go on'):
         self.call(tokens)
-        return self.hook(event)
+        return self.hook(event, prompt)
+
+    def marker(self):
+        return Path(restart.restart_block_path(SESSION))
 
     def start(self):
         self.assertEqual(self.turn(20000), '')  # startup context well under the threshold
@@ -100,11 +103,41 @@ class RestartBlockedReoffer(unittest.TestCase):
         # Same turn: the ask_user card is still open; nothing to offer yet.
         self.assertEqual(self.hook('PostToolUse'), '')
         reoffer = self.turn()  # the human answered: a new prompt
-        self.assertIn('hold has cleared', reoffer)
-        self.assertIn('restart_preflight.py', reoffer)
+        # The hook cannot see the card: it must not claim the hold cleared.
+        self.assertNotIn('hold has cleared', reoffer)
+        self.assertIn('keep waiting (or pass --hold)', reoffer)
+        self.assertIn('restart_preflight.py restart --root %s' % self.root, reoffer)
+        self.assertIn('--workers', reoffer)
+        self.assertIn('--host-capable', reoffer)
         self.assertIn(self.path, reoffer)
         self.assertIn('cache-read', reoffer)
         self.assertEqual(self.turn(), '')  # offered once, not every turn
+
+    def test_mailbox_notification_prompt_does_not_claim_the_card_was_answered(self):
+        self.first_notice_and_save()
+        self.call(131000)
+        self.assertEqual(self.restart(hold=True)['reason'], 'human-hold')
+        mail = ('[AgentsRoom] Notification: mail from chief-of-staff\nSubject: status?\n'
+                'Read it in full with agents_read_inbox.')
+        notice = self.turn(prompt=mail)
+        self.assertNotIn('hold has cleared', notice)
+        self.assertIn('If a question to the user is still unanswered, keep waiting', notice)
+
+    def test_early_blocked_restart_removes_a_stale_marker(self):
+        self.first_notice_and_save()
+        self.assertEqual(self.restart(hold=True)['reason'], 'human-hold')
+        self.assertTrue(self.marker().exists())
+        self.assertEqual(self.restart(path=str(self.root / 'missing.md'))['reason'], 'checkpoint-unreadable')
+        self.assertFalse(self.marker().exists())
+
+    def test_malformed_marker_is_treated_as_missing(self):
+        self.first_notice_and_save()
+        self.restart(workers=None)
+        value = json.loads(self.marker().read_text())
+        value['turns'] = 'x'
+        self.marker().write_text(json.dumps(value))
+        self.assertEqual(self.turn(), '')  # no "Context-watch failed"
+        self.assertFalse(self.marker().exists())
 
     def test_durable_hold_still_in_force_stays_quiet_then_reoffers_once_released(self):
         self.first_notice_and_save()
