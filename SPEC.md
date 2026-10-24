@@ -67,6 +67,24 @@ startup context) is watched against window minus reserve instead and re-arms
 below half of that, or once occupancy is back within 10,000 tokens of its
 startup floor.
 
+**A blocked restart is offered again.** When `restart_preflight.py restart`
+returns `blocked`, it leaves a marker beside the latch
+(`context-watch-<key>.fired.restart-blocked`); any other outcome removes it,
+and so do a re-arm and a checkpoint that is no longer literally `open`, belongs
+to another session, or was not saved for context pressure. With reason
+`human-hold` the watcher re-offers the restart once, on the first
+`PostToolUse` or `UserPromptSubmit` where the hold has cleared. Cleared means
+all three: a caller hold (`--hold`, such as an open ask_user card) has seen
+the next `UserPromptSubmit` after the block; no durable hold applies to the
+checkpoint's topic or terminal (unreadable holds count as held); and the
+checkpoint's own hold (`waiting_input` or `automatic_paused`) is unset.
+For any other block reason, or after the re-offer, the watcher reminds
+every N `UserPromptSubmit` turns (N = 5, `CONTEXT_WATCH_REMIND_TURNS`)
+while occupancy is at or above the threshold. Without a blocked restart the
+plain case still fires once. Every notice says what occupancy counts: the
+last model call's input + cache-creation + cache-read + output tokens, with
+the cache-read share.
+
 ## 3. Architecture
 
 Every deterministic deployment assembles the same three primitives:
@@ -213,7 +231,9 @@ after the first notice, and occupancy at or above
 max(1.25 × threshold, first occupancy + 0.25 × threshold), capped at 5,000
 tokens under the window so it stays reachable. It stays quiet
 if a validated checkpoint was published for this session's trigger (any
-status: it was acted on, whether or not it has been resumed since). After that, checks
+status: it was acted on, whether or not it has been resumed since). A blocked
+restart of that checkpoint is the exception: see "A blocked restart is
+offered again" in section 2. After that, checks
 exit silently until occupancy falls below half the threshold, which means a
 compaction happened. That re-arms both notices. For a floored session
 (threshold under the startup context) the half is taken of the effective

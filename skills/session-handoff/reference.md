@@ -469,6 +469,14 @@ Omitting `--workers` means the inventory is unknown and blocks with
 `worker-inventory-unknown`. The lower-level
 `preflight --input <observations.json>` remains for callers that build the
 object themselves; the rules below apply to both.
+A `blocked` result leaves a `.restart-blocked` marker beside the
+context-watch latch, and any other result removes it. While this session's
+context-pressure checkpoint stays open, context-watch then re-offers the
+restart once the human hold has cleared (caller `--hold`: the next user
+prompt; durable holds: none applies; checkpoint: `waiting_input` and
+`automatic_paused` unset). For other reasons it reminds every 5 user prompts
+(`CONTEXT_WATCH_REMIND_TURNS`) while occupancy stays over the threshold.
+Refresh the checkpoint if the state moved, then run `restart` again.
 Before creating a request, reconcile existing intents for this terminal in
 `.handoffs/restart/` and any request ID retained in continuity. A legacy intent
 with a different ID remains binding; a new naming convention never overrides it.

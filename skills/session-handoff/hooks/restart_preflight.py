@@ -671,6 +671,27 @@ def request_id_for(terminal, checkpoint_id):
     return 'agentsroom:' + hashlib.sha256((terminal + '\0' + checkpoint_id).encode()).hexdigest()
 
 
+def restart_block_path(session):
+    """Beside the context-watch latch: the watcher re-offers or reminds from it (9452e1fe)."""
+    return handoff_identity.latch_path(session) + '.restart-blocked'
+
+
+def record_restart_block(session, terminal, root, path, checkpoint, result, caller_hold, holds):
+    """A blocked restart leaves a marker for context-watch; any other outcome removes it."""
+    marker = restart_block_path(session)
+    try:
+        if result['outcome'] != 'blocked':
+            os.remove(marker)
+            return
+        protocol.write_json(marker, dict(
+            session=session, terminal=terminal, root=root, path=path, topic=checkpoint.topic or '',
+            reason=result.get('reason') or '', caller_hold=caller_hold,
+            durable_holds=[h['scope'] for h in holds], checkpoint_held=checkpoint.held,
+            blocked_at=time.time(), turns=0, reoffered=False))
+    except OSError:
+        pass  # advisory: the restart result itself is authoritative
+
+
 def restart(root, workers=None, host_capable=False, hold=False, path=None):
     """Predecessor's single command: identity, checkpoint, holds, observations, preflight.
 
@@ -730,7 +751,8 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         holds = holds_store.applicable_holds(holds_store.read_holds(root), checkpoint.topic)
     except OSError as exc:
         return dict(blocked('hold'), stage='hold', detail=str(exc))
-    hold = bool(hold) or bool(holds)
+    caller_hold = bool(hold)
+    hold = caller_hold or bool(holds)
     observations = dict(root=root, path=path, session=session, terminal=terminal,
                         request_id=request_id, workers=workers, host_capable=host_capable is True,
                         hold=hold, holds=holds, identity_source=info['identity_source'],
@@ -739,6 +761,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
                        host_capable=host_capable is True, hold=hold, observations=observations)
     out = dict(outcome=result['outcome'], dispatch=result['dispatch'], request_id=request_id,
                path=path, host_confirmed=False)
+    record_restart_block(session, terminal, root, path, checkpoint, result, caller_hold, holds)
     if result['outcome'] == 'ready':
         out.update(call='agents_restart', agent=terminal, restart_prompt=result['restart_prompt'],
                    action='Write the session status, then call agents_restart(prompt=restart_prompt) as the '

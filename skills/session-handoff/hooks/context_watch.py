@@ -159,6 +159,11 @@ except ImportError as _exc:
 
     def _truthy(value):  # module-free, as before the identity module
         return value.strip().lower() in ("1", "true", "yes", "on")
+try:
+    # Turns between reminders while a context-pressure restart stays blocked (9452e1fe).
+    RESTART_REMIND_TURNS = max(1, int(os.environ.get("CONTEXT_WATCH_REMIND_TURNS") or 5))
+except ValueError:
+    RESTART_REMIND_TURNS = 5
 STALE_USAGE_S = 600          # a usage entry older than this may not describe the window
 LABEL = {"claude": "[context-watch]",
          # Newer Codex parses stdout that starts with "[" or "{" as JSON, so the
@@ -1185,11 +1190,101 @@ def auto_cli(argv):
 
 # ---------------------------------------------------------------- emit
 
+def occupancy_note(occupancy, breakdown):
+    """What the occupancy figure counts; cache-read usually dominates it."""
+    cache_read = breakdown.get("cache_read", 0)
+    share = (cache_read / occupancy * 100.0) if occupancy else 0.0
+    return ("Occupancy counts the last model call's input + cache-creation + cache-read + output "
+            "tokens; cache-read is %s of it (%.0f%%)." % (format(cache_read, ","), share))
+
+
+def _read_restart_block(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, encoding="utf-8") as f:
+            value = json.load(f)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_restart_block(path, value):
+    tmp = "%s.%d" % (path, os.getpid())
+    try:
+        with open_private(tmp, temp=True) as f:
+            json.dump(value, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdown):
+    """Re-offer a context-pressure restart whose human hold has cleared, or remind
+    every RESTART_REMIND_TURNS prompts while it stays blocked (9452e1fe).
+
+    Hold cleared: a caller hold (the ask_user card) clears at the next
+    UserPromptSubmit after the block; a durable hold when none applies to the
+    checkpoint any more; a checkpoint hold when Record.held is false."""
+    path = latch_path(session_id) + ".restart-blocked"
+    marker = _read_restart_block(path)
+    if marker is None:
+        return ""
+
+    def drop():
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return ""
+    try:
+        from handoff_record import Record
+        record = Record.load(marker.get("path") or "")
+    except Exception:
+        return drop()
+    if (marker.get("session") != session_id or not record.open_strict
+            or record.session_id != session_id or record.fm.get("reason") != "context-pressure"):
+        return drop()
+    command = "python3 %s restart" % os.path.join(os.path.dirname(LEDGER), "restart_preflight.py")
+    label = LABEL.get(_AGENT, LABEL["claude"])
+    note = occupancy_note(occupancy, breakdown)
+    message = ""
+    if marker.get("reason") == "human-hold" and not marker.get("reoffered"):
+        cleared = not marker.get("caller_hold") or event_name == "UserPromptSubmit"
+        if cleared:
+            try:
+                import handoff_holds
+                cleared = not handoff_holds.applicable_holds(
+                    handoff_holds.read_holds(marker.get("root") or cwd), record.topic)
+            except Exception:
+                cleared = False  # unreadable holds fail closed: stay quiet
+        if not cleared or record.held:
+            return ""
+        marker.update(reoffered=True, turns=0)
+        message = ("%s This session's context-pressure restart was blocked by a human hold; the "
+                   "hold has cleared. Context occupancy is ~%s tokens (threshold %s). Finish the action in "
+                   "progress, refresh the checkpoint %s if the state moved, then retry: %s. %s"
+                   % (label, format(occupancy, ","), format(limit, ","), marker.get("path"), command, note))
+    elif event_name == "UserPromptSubmit":
+        marker["turns"] = int(marker.get("turns") or 0) + 1
+        if marker["turns"] >= RESTART_REMIND_TURNS and occupancy >= limit:
+            marker["turns"] = 0
+            message = ("%s The context-pressure restart is still blocked (%s) and occupancy is ~%s "
+                       "tokens, over the %s-token threshold. The checkpoint %s stays open: resolve the "
+                       "cause, refresh it, then retry: %s. %s"
+                       % (label, marker.get("reason") or "unknown", format(occupancy, ","),
+                          format(limit, ","), marker.get("path"), command, note))
+    else:
+        return ""
+    _save_restart_block(path, marker)
+    return message
+
+
 def build_message(occupancy, pending, breakdown, limit, source, model, skill,
                   agent="claude", second=False, usage_age=None):
     cache_read = breakdown.get("cache_read", 0)
     cache_share = (cache_read / occupancy * 100.0) if occupancy else 0.0
     detail = "cache-read %s of it (%.0f%%)" % (format(cache_read, ","), cache_share)
+    counted = " " + occupancy_note(occupancy, breakdown)
     if pending:
         detail += "; incl. ~%s pending" % format(pending, ",")
     if usage_age is not None and usage_age > STALE_USAGE_S:
@@ -1204,7 +1299,7 @@ def build_message(occupancy, pending, breakdown, limit, source, model, skill,
            "SECOND NOTICE, the first was not acted on: " if second else "",
            format(occupancy, ","), format(limit, ","), model or "unknown model",
            source, detail, skill, LEDGER)
-    )
+    ) + counted
     if auto_mode_on():
         message += (" Fully automatic mode is active: after publication succeeds, follow "
                     "the save result's transition.action, then stop. A paused transition "
@@ -1345,7 +1440,7 @@ def main():
                          floor_probe, lambda: handoff_written_since(cwd, session_id))
     if decision.action == wd.REARM:
         for path in (first, second, floor_latch, first + ".cleared",
-                     first + ".nudged", first + ".announced"):
+                     first + ".nudged", first + ".announced", first + ".restart-blocked"):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:
@@ -1361,6 +1456,9 @@ def main():
                 pass
         write_session_note(cwd, evt, os.path.exists(first), dict(threshold=limit, threshold_source=source))
     if decision.action == wd.QUIET:
+        notice = restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdown)
+        if notice:
+            emit(agent, event_name, notice, "warn")
         sys.exit(0)
     note_only = decision.action == wd.FLOOR_NOTE
 
