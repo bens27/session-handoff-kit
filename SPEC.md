@@ -927,7 +927,10 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    an unparseable `created`, or no owned checkpoint inside it keep
    `target_ambiguous`; foreign checkpoints are never owned, so a newer foreign
    park cannot be selected or displace an owned one. The prompt hook applies the
-   same rule before its single-checkpoint trust checks.
+   same rule, over the same candidates as lookup (newest per topic, unclaimed,
+   at most 14 days old), before its single-checkpoint trust checks. A
+   `just_parked` selection is acted on only for a typed prompt: a promptless
+   autoresume start lists the candidates instead.
    Every candidate, alternative and selected target carries `created` (save
    time), `parked` (last write to the checkpoint file) and `last_resumed`
    (newest resume of a checkpoint with the same topic, empty if never). A

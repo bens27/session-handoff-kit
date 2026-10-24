@@ -112,8 +112,11 @@ def hook_opening_note(event):
     pointer = 'handoff-status: Owned handoff state needs selection or trust review; load the session-handoff skill and ask before executing untrusted verification.'
     if len(own) > 1 and all(r['record'].is_open for r in own):
         # 736cdaab: the same just-parked rule as lookup; the pick still passes every trust check below.
+        # bd774633: over lookup's candidate set too (scan: newest per topic, unclaimed, <= 14 days).
         now = time.time()
-        views = sorted((dict(created=r['fm'].get('created'), terminal=r['fm'].get('terminal'), record=r) for r in own),
+        listed = {os.path.realpath(h['path']) for h in ledger.scan(root)}
+        views = sorted((dict(created=r['fm'].get('created'), terminal=r['fm'].get('terminal'), record=r)
+                        for r in own if os.path.realpath(r['path']) in listed),
                        key=lambda v: _saved_age(v, now))
         pick = just_parked(views, terminal, now)
         if pick:
@@ -1706,7 +1709,9 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     items = result['items']
     if not prompt and not auto:
         return '%d open handoff(s) available. Continue the current request; retrieve or resume explicitly when relevant.' % result['total']
-    if not selected and result.get('selection') in ('newest_owned', 'just_parked'):
+    # bd774633: just_parked answers a typed continue; a promptless autoresume start lists instead.
+    if not selected and (result.get('selection') == 'newest_owned'
+                         or result.get('selection') == 'just_parked' and prompt):
         selected = next((h for h in items if h['path'] == result['selected']), None)
     if not selected and result['total'] > 1 and not newest:
         return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (%s, %.0fd old): %s' % (i+1,h['topic'][:80],checkpoint_times(h),h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'

@@ -1430,7 +1430,7 @@ class JustParkedTests(Base):
     saved by this terminal within the just-parked window while every other owned one is
     older than it, is selected; the rest become alternatives. Otherwise ambiguity stays."""
 
-    def save_at(self, topic, days_ago, terminal='term-a', session='sess-a'):
+    def save_at(self, topic, days_ago, terminal='term-a', session='sess-a', minutes_ago=0, request=''):
         from datetime import datetime, timedelta
         from unittest import mock
         sys.path.insert(0, str(HOOKS))
@@ -1439,11 +1439,11 @@ class JustParkedTests(Base):
         class Shifted(datetime):
             @classmethod
             def now(cls, tz=None):
-                return datetime.now(tz) - timedelta(days=days_ago)
+                return datetime.now(tz) - timedelta(days=days_ago, minutes=minutes_ago)
         doc = dict(topic=topic, description=topic.title(), body=BODY)
         with mock.patch.dict(os.environ, dict(self.env, HANDOFF_TERMINAL_ID=terminal), clear=True), \
                 mock.patch.object(handoff_protocol, 'datetime', Shifted):
-            result = handoff_protocol.save(str(self.root), session, 'req-%s-%s' % (topic, terminal), doc)
+            result = handoff_protocol.save(str(self.root), session, 'req-%s-%s%s' % (topic, terminal, request), doc)
         self.assertEqual(result['outcome'], 'saved', result)
         return result['path']
 
@@ -1489,6 +1489,79 @@ class JustParkedTests(Base):
             note = handoff_protocol.hook_opening_note(event)
         self.assertNotIn('needs selection', note)
         self.assertIn(newest, note)
+
+    # bd774633 L1: the SPEC rules without a test until now.
+    def test_newer_foreign_park_does_not_displace_owned(self):
+        self.field_shape()
+        owned = self.save_at('owned-park', 0, minutes_ago=5)
+        self.save_at('foreign-park', 0, terminal='term-b', session='sess-b')
+        r = self.continue_handoff()
+        self.assertEqual(r['outcome'], 'proceed', r)
+        self.assertEqual((r['target']['path'], r['target']['selection']), (owned, 'just_parked'), r)
+
+    def test_window_boundary(self):
+        for minutes, outcome in ((59, 'proceed'), (61, 'ask')):
+            with self.subTest(minutes=minutes):
+                self.setUp()
+                try:
+                    self.field_shape()
+                    self.save_at('edge', 0, minutes_ago=minutes)
+                    self.assertEqual(self.continue_handoff()['outcome'], outcome)
+                finally:
+                    self.tearDown()
+
+    def test_future_dated_created_asks(self):
+        self.field_shape()
+        self.save_at('from-the-future', 0, minutes_ago=-10)
+        r = self.continue_handoff()
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'), r)
+
+    def hook_note(self):
+        from unittest import mock
+        sys.path.insert(0, str(HOOKS))
+        import handoff_protocol
+        event = dict(hook_event_name='UserPromptSubmit', session_id='sess-new', cwd=str(self.root),
+                     prompt='Continue the handoff')
+        with mock.patch.dict(os.environ, dict(self.env, HANDOFF_TERMINAL_ID='term-a'), clear=True):
+            return handoff_protocol.hook_opening_note(event)
+
+    # bd774633 L2: the hook sees lookup's candidates, so it agrees with dispatch.
+    def test_hook_dedups_same_topic_like_lookup(self):
+        self.field_shape()
+        self.save_at('twice', 0, minutes_ago=20)
+        newest = self.save_at('twice', 0, request='-again')
+        r = self.continue_handoff()
+        self.assertEqual((r['outcome'], r['target']['path']), ('proceed', newest), r)
+        note = self.hook_note()
+        self.assertNotIn('needs selection', note)
+        self.assertIn(newest, note)
+
+    def test_hook_ignores_fresh_park_claimed_elsewhere_like_lookup(self):
+        sys.path.insert(0, str(HOOKS))
+        import handoff_ledger
+        self.field_shape()
+        handoff_ledger.claim(self.save_at('held', 0, minutes_ago=5), 'sess-other')
+        newest = self.save_at('just-parked', 0)
+        r = self.continue_handoff()
+        self.assertEqual((r['outcome'], r['target']['path']), ('proceed', newest), r)
+        self.assertIn(newest, self.hook_note())
+
+    # bd774633 L3: a promptless autoresume start never executes a just_parked pick.
+    def test_promptless_autoresume_lists_instead_of_executing(self):
+        from unittest import mock
+        sys.path.insert(0, str(HOOKS))
+        import handoff_protocol
+        self.field_shape()
+        self.save_at('just-parked', 0)
+        with mock.patch.dict(os.environ, dict(self.env, HANDOFF_TERMINAL_ID='term-a'), clear=True):
+            result = handoff_protocol.lookup(str(self.root), session='sess-new')
+            self.assertEqual(result['selection'], 'just_parked', result)
+            idle = handoff_protocol.opening_action('', result, 'sess-new', auto=True)
+            typed = handoff_protocol.opening_action('Continue the handoff', result, 'sess-new', auto=True)
+        self.assertIn('Choose one', idle)
+        self.assertNotIn('Run ', idle)
+        self.assertIn(result['selected'], typed)
+        self.assertNotIn('Choose one', typed)
 
     def test_all_old_still_ask(self):
         self.field_shape()
