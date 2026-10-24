@@ -121,7 +121,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         return blocked('invalid-identifier')
     root, path = os.path.realpath(root), os.path.realpath(path)
     try:
-        location = _location(root, request_id)
+        location = _location(root, request_id, create=True)
     except handoff_identity.UntrustedStateDir:
         return blocked(handoff_identity.UntrustedStateDir.reason)
     binding = dict(root=root, path=path, session=session, terminal=terminal,
@@ -374,7 +374,7 @@ def _import_automatic(record):
 
 def record_acceptance(root, request_id, transcript):
     """Import bounded native scheduling evidence; never dispatch a restart."""
-    location = _location(root, request_id)
+    location = _location(root, request_id, create=True)
     with intents.locked(location):
         record = status(root, request_id)
         if not record or record['state'] == 'refused' or intent_expired(record):
@@ -389,7 +389,7 @@ def record_acceptance(root, request_id, transcript):
 
 def record_refusal(root, request_id, reason):
     """Record a returned host refusal/error. Never closes the checkpoint."""
-    location = _location(root, request_id)
+    location = _location(root, request_id, create=True)
     with intents.locked(location):
         record = status(root, request_id)
         if not record:
@@ -410,7 +410,7 @@ def confirm_successor(root, request_id, session, terminal=None, delivery_receipt
     understanding remain unproven; only native acceptance evidence sets host_confirmed.
     Call after read-only prepare; this never claims or acknowledges work.
     """
-    location = _location(root, request_id)
+    location = _location(root, request_id, create=True)
     with intents.locked(location):
         record = status(root, request_id)
         if not record or record['state'] == 'refused':
@@ -517,7 +517,7 @@ def adopt(root, request_id, binding=None):
     terminal = protocol.terminal_id()
     try:
         record = status(root, request_id)
-    except ValueError as exc:
+    except (ValueError, handoff_identity.UntrustedStateDir) as exc:
         return blocked('intent', exc)
     if record is None or record['state'] == 'refused':
         return blocked('intent', 'no-pending-restart-intent')

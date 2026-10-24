@@ -48,6 +48,8 @@ class Store(unittest.TestCase):
         location = intents.location(self.root, 'req-1')
         self.assertEqual(location, os.path.join(self.root, '.handoffs', 'restart',
                                                 hashlib.sha256(b'req-1').hexdigest() + '.json'))
+        self.assertFalse(os.path.exists(os.path.dirname(location)))  # reads never create
+        self.assertEqual(intents.location(self.root, 'req-1', create=True), location)
         self.assertTrue(os.path.isdir(os.path.dirname(location)))
         self.assertEqual(restart._location(self.root, 'req-1'), location)
         for bad in ('', '  ', None, 3):
@@ -102,7 +104,7 @@ class Store(unittest.TestCase):
     def test_entries_list_without_creating_the_directory(self):
         self.assertEqual(intents.entries(self.root), [])
         self.assertFalse(os.path.exists(os.path.join(self.root, '.handoffs', 'restart')))
-        location = intents.location(self.root, 'r')
+        location = intents.location(self.root, 'r', create=True)
         Path(location).write_text('{}')
         Path(location + '.lock').write_text('')
         self.assertEqual(intents.entries(self.root), [location])

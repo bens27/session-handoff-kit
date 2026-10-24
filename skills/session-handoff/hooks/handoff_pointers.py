@@ -60,7 +60,7 @@ def _check_dirs(root, create=False):
         _safe_dir(hfd, private=False)
         # 887c009c: at an exact temp base, handoffs_dir_usable's 0o022 rule, on the pinned fd.
         if os.path.realpath(root) in handoff_identity.temp_bases() and os.fstat(hfd).st_mode & 0o022:
-            raise ValueError('unsafe-pointer-dir')
+            raise ValueError(handoff_identity.UntrustedStateDir.reason)
         if create:
             try:
                 os.mkdir('pointers', 0o700, dir_fd=hfd)
@@ -290,9 +290,11 @@ def scan(root, session=None):
                     diagnostics.append(result)
     except FileNotFoundError:
         return dict(candidates=[], diagnostics=[])
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        untrusted = handoff_identity.UntrustedStateDir.reason
+        reason = untrusted if str(exc) == untrusted else 'unsafe-pointer-dir'
         return dict(candidates=[], diagnostics=[dict(
-            status='ineligible', pointer=directory, reason='unsafe-pointer-dir', action=RECOVER)])
+            status='ineligible', pointer=directory, reason=reason, action=RECOVER)])
     return dict(candidates=candidates, diagnostics=diagnostics)
 
 

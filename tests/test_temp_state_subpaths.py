@@ -105,13 +105,30 @@ class RestartIntents(Case):
         with self.assertRaises(identity.UntrustedStateDir):
             intents.location(self.base, 'req-1')
 
-    def test_adopt_blocks_with_reason(self):
+    def test_preflight_blocks_with_reason(self):
         self.untrusted()
         result = restart.preflight(self.base, os.path.join(self.hdir, 'x.md'), 'old', 'term-1', 'req-1',
                                    workers=[], host_capable=True)
         self.assertEqual(result['outcome'], 'blocked', result)
         self.assertEqual(result['reason'], 'untrusted-temp-handoffs')
         self.assertFalse(os.path.exists(os.path.join(self.hdir, 'restart')))
+
+    def test_adopt_blocks_at_intent_stage(self):
+        self.untrusted()
+        info = dict(identity_source='hook', session_id='new', host_session_id='')
+        with patch.object(restart.protocol, 'session_info', return_value=info):
+            result = restart.adopt(self.base, 'req-1')
+        self.assertEqual(result['outcome'], 'blocked', result)
+        self.assertEqual(result['stage'], 'intent', result)
+        self.assertTrue(result['reason'].startswith('untrusted-temp-handoffs'), result)
+        self.assertIn('Preserve state', result['action'])
+        self.assertFalse(os.path.exists(os.path.join(self.hdir, 'restart')))
+
+    def test_reads_create_nothing(self):
+        intents.location(self.base, 'req-1')
+        self.assertIsNone(intents.status(self.base, 'req-1'))
+        self.assertEqual(intents.entries(self.base), [])
+        self.assertFalse(os.path.lexists(self.hdir))
 
 
 class Holds(Case):
@@ -139,7 +156,7 @@ class Pointers(Case):
         with self.assertRaises(ValueError):
             with pointers._check_dirs(self.base):
                 pass
-        self.assertEqual(pointers.scan(self.base)['diagnostics'][0]['reason'], 'unsafe-pointer-dir')
+        self.assertEqual(pointers.scan(self.base)['diagnostics'][0]['reason'], 'untrusted-temp-handoffs')
 
     def test_conforming_directory_works(self):
         self.trusted()

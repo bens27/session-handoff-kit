@@ -58,10 +58,11 @@ def directory(root, create=True):
     return Path(handoff_identity.local_state_dir(str(Path(root).resolve()), 'restart', create=create))
 
 
-def location(root, request_id):
+def location(root, request_id, create=False):
+    """Intent path; only write paths pass create, so a read never makes .handoffs."""
     if not isinstance(request_id, str) or not request_id.strip():
         raise ValueError('A nonempty restart request ID is required.')
-    return str(directory(root) / (hashlib.sha256(request_id.encode()).hexdigest() + '.json'))
+    return str(directory(root, create=create) / (hashlib.sha256(request_id.encode()).hexdigest() + '.json'))
 
 
 def registry(location_):
