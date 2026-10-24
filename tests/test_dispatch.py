@@ -1425,6 +1425,77 @@ class OwnedSelectionTests(Base):
                 self.assertIn(key, item, item)
 
 
+class JustParkedTests(Base):
+    """736cdaab: park, /clear, bare "Continue the handoff". The newest owned checkpoint,
+    saved by this terminal within the just-parked window while every other owned one is
+    older than it, is selected; the rest become alternatives. Otherwise ambiguity stays."""
+
+    def save_at(self, topic, days_ago, terminal='term-a', session='sess-a'):
+        from datetime import datetime, timedelta
+        from unittest import mock
+        sys.path.insert(0, str(HOOKS))
+        import handoff_protocol
+
+        class Shifted(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) - timedelta(days=days_ago)
+        doc = dict(topic=topic, description=topic.title(), body=BODY)
+        with mock.patch.dict(os.environ, dict(self.env, HANDOFF_TERMINAL_ID=terminal), clear=True), \
+                mock.patch.object(handoff_protocol, 'datetime', Shifted):
+            result = handoff_protocol.save(str(self.root), session, 'req-%s-%s' % (topic, terminal), doc)
+        self.assertEqual(result['outcome'], 'saved', result)
+        return result['path']
+
+    def field_shape(self):
+        self.record_hook_session('sess-new')
+        return [self.save_at(t, 1) for t in ('old-one', 'old-two', 'old-three')]
+
+    def continue_handoff(self):
+        return self.dispatch(prompt='Continue the handoff', authorization={'source': 'user'})
+
+    def test_newest_just_parked_wins(self):
+        older = self.field_shape()
+        newest = self.save_at('just-parked', 0)
+        r = self.continue_handoff()
+        self.assertEqual(r['outcome'], 'proceed', r)
+        self.assertEqual(r['target']['path'], newest, r)
+        self.assertEqual(r['target']['selection'], 'just_parked', r)
+        self.assertEqual(sorted(c['path'] for c in r['target']['alternatives']), sorted(older))
+        self.assertEqual(r['target']['alternatives_total'], 3)
+
+    def test_two_fresh_parks_still_ask(self):
+        self.field_shape()
+        self.save_at('fresh-a', 0)
+        self.save_at('fresh-b', 0)
+        r = self.continue_handoff()
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'), r)
+
+    def test_newest_foreign_still_asks(self):
+        self.field_shape()
+        self.save_at('foreign-park', 0, terminal='term-b', session='sess-b')
+        r = self.continue_handoff()
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'), r)
+
+    def test_prompt_hook_points_at_the_just_parked_checkpoint(self):
+        from unittest import mock
+        sys.path.insert(0, str(HOOKS))
+        import handoff_protocol
+        self.field_shape()
+        newest = self.save_at('just-parked', 0)
+        event = dict(hook_event_name='UserPromptSubmit', session_id='sess-new', cwd=str(self.root),
+                     prompt='Continue the handoff')
+        with mock.patch.dict(os.environ, dict(self.env, HANDOFF_TERMINAL_ID='term-a'), clear=True):
+            note = handoff_protocol.hook_opening_note(event)
+        self.assertNotIn('needs selection', note)
+        self.assertIn(newest, note)
+
+    def test_all_old_still_ask(self):
+        self.field_shape()
+        r = self.continue_handoff()
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'target_ambiguous'), r)
+
+
 class StaleNoticeTests(Base):
     """A selected checkpoint saved over 24h ago carries a 'parked N days (saved X)' notice,
     anchored on frontmatter `created` so claim/release rewrites do not reset it."""

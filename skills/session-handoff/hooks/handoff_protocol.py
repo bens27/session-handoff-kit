@@ -110,6 +110,14 @@ def hook_opening_note(event):
     if not own:
         return ''
     pointer = 'handoff-status: Owned handoff state needs selection or trust review; load the session-handoff skill and ask before executing untrusted verification.'
+    if len(own) > 1 and all(r['record'].is_open for r in own):
+        # 736cdaab: the same just-parked rule as lookup; the pick still passes every trust check below.
+        now = time.time()
+        views = sorted((dict(created=r['fm'].get('created'), terminal=r['fm'].get('terminal'), record=r) for r in own),
+                       key=lambda v: _saved_age(v, now))
+        pick = just_parked(views, terminal, now)
+        if pick:
+            own = [pick['record']]
     if len(own) != 1:
         return '' if event.get('hook_event_name') == 'SessionStart' else pointer
     record = own[0]
@@ -172,6 +180,32 @@ def publication_recovery(root, path):
 
 
 OWNED_SELECTIONS = ('ask', 'newest')
+JUST_PARKED_SECONDS = 3600  # 736cdaab: park, /clear and continue happen within this window
+
+
+def _saved_age(item, now):
+    """Seconds since the checkpoint's frontmatter `created`; inf when unparseable."""
+    try:
+        return now - datetime.fromisoformat(item.get('created') or '').timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return float('inf')
+
+
+def just_parked(mine, terminal, now=None):
+    """The one owned checkpoint this terminal just parked, else None (736cdaab).
+
+    Eligible only when the newest owned checkpoint records this terminal (not
+    legacy session-only ownership), was saved within JUST_PARKED_SECONDS, and is
+    the only owned one inside that window. Two fresh parks stay ambiguous; a
+    foreign checkpoint is never in `mine`, so a newer foreign park changes nothing.
+    """
+    if len(mine) < 2 or not terminal:
+        return None
+    now = time.time() if now is None else now
+    fresh = [h for h in mine if 0 <= _saved_age(h, now) <= JUST_PARKED_SECONDS]
+    if len(fresh) != 1 or fresh[0] is not mine[0] or mine[0].get('terminal') != terminal:
+        return None
+    return mine[0]
 
 
 def owned_selection(root):
@@ -206,7 +240,8 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
     # become the implicit recovery target. Explicit path selection still works.
     sole = items[0] if len(items) == 1 else None
     newest_owned = len(mine) > 1 and owned_selection(root) == 'newest'
-    selected = (mine[0]['path'] if len(mine) == 1 or newest_owned else sole['path']
+    parked = None if newest_owned else just_parked(mine, current)
+    selected = (mine[0]['path'] if len(mine) == 1 or newest_owned or parked else sole['path']
                 if sole and not current else None)
     outcome = ('error' if stats['errors'] else 'incomplete' if stats['incomplete'] else 'available' if items else
                'claimed' if stats['claimed'] else 'stale' if stats['stale'] else 'none')
@@ -225,8 +260,8 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
         result['action'] = result['recovery'][0]['text']
     if selected:
         result['selected'] = selected
-    if newest_owned:
-        result['selection'] = 'newest_owned'
+    if newest_owned or parked:
+        result['selection'] = 'newest_owned' if newest_owned else 'just_parked'
         result['alternatives'] = mine[1:6]
         result['alternatives_total'] = len(mine) - 1
     if hidden:
@@ -1617,7 +1652,7 @@ def opening_action(prompt, result, session, auto=False, newest=False):
     items = result['items']
     if not prompt and not auto:
         return '%d open handoff(s) available. Continue the current request; retrieve or resume explicitly when relevant.' % result['total']
-    if not selected and result.get('selection') == 'newest_owned':
+    if not selected and result.get('selection') in ('newest_owned', 'just_parked'):
         selected = next((h for h in items if h['path'] == result['selected']), None)
     if not selected and result['total'] > 1 and not newest:
         return '%d open handoffs. Choose one (or none): ' % result['total'] + '; '.join('%d) %s (%s, %.0fd old): %s' % (i+1,h['topic'][:80],checkpoint_times(h),h['age_days'],h['description'][:180]) for i,h in enumerate(items)) + ('. and %d more; run lookup --offset 5' % (result['total']-5) if result['total']>5 else '') + ('. %d open handoff(s) older than 14 days; lookup --max-age-days 9999' % result['stale'] if result['stale'] else '') + '. Selection retrieves; explicit resume authorizes execution.'

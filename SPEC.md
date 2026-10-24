@@ -899,7 +899,16 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    `HANDOFF_OWNED_SELECTION` or `~/.context-watch/thresholds.json`; a project
    `.context-watch.json` is ignored; any other value means `"ask"`) the newest
    is selected as `newest_owned`, the next five are returned as `alternatives`
-   and `alternatives_total` counts all the others.
+   and `alternatives_total` counts all the others. Under `"ask"`, a just-parked
+   checkpoint is still selected, as `just_parked`, with the same `alternatives`:
+   the newest owned checkpoint must record this terminal in its frontmatter
+   (legacy session-only ownership never qualifies), its frontmatter `created`
+   must be at most 3600 s old (`JUST_PARKED_SECONDS`), and it must be the only
+   owned open checkpoint saved inside that window. Two or more inside the window,
+   an unparseable `created`, or no owned checkpoint inside it keep
+   `target_ambiguous`; foreign checkpoints are never owned, so a newer foreign
+   park cannot be selected or displace an owned one. The prompt hook applies the
+   same rule before its single-checkpoint trust checks.
    Every candidate, alternative and selected target carries `created` (save
    time), `parked` (last write to the checkpoint file) and `last_resumed`
    (newest resume of a checkpoint with the same topic, empty if never). A

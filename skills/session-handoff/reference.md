@@ -183,6 +183,11 @@ from a list that shows each one's created, parked and last-resumed times. Set
 `"owned_selection": "newest"` in `~/.context-watch/thresholds.json` (or
 `HANDOFF_OWNED_SELECTION=newest`) to resume the newest one automatically and list
 the others as alternatives. A project `.context-watch.json` cannot set it.
+Without that setting, one exception skips the question: if this terminal saved its
+newest checkpoint within the last hour and no other owned checkpoint falls in that
+hour (the park, `/clear`, "Continue the handoff" case), that one is selected as
+`just_parked` and the older ones are listed as alternatives. Two fresh parks, or a
+newest checkpoint from another terminal, still ask.
 Trade-off: `<root>/.context-watch.json` is project scope, so a repository file can relax the pause for
 the topics it lists; `restart-budget` and `restart-cooldown` remain hard stops regardless.
 Five previous AgentsRoom restart intents within an hour or another session's
