@@ -229,6 +229,33 @@ class AdvisoryWindow(Case):
         self.assertNotIn("Early warning", out)
         self.assertIn("warning_window_tokens", out)
 
+    def test_unwritable_state_dir_fails_closed(self):
+        state = os.path.join(self.tmp, "ro-state")
+        os.makedirs(state)
+        os.chmod(state, 0o555)
+        self.addCleanup(os.chmod, state, 0o755)
+        extra = {"HANDOFF_STATE_DIR": state}
+        for tokens in (100000, 110000, 120000):  # at() asserts rc 0
+            self.assertNotIn("Early warning", self.at(tokens, extra))
+        self.assertIn("handoff threshold", self.at(135000, extra))
+
+    def test_stats_ignores_advisory_rows(self):
+        log = os.path.join(self.tmp, "events.jsonl")
+        extra = {"CONTEXT_WATCH_LOG": log}
+        self.assertIn("Early warning", self.at(105000, extra))
+        self.assertIn("handoff threshold", self.at(135000, extra))
+        notices = [json.loads(l).get("notice") for l in open(log)]
+        self.assertEqual(notices, ["advisory", 1])
+        p = subprocess.run([sys.executable, HOOK, "stats"], env=self.env(extra),
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("1 handoff trigger(s)", p.stdout)
+        with open(log, "w") as f:
+            f.write(json.dumps({"notice": "advisory", "occupancy": 105000}) + "\n")
+        p = subprocess.run([sys.executable, HOOK, "stats"], env=self.env(extra),
+                           capture_output=True, text=True, timeout=30)
+        self.assertIn("no handoff triggers logged", p.stdout)
+
     def test_project_lead_moves_the_point(self):
         self.project_config({"warning_window_tokens": 20000})
         self.assertEqual(self.at(105000), "")

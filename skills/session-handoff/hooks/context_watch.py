@@ -857,13 +857,13 @@ def stats_cli():
         os.path.expanduser("~"), ".context-watch", "events.jsonl")
     try:
         with open(path, encoding="utf-8") as f:
-            events = [json.loads(l) for l in f if l.strip()]
-        events = [e for e in events if e.get("notice") != "advisory"]  # early warnings are not triggers
+            logged = [json.loads(l) for l in f if l.strip()]
     except Exception:
         print("no analytics log at %s" % path)
         return 0
+    events = [e for e in logged if e.get("notice") != "advisory"]  # early warnings are not triggers
     if not events:
-        print("analytics log is empty")
+        print("no handoff triggers logged (%s)" % path if logged else "analytics log is empty")
         return 0
     print("%d handoff trigger(s) logged (%s)" % (len(events), path))
     by_model = {}
@@ -1376,13 +1376,17 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
             _DIAG = (event_name, "handoff-status: %s; the context-watch early warning is off until it is "
                      "fixed. Continue the current task." % error)
         return
-    # Startup context on the occupancy basis (the notice's floor measure); the
-    # session note's input-only figure is the fallback when the trace is too long.
-    startup = floor_probe()
-    if startup is None:
-        noted = _ledger().read_session_note(cwd, session=session_id).get('startup_input_tokens')
-        startup = noted if type(noted) is int else None
-    action = wd.advise(occupancy, lead, decision, latch, os.path.exists(path), startup)
+    advised = os.path.exists(path)
+    action = wd.advise(occupancy, lead, decision, latch, advised)
+    if action == wd.ADVISE:
+        # Measured only when the advisory would fire (lazy): startup context on the
+        # occupancy basis (the notice's floor measure); the session note's
+        # input-only figure is the fallback when the trace is too long.
+        startup = floor_probe()
+        if startup is None:
+            noted = _ledger().read_session_note(cwd, session=session_id).get('startup_input_tokens')
+            startup = noted if type(noted) is int else None
+        action = wd.advise(occupancy, lead, decision, latch, advised, startup)
     if action == wd.ADVISORY_REARM:
         try:
             os.remove(path)
