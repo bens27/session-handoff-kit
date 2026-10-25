@@ -94,7 +94,9 @@ def hook_drift_policy(root):
             continue  # an absent scope expresses no policy
         except (OSError, ValueError):
             return None  # an unreadable or corrupt scope could be hiding a block
-        if isinstance(data, dict) and 'hook_drift' in data:
+        if not isinstance(data, dict):
+            return None  # valid JSON that is not an object is an invalid file, never "no policy"
+        if 'hook_drift' in data:
             if type(data['hook_drift']) is not str or data['hook_drift'] not in HOOK_DRIFT_POLICIES:
                 return None
             policies.append(data['hook_drift'])
@@ -288,6 +290,12 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         if reentry is not None and prompt != reentry['restart_prompt']:
             return blocked('request-identity-conflict')
         record['restart_prompt'] = prompt
+        # 3575c3c9: the drift audit trail lives in the intent, so duplicates and
+        # status() show it; a re-entry replaces it with the warnings just computed.
+        if warnings:
+            record['warnings'] = warnings
+        else:
+            record.pop('warnings', None)
         if observations is not None and reentry is None:
             # Under the intent lock and only with a new intent, so the evidence
             # always describes the attempt that produced the dispatchable prompt.
@@ -297,10 +305,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # Durable single-attempt reservation, written before any host call is returned.
         record['dispatch_started_at'] = time.time()
         intents.write(location, record)
-        result = dict(record, outcome='ready', dispatch=True)
-        if warnings:
-            result['warnings'] = warnings
-        return result
+        return dict(record, outcome='ready', dispatch=True)
 
 
 TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
@@ -775,7 +780,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         if result.get('warnings'):
             out['warnings'] = result['warnings']
     else:
-        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy') if k in result})
+        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy', 'warnings') if k in result})
         if result.get('action'):
             out['detail'] = result['action']
         out.update(

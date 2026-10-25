@@ -546,6 +546,8 @@ New saves record both project-scope Claude settings files at the observed cwd
 creating a restart intent. By default (`hook_drift: "warn"`) drift does not stop
 the restart: the result carries a `hooks-changed` warning listing each changed
 file with its saved and current SHA256. Review the change if it was not expected.
+The warning is also stored in the restart intent, so a duplicate preflight and
+`status` still show it after the first call.
 Set `"hook_drift": "block"` in `~/.context-watch/thresholds.json` or the
 project's `.context-watch.json` to block instead; then review the change and
 save again to record a new baseline. A user-scope `block` cannot be relaxed by

@@ -162,6 +162,33 @@ class RestartTests(unittest.TestCase):
         self.assertIn('.claude/settings.local.json', warning['action'])
         self.assertNotIn('approval', warning['action'])
 
+    def test_hook_drift_warnings_persist_in_intent_and_duplicates(self):
+        # 3575c3c9: the audit trail survives the first call.
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')
+        ready = self.preflight()
+        self.assertEqual(restart.status(self.root, 'restart-1')['warnings'], ready['warnings'])
+        again = self.preflight()
+        self.assertEqual((again['dispatch'], again['reason']), (False, 'dispatch-reserved'), again)
+        self.assertEqual(again['warnings'], ready['warnings'])
+
+    def test_hook_drift_warnings_are_recomputed_on_reentry(self):
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')
+        self.preflight()
+        location = restart._location(self.root, 'restart-1')
+        record = restart.status(self.root, 'restart-1')
+        del record['dispatch_started_at']  # crash before the marker
+        record['warnings'] = [dict(reason='stale-warning')]  # never trusted on re-entry
+        protocol.write_json(location, record)
+        config.unlink()  # drift resolved before the retry
+        again = self.preflight()
+        self.assertTrue(again['dispatch'], again)
+        self.assertNotIn('warnings', again)
+        self.assertNotIn('warnings', restart.status(self.root, 'restart-1'))
+
     def test_project_hook_drift_blocks_when_policy_is_block(self):
         config = Path(self.root) / '.claude/settings.local.json'
         config.parent.mkdir()
@@ -195,6 +222,33 @@ class RestartTests(unittest.TestCase):
                 self.assertEqual(result['outcome'], 'blocked')
                 self.assertEqual(result['reason'], 'invalid-hook-drift-policy')
                 self.assertIsNone(restart.status(self.root, 'restart-1'))
+
+    def test_non_object_hook_drift_config_fails_closed(self):
+        # 3575c3c9: valid JSON that is not an object is an invalid file, not "no policy".
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')  # drift makes the policy decide
+        user = Path(self.root) / '.context-watch'
+        user.mkdir(exist_ok=True)
+        for path in (user / 'thresholds.json', Path(self.root) / '.context-watch.json'):
+            for text in ('[]', '"block"', '1', 'null'):
+                with self.subTest(path=path.name, text=text):
+                    path.write_text(text)
+                    result = self.preflight()
+                    self.assertEqual((result['outcome'], result['reason']),
+                                     ('blocked', 'invalid-hook-drift-policy'), result)
+                    self.assertIsNone(restart.status(self.root, 'restart-1'))
+            path.unlink()
+        self.assertTrue(self.preflight()['dispatch'])
+
+    def test_hook_drift_policy_rejects_non_object_without_the_decoder(self):
+        # The shared decoder rejects non-objects today; the policy must not depend on it.
+        from unittest import mock
+        (Path(self.root) / '.context-watch.json').write_text('{}')
+        for value in ([], 'block', 1, None):
+            with self.subTest(value=value), \
+                    mock.patch.object(restart.protocol, 'load_state_json', return_value=value):
+                self.assertIsNone(restart.hook_drift_policy(self.root))
 
     def test_corrupt_hook_drift_config_fails_closed(self):
         user = Path(self.root) / '.context-watch'
@@ -1307,6 +1361,16 @@ class RestartCommandTests(unittest.TestCase):
         code, again = self.restart_cli('--workers', '[]', '--host-capable')
         self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'pending', False), again)
         self.assertNotIn('restart_prompt', again)
+
+    def test_duplicate_restart_passes_stored_drift_warnings_through(self):
+        config = Path(self.root) / '.claude/settings.local.json'
+        config.parent.mkdir()
+        config.write_text('{"hooks":{"Stop":[]}}')
+        code, out = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, out['outcome']), (0, 'ready'), out)
+        code, again = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'pending', False), again)
+        self.assertEqual(again['warnings'], out['warnings'])
 
     def test_saved_restart_transition_binds_checkpoint_among_older_same_session_saves(self):
         import shlex

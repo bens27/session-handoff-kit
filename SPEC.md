@@ -546,13 +546,15 @@ Preflight compares that save-time baseline before creating an intent. The
 or the restart root's `.context-watch.json` sets the result: `block` in either
 scope wins, so project config cannot relax a user-scope block; any other present
 value blocks with `invalid-hook-drift-policy`. Under `warn`, drift proceeds with
-`warnings: [{reason: hooks-changed, policy, changed, action}]`; under `block` it
+`warnings: [{reason: hooks-changed, policy, changed, action}]`, which are also
+stored in the intent, so `status` and duplicate or reconcile responses return
+them, and a re-entry replaces them with freshly computed ones; under `block` it
 returns `blocked`, `hooks-changed`, the first changed `path` and the full
 `changed` list. Each `changed` entry gives the path with saved and current
 SHA256 (null for absent); `restart` passes `warnings`, `changed` and `policy`
 through, with the action text as `detail`. Unreadable hook files and invalid
 baselines still block, as does a policy config file that exists but cannot be
-read or parsed. Legacy checkpoints without a baseline retain existing
+read or parsed, or is not a JSON object. Legacy checkpoints without a baseline retain existing
 behavior. This comparison detects drift only. Claude Code 2.1.306 showed no host
 hook approval (b7ec7020), so the action text asks for a review and, when
 blocked, a new save; it names no approval step.
