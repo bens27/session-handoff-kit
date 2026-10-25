@@ -211,6 +211,34 @@ with patch('time.time', return_value=stamp):
         self.assertEqual(retry['path'], out['path'])
         self.assertEqual(retry['transition']['kind'], 'agents_restart')
 
+    def test_symlinked_project_root_grounds_only_sources_below_resolved_root(self):
+        alias = Path(self.tmp.name) / 'checkout-link'
+        alias.symlink_to(self.root, target_is_directory=True)
+        (self.root / 'linked.py').symlink_to(self.root / 'app/adapter.py')
+        (self.root / 'linked-dir').symlink_to(self.root / 'app', target_is_directory=True)
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        first = self.save()
+        self.hook(22771, session='s2', event='SessionStart')
+        self.cli('resume', first['path'], session='s2')
+        self.clock += 427
+        self.hook(130000, session='s2')
+        audit = (BODY + '\n## Findings\n'
+                 '- `app/adapter.py:42`: the legacy adapter has no callers.\n'
+                 '- `linked.py:43`: source-file symlinks remain excluded.\n'
+                 '- `linked-dir/router.py:9`: source-directory symlinks remain excluded.\n')
+        out = self.cli('save', str(alias), session='s2', doc=dict(
+            topic='work', description='Continue work', body=audit))
+        diag = out['transition']['diagnostics']
+        self.assertTrue(diag['progress']['audit_changed'], diag)
+        self.assertEqual(out['transition']['kind'], 'agents_restart', diag)
+        self.assertFalse(diag['progress']['files_changed'])
+        self.assertFalse(diag['progress']['new_commits'])
+        fm = Path(out['path']).read_text().split('\n---\n', 1)[0]
+        fields = dict(line.split(': ', 1) for line in fm.splitlines() if ': ' in line)
+        self.assertEqual(len(json.loads(fields['audit_anchors'])), 1)
+        self.assertEqual(fields['audit_anchor_overflow'], '0')
+
     def test_audit_rewording_reordering_and_removal_do_not_establish_progress(self):
         findings = ('\n## Findings\n'
                     '- `app/adapter.py:42`: the legacy adapter has no callers.\n'

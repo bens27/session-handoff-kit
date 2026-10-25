@@ -158,11 +158,14 @@ Progress is a changed draft content hash AND a changed effective continuity
 register, forward Git commits, changed observed working-file hashes, or a strictly larger count of grounded
 source anchors declared under `## Findings` as ``- `relative/file.ext:42`: conclusion``.
 Audit anchors require readable regular files under the save workspace root and
-in-range positive line numbers. Relative path segments allow word characters,
-dots and hyphens, including dotted directories and extensionless filenames;
-absolute paths, empty/`.`/`..` segments and all symlinks are excluded. Fenced
-examples are excluded; closing fences allow only whitespace after the matching
-marker. Extraction bounds are 64 KiB of body, 1024 bytes per bullet, 256 KiB per
+in-range positive line numbers. Save resolves the selected workspace root once,
+including a symlinked root; source paths are relative to that resolved root.
+Relative path segments allow word characters, dots and hyphens, including dotted
+directories and extensionless filenames; absolute paths, empty/`.`/`..` segments
+and symlinks in any source-path component
+beneath the root are excluded. Fenced examples are excluded; closing fences allow
+only whitespace after the matching marker. Extraction bounds are 64 KiB of body,
+1024 bytes per bullet, 256 KiB per
 source and 1 MiB total source content (plus a one-byte oversize probe). Metadata
 stores a sorted sample of up to 64 distinct path/line hashes plus an overflow
 count, so progress can continue past 64 anchors. The total count must grow:

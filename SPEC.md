@@ -614,12 +614,14 @@ are not evidence of progress in the parent repository. Hashing is bounded to
 missing legacy hashes, or exceeded bounds are unknown and do not prove progress.
 Audit evidence uses bullets in `## Findings` of the form
 ``- `relative/file.ext:42`: conclusion``.
-Paths are relative to the save workspace root, with slash-separated segments of
-word characters, dots and hyphens; extensionless filenames and dotted directories
-are accepted. Empty, `.` and `..` segments and absolute paths are rejected. Every
-component is opened relative to a root directory descriptor without following
-symlinks (including links within the workspace). Only readable regular files
-qualify; directories, FIFOs and other special files do not. Line numbers are
+The selected save workspace root is resolved once at the save boundary, so a
+symlinked workspace root is supported. Paths are relative to that resolved root,
+with slash-separated segments of word characters, dots and hyphens; extensionless
+filenames and dotted directories are accepted. Empty, `.` and `..` segments and
+absolute paths are rejected. Every source-path component beneath the root is
+opened relative to a root directory descriptor without following symlinks.
+Only readable regular files qualify; directories, FIFOs and other special files
+do not. Line numbers are
 positive decimal integers within the source's line count; a nonempty unterminated
 final line counts. The conclusion must be nonempty.
 Fenced code is excluded: fences use at most three leading spaces, matching

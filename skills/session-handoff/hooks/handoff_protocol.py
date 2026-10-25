@@ -715,7 +715,7 @@ def inbox_document(root, document):
 
 
 def save(root, session, request_id, document):
-    root = handoff_identity.project_root(root)
+    root = os.path.realpath(handoff_identity.project_root(root))
     prune_publication_intents(root)
     if not isinstance(document, dict):
         raise ValueError('Draft must be a JSON object.')
