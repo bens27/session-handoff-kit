@@ -999,8 +999,14 @@ class DeliveryTests(Base):
         self.save(body=body, references=['required.txt'])
         r = self.dispatch(prompt='Continue the handoff')
         action = r['next_action']
-        for token in ('|', '>', '<', 'head', 'tail', ' cut ', 'jq', 'sed '):
-            self.assertNotIn(token, action['command'])
+        # Tokenize like a shell so paths (tmpx6gjqut1, rev-736-head) cannot match;
+        # operators split out even when unspaced (`a|jq`, `2>f`).
+        lexer = shlex.shlex(action['command'], posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        self.assertFalse([t for t in tokens if set(t) <= set('|&;<>()')], tokens)
+        clipping = {'head', 'tail', 'cut', 'jq', 'sed'}
+        self.assertFalse([t for t in tokens if os.path.basename(t) in clipping], tokens)
         self.assertIn('exactly as given', action['text'])
         out = self.cli(*shlex.split(action['command'])[2:])
         self.assertGreater(len(json.dumps(out)), 6000)
