@@ -94,7 +94,8 @@ class Decide(unittest.TestCase):
         ]
         for name, occ, latch, action, notice in rows:
             with self.subTest(name):
-                got = decide(occ, latch=latch, floor=lambda: None, written=lambda: False)
+                # written=never: once both latches exist the handoff probe must be skipped.
+                got = decide(occ, latch=latch, floor=lambda: None, written=never)
                 self.assertEqual((got.action, got.notice), (action, notice))
 
     def test_rearm_below_half_threshold(self):

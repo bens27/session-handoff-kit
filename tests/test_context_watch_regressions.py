@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -352,6 +353,31 @@ class TelemetryErrors(HookCase):
         env = json.loads(buf.getvalue())["hookSpecificOutput"]
         self.assertEqual(env["hookEventName"], "SessionStart")
         self.assertIn("Handoff service unavailable", env["additionalContext"])
+
+
+
+class MissingWatchDecision(HookCase):
+    """20f40e79: a hooks dir without watch_decision.py fails open, rc 0, with one diagnostic."""
+    MESSAGE = ("handoff-status: Context-watch failed (ModuleNotFoundError); context telemetry is "
+               "unavailable for this hook. Continue the current task.")
+
+    def test_post_tool_use_fails_open_without_watch_decision(self):
+        hooks = os.path.join(self.tmp, "hooks")
+        shutil.copytree(os.path.dirname(os.path.abspath(HOOK)), hooks,
+                        ignore=shutil.ignore_patterns("watch_decision.py", "__pycache__"))
+        self.assertFalse(os.path.exists(os.path.join(hooks, "watch_decision.py")))
+        self.write([claude_call(1000)])
+        env = {k: v for k, v in os.environ.items() if k not in CLEAN}
+        env.update(HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0",
+                   CONTEXT_WATCH_AGENT="claude", PYTHONDONTWRITEBYTECODE="1")
+        evt = {"hook_event_name": "PostToolUse", "session_id": self.sid, "cwd": self.tmp,
+               "transcript_path": self.transcript}
+        p = subprocess.run([sys.executable, os.path.join(hooks, "context_watch.py")],
+                           input=json.dumps(evt), env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "PostToolUse")
+        self.assertEqual(out["additionalContext"], self.MESSAGE)
 
 
 if __name__ == "__main__":
