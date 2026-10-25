@@ -439,5 +439,56 @@ class UnrecordedResultsDedupe(unittest.TestCase):
         self.assertEqual(self.ur(rows, skip_id="cur"), self.one)
 
 
+def _streamed(mid, tid, tokens=1000):
+    """One streamed assistant row: a tool_use block with the response's usage."""
+    return {"type": "assistant", "message": {
+        "id": mid, "role": "assistant", "usage": {"input_tokens": tokens},
+        "content": [{"type": "tool_use", "id": tid, "name": "Bash", "input": {}}]}}
+
+
+class UnrecordedResultsStreamedUsage(unittest.TestCase):
+    """Streamed rows of one response repeat its usage and message.id; only a
+    new message.id means the API has counted the results before it (6f77b5d1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cw = _load_hook()
+        cls.one = cls.cw._context_tokens("x" * 900)
+
+    def ur(self, rows, skip_id=None):
+        return self.cw.unrecorded_results(rows, skip_id=skip_id)
+
+    def test_same_message_id_does_not_reset(self):
+        rows = [_streamed("msg_A", "t1"), _result_row("t1", "x" * 900),
+                _streamed("msg_A", "t2"), _result_row("t2", "x" * 900)]
+        self.assertEqual(self.ur(rows, skip_id="t2"), self.one)
+
+    def test_three_streamed_blocks_accumulate(self):
+        rows = [_streamed("msg_A", "t1"), _result_row("t1", "x" * 900),
+                _streamed("msg_A", "t2"), _result_row("t2", "x" * 900),
+                _streamed("msg_A", "t3")]
+        self.assertEqual(self.ur(rows, skip_id="t3"), 2 * self.one)
+
+    def test_new_message_id_resets(self):
+        rows = [_streamed("msg_A", "t1"), _result_row("t1", "x" * 900),
+                _streamed("msg_B", "t2"), _result_row("t2", "x" * 900)]
+        self.assertEqual(self.ur(rows, skip_id="t2"), 0)
+
+    def test_usage_without_message_id_resets(self):
+        # Chosen: no id means we cannot prove it is the same response, so
+        # each id-less usage row resets, as before this fix.
+        rows = [_result_row("t1", "x" * 900), claude_call(1000), claude_call(1000),
+                _result_row("t2", "x" * 900)]
+        self.assertEqual(self.ur(rows), self.one)
+        rows = [_streamed("msg_A", "t1"), _result_row("t1", "x" * 900), claude_call(1000)]
+        self.assertEqual(self.ur(rows), 0)
+
+    def test_compaction_resets_and_forgets_message_id(self):
+        rows = [_streamed("msg_A", "t1"), _result_row("t1", "x" * 900),
+                {"type": "system", "subtype": "compact_boundary"},
+                _result_row("t2", "x" * 900), _streamed("msg_A", "t3")]
+        self.assertEqual(self.ur(rows, skip_id="t3"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

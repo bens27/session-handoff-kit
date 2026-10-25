@@ -686,20 +686,26 @@ def unrecorded_results(entries, skip_id=None):
     since the last API call are otherwise invisible. skip_id is the current
     tool call, whose result estimate_pending already counts.
     api-request-blob rows mirror canonical rows (the serialized request), so
-    they are skipped, and each tool_use_id counts once per reset window."""
-    total, seen = 0, set()
+    they are skipped, and each tool_use_id counts once per reset window.
+    Streamed rows of one response repeat its usage and message.id, so only a
+    usage row with a new message.id resets the window; an id-less usage row
+    always resets (it cannot be proven to be the same response)."""
+    total, seen, usage_id = 0, set(), None
     for e in entries:
         if e.get("isSidechain") or e.get("type") == "api-request-blob":
             continue
         if (e.get("type") == "system" and e.get("subtype") == "compact_boundary") \
                 or e.get("isCompactSummary"):
-            total, seen = 0, set()
+            total, seen, usage_id = 0, set(), None
             continue
         msg = e.get("message")
         if not isinstance(msg, dict):
             continue
         if isinstance(msg.get("usage"), dict) and "input_tokens" in msg["usage"]:
-            total, seen = 0, set()
+            mid = msg.get("id")
+            if mid is None or mid != usage_id:
+                total, seen = 0, set()
+            usage_id = mid
             continue
         content = msg.get("content")
         for block in content if isinstance(content, list) else ():

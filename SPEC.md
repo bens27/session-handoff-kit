@@ -196,8 +196,9 @@ Occupancy and the pending estimate are different quantities. Occupancy is
 usage-derived: the last usage entry's input, cache-creation and cache-read
 tokens, as the API counted them. The pending estimate is a character-based
 guess for content the API has not counted yet. Only the pending part is
-deduplicated. Usage rows are never summed, because streamed blocks of one
-response share a single usage.
+deduplicated. Usage rows are never summed: streamed blocks of one response
+repeat its usage and `message.id`, and the pending window resets at a new
+`message.id` (or at any usage row without one).
 
 Media is priced per item, not by length: each image or audio item counts a
 flat 1,600 tokens. Recognized forms are `data:image|audio/...;base64,` URLs
