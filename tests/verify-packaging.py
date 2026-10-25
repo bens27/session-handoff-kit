@@ -115,12 +115,20 @@ def main():
     # 1. hooks.json: Claude Code plugin schema requires event maps nested under
     #    a top-level "hooks" key (docs: code.claude.com/docs/en/plugins-reference).
     hooks_path = os.path.join(REPO, "plugins/session-handoff/hooks/hooks.json")
+    committed_hooks = None
     try:
-        hooks = json.load(open(hooks_path))
+        with open(hooks_path, "rb") as committed:
+            committed_hooks = committed.read()
+        hooks = json.loads(committed_hooks)
         check("hooks-json-valid", True)
     except Exception as e:
         hooks = {}
         check("hooks-json-valid", False, str(e))
+    generated = subprocess.run(
+        [sys.executable, os.path.join(REPO, "skills/session-handoff/install.py"), "plugin-hooks"],
+        capture_output=True, timeout=30)
+    check("hooks-json-generated", generated.returncode == 0 and generated.stdout == committed_hooks,
+          "plugin hooks differ from install.py plugin-hooks; regenerate hooks.json from that command")
     inner = hooks.get("hooks")
     check("hooks-nested-under-hooks-key", isinstance(inner, dict),
           "top level of hooks.json must be {\"hooks\": {...event maps...}}")

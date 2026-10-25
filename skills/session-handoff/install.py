@@ -2,6 +2,7 @@
 """Register (or remove) the session-handoff hooks for Claude Code and Codex.
 
 Usage: python3 install.py [claude|codex ...] [--uninstall]
+       python3 install.py plugin-hooks > plugins/session-handoff/hooks/hooks.json
        python3 install.py runtime --root PATH create VERSION
        python3 install.py runtime --root PATH activate RELEASE claude|codex
        python3 install.py runtime --root PATH rollback claude|codex
@@ -345,12 +346,8 @@ def switch_runtime(root, args):
         hooks = data.setdefault("hooks", {})
         strip(hooks)
         command = "python3 -B " + shlex.quote(str(folder / "hooks/context_watch.py"))
-        events = CLAUDE_EVENTS if args.target == "claude" else CODEX_EVENTS
-        for event, timeout in events.items():
-            group = {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
-            if args.target == "claude" and event == "PostToolUse":
-                group["matcher"] = ""
-            hooks.setdefault(event, []).append(group)
+        for event, groups in hook_groups(args.target, command).items():
+            hooks.setdefault(event, []).extend(groups)
         after = (json.dumps(data, indent=2) + "\n").encode()
         if before == after:
             return {"activated": True, "unchanged": True, "snapshot": str(folder), "config": str(path)}
@@ -373,8 +370,35 @@ MARKER = "context_watch.py"
 FANOUT = re.compile(r'^payload=\$\(cat\); printf %s "\$payload" \| (?P<base>.*); '
                     r'printf %s "\$payload" \| [^;]*context_watch\.py\S*$', re.S)
 
-CLAUDE_EVENTS = {"PostToolUse": 20, "UserPromptSubmit": 20, "SessionStart": 10, "Stop": 10}
-CODEX_EVENTS = {"SessionStart": 20, "UserPromptSubmit": 20, "PostToolUse": 20}  # no Stop in Codex
+HOST_HOOKS = {
+    "claude": {
+        "PostToolUse": {"timeout": 20, "matcher": ""},
+        "UserPromptSubmit": {"timeout": 20},
+        "SessionStart": {"timeout": 10},
+        "Stop": {"timeout": 10},
+    },
+    "codex": {  # no Stop in Codex
+        "SessionStart": {"timeout": 20},
+        "UserPromptSubmit": {"timeout": 20},
+        "PostToolUse": {"timeout": 20},
+    },
+}
+
+
+def hook_groups(host, command):
+    """Render one host's registrations with the deployment's command path."""
+    groups = {}
+    for event, registration in HOST_HOOKS[host].items():
+        group = {key: value for key, value in registration.items() if key != "timeout"}
+        group["hooks"] = [{"type": "command", "command": command,
+                           "timeout": registration["timeout"]}]
+        groups[event] = [group]
+    return groups
+
+
+def plugin_hooks():
+    command = 'python3 "${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py"'
+    return {"hooks": hook_groups("claude", command)}
 
 
 def load(path):
@@ -437,11 +461,8 @@ def claude(uninstall):
     hooks = data.setdefault("hooks", {})
     strip(hooks)
     if not uninstall:
-        for event, timeout in CLAUDE_EVENTS.items():
-            group = {"hooks": [{"type": "command", "command": CMD, "timeout": timeout}]}
-            if event == "PostToolUse":
-                group = dict(matcher="", **group)
-            hooks.setdefault(event, []).append(group)
+        for event, groups in hook_groups("claude", CMD).items():
+            hooks.setdefault(event, []).extend(groups)
     if not hooks:
         del data["hooks"]
     save(path, data)
@@ -457,10 +478,9 @@ def codex(uninstall):
     hooks = data.setdefault("hooks", {})
     strip(hooks)
     if not uninstall:
-        for event, timeout in CODEX_EVENTS.items():
+        for event, groups in hook_groups("codex", CMD).items():
             # Preserve foreign commands, matchers, outputs and exit statuses.
-            hooks.setdefault(event, []).append({
-                "hooks": [{"type": "command", "command": CMD, "timeout": timeout}]})
+            hooks.setdefault(event, []).extend(groups)
     save(path, data)
     print("%s Codex hooks: %s" % ("Removed" if uninstall else "Registered", path))
     if not uninstall:
@@ -474,6 +494,9 @@ def codex(uninstall):
 
 
 def main(argv):
+    if argv == ["plugin-hooks"]:
+        print(json.dumps(plugin_hooks(), indent=2))
+        return
     if argv[:1] == ["runtime"]:
         try:
             runtime_main(argv[1:])

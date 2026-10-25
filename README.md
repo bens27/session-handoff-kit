@@ -75,6 +75,17 @@ The installer writes absolute paths into `~/.claude/settings.json` and
 safe to re-run (re-run it after moving the folder). Use either this or the
 plugin below, not both: both would run the watcher twice.
 
+Hook events, timeouts and matchers are defined once per host in `install.py`.
+Standalone settings, runtime activation and the Claude plugin use those tables.
+After changing the registrations, regenerate the plugin file from the repo root:
+
+```sh
+python3 skills/session-handoff/install.py plugin-hooks > plugins/session-handoff/hooks/hooks.json
+```
+
+`python3 tests/verify-packaging.py` rejects any difference between the generated
+and committed plugin JSON, including timeout drift.
+
 ### Validated runtime snapshots
 
 For development checkouts, create a separate runtime instead of registering
