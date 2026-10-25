@@ -106,7 +106,7 @@ class AutoSettingsFromConfig(Case):
 
     def test_project_file_enables_auto_mode_at_its_threshold(self):
         self.project_config({"auto": True, "at": 70000})
-        self.assertEqual(self.pressure(65000), "")
+        self.assertEqual(self.pressure(65000, {"CONTEXT_WATCH_WARNING_WINDOW": "0"}), "")  # no notice yet
         msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
         self.assertIn("70,000-token handoff threshold", msg)
         self.assertIn("Fully automatic mode is active", msg)
@@ -166,6 +166,74 @@ class AutoSettingsFromConfig(Case):
                 os.environ.pop(k, None)
                 if v is not None:
                     os.environ[k] = v
+
+
+class AdvisoryWindow(Case):
+    """23079574: warning_window_tokens early warning before the handoff notice."""
+
+    def at(self, tokens, extra=None):
+        """One PostToolUse at tokens on a fixed session (latches persist across calls)."""
+        with open(self.transcript, "w") as f:
+            for n in (1000, tokens):
+                f.write(json.dumps({"message": {"model": "claude-test", "usage": {"input_tokens": n}}}) + "\n")
+        evt = dict(hook_event_name="PostToolUse", session_id="adv-fixed", cwd=self.project,
+                   transcript_path=self.transcript)
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=self.env(extra),
+                           cwd=self.project, capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = p.stdout.strip()
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else ""
+
+    def project_config(self, data):
+        with open(os.path.join(self.project, ".context-watch.json"), "w") as f:
+            json.dump(data, f)
+
+    def test_advisory_then_notice_and_duplicate_silent(self):
+        self.assertEqual(self.at(99000), "")
+        first = self.at(100000)
+        self.assertIn("Early warning", first)
+        self.assertIn("advisory point 100,000", first)
+        self.assertNotIn("Publish with", first)
+        self.assertEqual(self.at(110000), "", "duplicate callback")
+        self.assertIn("handoff threshold", self.at(130000))
+
+    def test_single_jump_gives_the_notice_not_the_advisory(self):
+        out = self.at(140000)
+        self.assertIn("handoff threshold", out)
+        self.assertNotIn("Early warning", out)
+
+    def test_compaction_rearms(self):
+        self.assertIn("Early warning", self.at(105000))
+        self.assertEqual(self.at(40000), "")
+        self.assertIn("Early warning", self.at(105000))
+
+    def test_project_lead_moves_the_point(self):
+        self.project_config({"warning_window_tokens": 20000})
+        self.assertEqual(self.at(105000), "")
+        self.assertIn("advisory point 110,000", self.at(110000))
+
+    def test_env_zero_disables(self):
+        self.assertEqual(self.at(120000, {"CONTEXT_WATCH_WARNING_WINDOW": "0"}), "")
+
+    def test_invalid_value_refused_with_a_diag(self):
+        for bad in (-1, "x", True):
+            with self.subTest(bad=bad):
+                for name in os.listdir(self.tmp):
+                    if name.startswith("context-watch") or "adv-fixed" in name:
+                        path = os.path.join(self.tmp, name)
+                        if os.path.isfile(path):
+                            os.remove(path)
+                self.project_config({"warning_window_tokens": bad})
+                out = self.at(110000)
+                self.assertNotIn("Early warning", out)
+                self.assertIn("warning_window_tokens", out)
+
+    def test_key_is_not_a_model_threshold(self):
+        # A model key matching would turn 20000 into a threshold; the default 130k must hold.
+        self.project_config({"warning_window_tokens": 20000})
+        out = self.at(115000)
+        self.assertIn("before the 130,000-token handoff threshold [builtin-default]", out)
+        self.assertNotIn("Publish with", out)
 
 
 class TerminalPointer(Case):

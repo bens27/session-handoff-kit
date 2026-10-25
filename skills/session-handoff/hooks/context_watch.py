@@ -48,6 +48,9 @@ Other environment variables:
   CONTEXT_WATCH_MODE          warn | block (default: warn)
   CONTEXT_WATCH_AGENT         claude | codex (default: auto-detect)
   CONTEXT_WATCH_DISABLE       1 to no-op
+  CONTEXT_WATCH_WARNING_WINDOW  advisory lead in tokens before the threshold
+                              (default 30000; 0 disables; also the
+                              "warning_window_tokens" config key, project then user)
   CONTEXT_WATCH_PENDING       0 to disable the pending-content estimate
   CONTEXT_WATCH_THINKING      tokens assumed for the not-yet-written current
                               response (default: session's largest response,
@@ -737,6 +740,27 @@ def _parse_map(raw):
 
 
 SETTING_KEYS = {"auto": bool, "at": int, "auto_max": int}  # not model thresholds
+WARNING_WINDOW_KEY = "warning_window_tokens"  # advisory lead (23079574), never a model threshold
+
+
+def warning_window_candidates(cwd):
+    """[(source, raw)] for warning_window_tokens, highest precedence first; raw None if absent."""
+    raw = env("CONTEXT_WATCH_WARNING_WINDOW").strip()
+    out = [("env CONTEXT_WATCH_WARNING_WINDOW", raw or None)]
+    for path in (os.path.join(cwd or os.getcwd(), ".context-watch.json"),
+                 os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json")):
+        value = None
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if str(k).strip().lower() == WARNING_WINDOW_KEY:
+                        value = v
+        except Exception:
+            pass
+        out.append((path, value))
+    return out
 
 
 def _load_config_files(cwd, settings=False):
@@ -752,6 +776,8 @@ def _load_config_files(cwd, settings=False):
             if isinstance(data, dict):
                 for k, v in data.items():
                     k = str(k).strip().lower()
+                    if k == WARNING_WINDOW_KEY:
+                        continue
                     if k in SETTING_KEYS:
                         if settings and type(v) is SETTING_KEYS[k]:
                             merged[k] = v
@@ -1340,6 +1366,45 @@ def build_floor_message(floor, threshold, floor_limit, model, agent):
     )
 
 
+def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision, latch, wd, mode):
+    """Early warning a lead before the threshold (23079574): own latch, never publishes or restarts."""
+    global _DIAG
+    lead, lead_source, error = wd.warning_lead(warning_window_candidates(cwd))
+    if error:
+        if claim_once(evt, ".warning-config"):
+            _DIAG = (event_name, "handoff-status: %s; the context-watch early warning is off until it is "
+                     "fixed. Continue the current task." % error)
+        return
+    action = wd.advise(occupancy, lead, decision, latch, os.path.exists(path))
+    if action == wd.ADVISORY_REARM:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return
+    if action != wd.ADVISE:
+        return
+    point = max(0, decision.limit - lead)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write("%d/%d/%d\n" % (occupancy, point, decision.limit))
+    except FileExistsError:
+        sys.exit(0)
+    except OSError:
+        pass
+    log_event({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "agent": agent, "occupancy": occupancy,
+               "threshold": decision.limit, "threshold_source": decision.source, "advisory_point": point,
+               "warning_lead": lead, "warning_lead_source": lead_source, "notice": "advisory",
+               "session_id": session_id, "cwd": cwd})
+    emit(agent, event_name,
+         "[context-watch] Early warning: context ~%s tokens, past the advisory point %s (lead %s [%s] before "
+         "the %s-token handoff threshold [%s]). Finish the current slice and do not start another; prepare "
+         "continuation notes (state, decisions, next steps). Do not save or restart now; the handoff notice "
+         "at the threshold says when." % (format(occupancy, ','), format(point, ','), format(lead, ','),
+                                          lead_source, format(decision.limit, ','), decision.source), "warn")
+
+
 def emit(agent, event_name, message, mode):
     global _DIAG, _OPENING_NOTE
     if _OPENING_NOTE:
@@ -1409,6 +1474,7 @@ def main():
     if not session_id:
         sys.exit(0)
     first, second = latch_path(session_id), latch_path(session_id, 2)
+    advised_latch = first + ".advised"
 
     import watch_decision as wd
     cfg = wd.WatchConfig.from_environ(os.environ)
@@ -1454,7 +1520,7 @@ def main():
                          floor_probe, lambda: handoff_written_since(cwd, session_id))
     if decision.action == wd.REARM:
         for path in (first, second, floor_latch, first + ".cleared",
-                     first + ".nudged", first + ".announced", first + ".restart-blocked"):
+                     first + ".nudged", first + ".announced", first + ".restart-blocked", advised_latch):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:
@@ -1473,6 +1539,7 @@ def main():
         notice = restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdown)
         if notice:
             emit(agent, event_name, notice, "warn")
+        advisory(agent, evt, event_name, cwd, session_id, advised_latch, occupancy, decision, latch, wd, cfg.mode)
         sys.exit(0)
     note_only = decision.action == wd.FLOOR_NOTE
 

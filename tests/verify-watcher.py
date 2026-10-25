@@ -316,7 +316,8 @@ def main():
           and rec_cap.get("window_source") == "reported" and "capped" in rec_cap.get("threshold_source", ""),
           "record=%r stdout=%r" % (rec_cap, p_cap.stdout[:200]))
     p_nocap = run_hook(dict(evt, session_id="verify-" + uuid.uuid4().hex[:8]),
-                       dict(envx, CONTEXT_WATCH_TOKENS="140000", CONTEXT_WATCH_WINDOW="150000"))
+                       dict(envx, CONTEXT_WATCH_TOKENS="140000", CONTEXT_WATCH_WINDOW="150000",
+                            CONTEXT_WATCH_WARNING_WINDOW="0"))  # notice-only check
     check("reserve-cap-not-on-assumed-window", p_nocap.stdout.strip() == "",
           "stdout=%r" % p_nocap.stdout[:200])
 
@@ -360,7 +361,8 @@ def main():
                         "transcript_path": unrec, "cwd": tmp, "tool_use_id": use_id,
                         "tool_response": response},
                        dict({"HANDOFF_AT": str(limit), "CONTEXT_WATCH_LOG": log_u,
-                             "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir}, **extra))
+                             "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir,
+                             "CONTEXT_WATCH_WARNING_WINDOW": "0"}, **extra))  # notice-only checks
         recs = open(log_u).read().splitlines() if os.path.exists(log_u) else []
         return p_u, json.loads(recs[-1]) if recs else {}  # logged only when it fires
     p_u, rec = unrec_run("B", {"stdout": "ok"}, 50000)  # 40k + 20k unrecorded
@@ -386,7 +388,8 @@ def main():
         p_t = run_hook({"hook_event_name": "PostToolUse", "session_id": "verify-" + uuid.uuid4().hex[:8],
                         "transcript_path": think, "cwd": tmp, "tool_response": {"stdout": "ok"}},
                        dict({"HANDOFF_AT": str(limit), "CONTEXT_WATCH_LOG": log_t,
-                             "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir}, **extra))
+                             "CONTEXT_WATCH_AGENT": "claude", "TMPDIR": latchdir,
+                             "CONTEXT_WATCH_WARNING_WINDOW": "0"}, **extra))  # notice-only checks
         recs = open(log_t).read().splitlines() if os.path.exists(log_t) else []
         return p_t, json.loads(recs[-1]) if recs else {}
     p_t, rec = think_run(90000)  # 70,100 + 25k capped allowance = 95,100

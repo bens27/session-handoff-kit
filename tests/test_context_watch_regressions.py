@@ -76,7 +76,7 @@ class FloorPolicy(HookCase):
 
     def test_startup_floor_note_does_not_silence_later_pressure(self):
         self.write([codex_count(125000, 125000)])
-        self.assertEqual(self.run_hook(), "")  # below threshold
+        self.assertEqual(self.run_hook(extra={"CONTEXT_WATCH_WARNING_WINDOW": "0"}), "")  # below threshold
         self.write([codex_count(140000, 140000)], "a")
         floor = self.context(self.run_hook())
         self.assertIn("startup context", floor)

@@ -1239,7 +1239,7 @@ flat project `.context-watch.json` and user `~/.context-watch/thresholds.json`:
 | `handoff_v3` | Boolean false; project opt-in for the lifecycle. |
 | `resume_pointer_policy` | ask (default), latest-owned or manual; startup ticket. |
 | `activate_suggested_skills` | Boolean false; skills ticket, user-scope opt-in required. |
-| `warning_window_tokens` | Nonnegative lead before resolved §6 threshold, default 0; gate ticket. |
+| `warning_window_tokens` | Nonnegative lead before resolved §6 threshold, default 30000 (0 disables); advisory implemented (23079574), mandatory gate still reserved. |
 | `mandatory_at_tokens` | Positive absolute occupancy or null (default); gate ticket. |
 
 Project overrides global timing/selection values; report effective value/source.
@@ -1249,6 +1249,11 @@ continuation: use explicit live user authorization or user-scope autoresume,
 independent of project auto settings. Suggested activation requires true in user
 scope and effective config; project can disable it. Existing environment/threshold
 precedence and reserve cap remain §6. Warn at max(0, resolved threshold minus lead).
+Implemented advisory: `CONTEXT_WATCH_WARNING_WINDOW` env, then project, then user
+file; any malformed present value disables the advisory with one handoff-status
+diagnostic. The advisory fires once per window on the notice's occupancy basis,
+only while the notice is quiet, has its own latch (re-armed below half the
+advisory point), and never publishes, restarts or touches the notice latch.
 Mandatory point must be at least that warning point and within a reported window
 minus reserve; invalid combinations disable automatic v3 transitions. Missing
 telemetry reports enforcement unavailable, never invented occupancy.

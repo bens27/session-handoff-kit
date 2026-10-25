@@ -399,6 +399,13 @@ The same config files also accept `"auto"` (bool, like `HANDOFF_AUTO`), `"at"`
 A non-empty environment variable wins, then the project file, then the user file.
 Values of the wrong JSON type are ignored, and these keys are never thresholds.
 
+`"warning_window_tokens"` (int, default `30000`, like `CONTEXT_WATCH_WARNING_WINDOW`)
+sets an early warning that lead before the resolved threshold (130k gives a
+warning at 100k): finish the current slice and prepare notes, without saving or
+restarting. It fires once per window, re-arms after compaction, and `0` turns it
+off. A malformed value (negative, non-integer, boolean) disables it with one
+diagnostic; it is never a model threshold.
+
 Config file format (see `hooks/thresholds.example.json`):
 
 ```json
@@ -421,6 +428,7 @@ Other variables:
 | `CONTEXT_WATCH_RESERVE` | `20000` | When the host reports the window (Codex), caps the threshold at window − reserve so there is room to write the handoff |
 | `CONTEXT_WATCH_PENDING` | on | Adds an estimate (~3 chars/token, images/audio a flat 1,600 each) for the tool result or prompt already in the hook's stdin but not yet in any usage entry; set `0` to disable |
 | `CONTEXT_WATCH_THINKING` | largest response so far, ≤25k | Tokens assumed for the current response (thinking included), which is written to the transcript only after the hook returns; Claude only |
+| `CONTEXT_WATCH_WARNING_WINDOW` | `30000` | Advisory lead before the threshold (overrides `warning_window_tokens`); `0` disables |
 | `CONTEXT_WATCH_JEV` | off | `1` opts into semantic routing through Jev (requires `TYPESAFE_API_KEY`), at most one attempt per project/session, including failures. Classification selects read-only context, never execution permission. Exact commands always route locally. |
 | `CONTEXT_WATCH_LOG` | `~/.context-watch/events.jsonl` | Per-trigger analytics (model, occupancy, cache-read share, threshold); `0` disables. Summarize with `python3 context_watch.py stats` |
 | `CONTEXT_WATCH_WINDOW` | `200000` | Used only by the PERCENT path; Codex reports its own window |

@@ -3,5 +3,6 @@
   "claude-opus": 120000,
   "claude-sonnet": 140000,
   "gpt-5.5": 160000,
-  "default": 130000
+  "default": 130000,
+  "warning_window_tokens": 30000
 }

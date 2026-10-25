@@ -153,5 +153,78 @@ class Decide(unittest.TestCase):
         decide(100_000, latch=Latch(fired=True, first_base=1), written=lambda: False)
 
 
+
+def advise(occupancy, limit=130_000, lead=30_000, latch=Latch(), advised=False, floor=lambda: None):
+    """The advisory rule on top of decide(), both on one occupancy basis (23079574)."""
+    decision = decide(occupancy, limit=limit, latch=latch, floor=floor, written=lambda: False)
+    return decision, wd.advise(occupancy, lead, decision, latch, advised)
+
+
+class Advisory(unittest.TestCase):
+    """23079574: warning_window_tokens advisory before the publication notice."""
+
+    def test_default_lead_and_point(self):
+        self.assertEqual(wd.DEFAULT_WARNING_LEAD, 30_000)
+        self.assertIsNone(advise(99_999)[1])
+        self.assertEqual(advise(100_000)[1], wd.ADVISE)
+        self.assertEqual(advise(129_999)[1], wd.ADVISE)
+
+    def test_advisory_before_publication_and_never_instead_of_it(self):
+        decision, got = advise(100_000)
+        self.assertEqual((decision.action, got), (wd.QUIET, wd.ADVISE))
+        # One callback jumping across both points: the notice fires, no advisory.
+        decision, got = advise(140_000)
+        self.assertEqual((decision.action, decision.notice, got), (wd.NOTICE, 1, None))
+        # The advisory latch never suppresses the notice.
+        decision, got = advise(130_000, advised=True)
+        self.assertEqual((decision.action, got), (wd.NOTICE, None))
+
+    def test_once_per_window_and_rearm(self):
+        self.assertIsNone(advise(110_000, advised=True)[1], 'duplicate callback')
+        self.assertIsNone(advise(50_001, advised=True)[1])
+        self.assertEqual(advise(49_999, advised=True)[1], wd.ADVISORY_REARM, 'compaction under half the point')
+        self.assertIsNone(advise(49_999)[1], 'nothing to re-arm without the latch')
+
+    def test_no_advisory_once_the_notice_fired_or_floored(self):
+        fired = Latch(fired=True, first_occupancy=131_000, first_base=1)
+        self.assertIsNone(advise(120_000, latch=fired)[1])
+        self.assertIsNone(advise(150_000, latch=Latch(floored=True, floor_startup=128_000))[1])
+        decision, got = advise(135_000, floor=lambda: 128_000)  # floor note instead
+        self.assertEqual((decision.action, got), (wd.FLOOR_NOTE, None))
+
+    def test_same_occupancy_basis_with_a_large_response_allowance(self):
+        # e9b68a08: recorded 93.6k + 6,495 session-max allowance = 100,095 estimated.
+        cfg = WatchConfig(pending=True)
+        seen = wd.claude_observation(cfg, ({'occupancy': 93_600, 'max_output': 6_495}, 'opus'),
+                                     None, (0, 0), 0, 25_000)
+        self.assertEqual(seen.occupancy, 100_095)
+        self.assertEqual(advise(seen.occupancy)[1], wd.ADVISE)
+        seen = wd.claude_observation(cfg, ({'occupancy': 123_600, 'max_output': 6_495}, 'opus'),
+                                     None, (0, 0), 0, 25_000)
+        self.assertEqual(advise(seen.occupancy)[0].action, wd.NOTICE, 'notice at ~123.5k measured')
+
+    def test_point_follows_the_resolved_threshold(self):
+        self.assertIsNone(advise(100_000, limit=140_000)[1], 'model or config change moves the point')
+        self.assertEqual(advise(110_000, limit=140_000)[1], wd.ADVISE)
+        self.assertEqual(advise(1, limit=20_000)[1], wd.ADVISE, 'lead over the threshold: max(0, ...)')
+        self.assertIsNone(advise(129_000, lead=0)[1], 'zero lead disables the advisory')
+        self.assertIsNone(advise(129_000, lead=None)[1], 'invalid config disables the advisory')
+
+    def test_warning_lead_validation_and_precedence(self):
+        lead = wd.warning_lead
+        self.assertEqual(lead([]), (30_000, 'builtin-default', None))
+        self.assertEqual(lead([('env', None), ('project', 20_000), ('user', 10_000)]),
+                         (20_000, 'project', None))
+        self.assertEqual(lead([('env', '5000'), ('project', 20_000)]), (5_000, 'env', None))
+        self.assertEqual(lead([('project', 0)]), (0, 'project', None))
+        for bad in (-1, True, 1.5, '30000', None.__class__, [1]):
+            with self.subTest(bad=bad):
+                got = lead([('user', bad)])
+                self.assertIsNone(got[0])
+                self.assertIn('user', got[2])
+        self.assertIsNone(lead([('env', 'abc')])[0])
+        # A malformed lower-precedence value still refuses: strict validation.
+        self.assertIsNone(lead([('project', 20_000), ('user', -5)])[0])
+
 if __name__ == '__main__':
     unittest.main()

@@ -219,3 +219,49 @@ def decide(occupancy, base, limit, source, window, reserve, latch,
     if occupancy < need:
         return Decision(QUIET, **common)
     return Decision(NOTICE, notice=2 if fired else 1, **common)
+
+
+# Advisory window (23079574): an early, non-publishing warning a lead of
+# warning_window_tokens before the resolved threshold. It has its own
+# once-per-window latch, rearmed by compaction, and never touches the notice latch.
+DEFAULT_WARNING_LEAD = 30_000
+ADVISE, ADVISORY_REARM = 'advise', 'advisory-rearm'
+
+
+def warning_lead(candidates):
+    """Resolve warning_window_tokens from [(source, raw)], highest precedence first.
+
+    raw None means absent. A source whose label starts with 'env' carries a
+    string that must be all digits; file values must be a non-negative int
+    (not bool). Any present malformed value refuses the whole setting:
+    returns (None, None, error). Otherwise (lead, source, None).
+    """
+    chosen = None
+    for source, raw in candidates:
+        if raw is None:
+            continue
+        if source.startswith('env') and isinstance(raw, str):
+            value = int(raw) if raw.isdigit() else None
+        elif isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+            value = raw
+        else:
+            value = None
+        if value is None:
+            return None, None, 'warning_window_tokens from %s must be a non-negative integer, got %r' % (source, raw)
+        if chosen is None:
+            chosen = (value, source, None)
+    return chosen or (DEFAULT_WARNING_LEAD, 'builtin-default', None)
+
+
+def advise(occupancy, lead, decision, latch, advised):
+    """ADVISE once per window between limit - lead and limit; ADVISORY_REARM on compaction."""
+    if lead is None or lead <= 0:
+        return None
+    point = max(0, decision.limit - lead)
+    if advised and occupancy < point * REARM_FACTOR:
+        return ADVISORY_REARM
+    if advised or latch.fired or latch.floored or decision.below_floor or decision.action != QUIET:
+        return None
+    if point <= occupancy < decision.limit:
+        return ADVISE
+    return None
