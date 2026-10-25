@@ -1007,6 +1007,7 @@ class DeliveryTests(Base):
         self.assertFalse([t for t in tokens if set(t) <= set('|&;<>()')], tokens)
         clipping = {'head', 'tail', 'cut', 'jq', 'sed'}
         self.assertFalse([t for t in tokens if os.path.basename(t) in clipping], tokens)
+        self.assertFalse([t for t in tokens if '`' in t or t.startswith('$')], tokens)
         self.assertIn('exactly as given', action['text'])
         out = self.cli(*shlex.split(action['command'])[2:])
         self.assertGreater(len(json.dumps(out)), 6000)
