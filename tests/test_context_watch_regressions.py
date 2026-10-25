@@ -380,5 +380,64 @@ class MissingWatchDecision(HookCase):
         self.assertEqual(out["additionalContext"], self.MESSAGE)
 
 
+def _load_hook():
+    spec = importlib.util.spec_from_file_location("context_watch_dedupe", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _result_row(tid, text, row_type="user", **extra):
+    row = {"type": row_type, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+    row.update(extra)
+    return row
+
+
+class UnrecordedResultsDedupe(unittest.TestCase):
+    """A result mirrored as an api-request-blob row and a canonical row after
+    the last usage row is one result in context, not two (ticket 7e55fa71)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cw = _load_hook()
+        cls.one = cls.cw._context_tokens("x" * 900)
+
+    def ur(self, rows, skip_id=None):
+        return self.cw.unrecorded_results(rows, skip_id=skip_id)
+
+    def test_blob_and_canonical_count_once(self):
+        rows = [claude_call(1000), _result_row("t1", "x" * 900, "api-request-blob"),
+                _result_row("t1", "x" * 900)]
+        self.assertEqual(self.ur(rows), self.one)
+
+    def test_same_id_twice_canonical_counts_once(self):
+        rows = [claude_call(1000), _result_row("t1", "x" * 900), _result_row("t1", "x" * 900)]
+        self.assertEqual(self.ur(rows), self.one)
+
+    def test_distinct_results_summed(self):
+        rows = [claude_call(1000), _result_row("t1", "x" * 900), _result_row("t2", "x" * 900)]
+        self.assertEqual(self.ur(rows), 2 * self.one)
+
+    def test_sidechain_excluded(self):
+        rows = [claude_call(1000), _result_row("t1", "x" * 900, isSidechain=True)]
+        self.assertEqual(self.ur(rows), 0)
+
+    def test_usage_reset_clears_seen_ids(self):
+        rows = [_result_row("t1", "x" * 900), claude_call(1000), _result_row("t1", "x" * 900)]
+        self.assertEqual(self.ur(rows), self.one)
+
+    def test_compaction_reset_clears_seen_ids(self):
+        rows = [_result_row("t1", "x" * 900),
+                {"type": "system", "subtype": "compact_boundary"},
+                _result_row("t1", "x" * 900, "api-request-blob"), _result_row("t1", "x" * 900)]
+        self.assertEqual(self.ur(rows), self.one)
+
+    def test_current_call_excluded(self):
+        rows = [claude_call(1000), _result_row("cur", "x" * 900, "api-request-blob"),
+                _result_row("cur", "x" * 900), _result_row("t2", "x" * 900)]
+        self.assertEqual(self.ur(rows, skip_id="cur"), self.one)
+
+
 if __name__ == "__main__":
     unittest.main()

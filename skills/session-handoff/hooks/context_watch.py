@@ -684,26 +684,33 @@ def unrecorded_results(entries, skip_id=None):
     last usage entry. Claude Code writes an assistant message (and its usage)
     only after that tool call's PostToolUse hook has run, so earlier results
     since the last API call are otherwise invisible. skip_id is the current
-    tool call, whose result estimate_pending already counts."""
-    total = 0
+    tool call, whose result estimate_pending already counts.
+    api-request-blob rows mirror canonical rows (the serialized request), so
+    they are skipped, and each tool_use_id counts once per reset window."""
+    total, seen = 0, set()
     for e in entries:
-        if e.get("isSidechain"):
+        if e.get("isSidechain") or e.get("type") == "api-request-blob":
             continue
         if (e.get("type") == "system" and e.get("subtype") == "compact_boundary") \
                 or e.get("isCompactSummary"):
-            total = 0
+            total, seen = 0, set()
             continue
         msg = e.get("message")
         if not isinstance(msg, dict):
             continue
         if isinstance(msg.get("usage"), dict) and "input_tokens" in msg["usage"]:
-            total = 0
+            total, seen = 0, set()
             continue
         content = msg.get("content")
         for block in content if isinstance(content, list) else ():
-            if isinstance(block, dict) and block.get("type") == "tool_result" \
-                    and block.get("tool_use_id") != skip_id:
-                total += min(_context_tokens(block.get("content")), PENDING_CAP)
+            if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                continue
+            tid = block.get("tool_use_id")
+            if tid == skip_id or (tid is not None and tid in seen):
+                continue
+            if tid is not None:
+                seen.add(tid)
+            total += min(_context_tokens(block.get("content")), PENDING_CAP)
     return total
 
 

@@ -182,13 +182,22 @@ early — the correct direction for a quality guard. Claude Code writes an
 assistant message and its usage only after that call's PostToolUse hook
 runs, so on Claude the estimate also adds tool results already in the
 transcript after the last usage entry (each capped, the current call's
-excluded), plus a thinking allowance for the not-yet-written current
+excluded, each `tool_use_id` counted once per window between usage or
+compaction resets, and `api-request-blob` rows skipped because they mirror
+canonical rows of the serialized request), plus a thinking allowance for the not-yet-written current
 response: the session's largest `output_tokens` so far, capped at 25k
 (`CONTEXT_WATCH_THINKING` overrides it; a single 36k-token thinking block was
 observed moving occupancy 52k → 105k in one call). Disable everything with
 `CONTEXT_WATCH_PENDING=0`. Exact pre-flight counting via a token-counting API
 is rejected by design: a hook cannot reconstruct the request payload, and the
 early-biased estimate achieves the same protection with no network call.
+
+Occupancy and the pending estimate are different quantities. Occupancy is
+usage-derived: the last usage entry's input, cache-creation and cache-read
+tokens, as the API counted them. The pending estimate is a character-based
+guess for content the API has not counted yet. Only the pending part is
+deduplicated. Usage rows are never summed, because streamed blocks of one
+response share a single usage.
 
 Media is priced per item, not by length: each image or audio item counts a
 flat 1,600 tokens. Recognized forms are `data:image|audio/...;base64,` URLs
