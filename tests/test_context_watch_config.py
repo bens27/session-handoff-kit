@@ -230,6 +230,8 @@ class AdvisoryWindow(Case):
         self.assertIn("warning_window_tokens", out)
 
     def test_unwritable_state_dir_fails_closed(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory write permissions")
         state = os.path.join(self.tmp, "ro-state")
         os.makedirs(state)
         os.chmod(state, 0o555)
@@ -244,7 +246,8 @@ class AdvisoryWindow(Case):
         extra = {"CONTEXT_WATCH_LOG": log}
         self.assertIn("Early warning", self.at(105000, extra))
         self.assertIn("handoff threshold", self.at(135000, extra))
-        notices = [json.loads(l).get("notice") for l in open(log)]
+        with open(log) as fh:
+            notices = [json.loads(l).get("notice") for l in fh]
         self.assertEqual(notices, ["advisory", 1])
         p = subprocess.run([sys.executable, HOOK, "stats"], env=self.env(extra),
                            capture_output=True, text=True, timeout=30)
