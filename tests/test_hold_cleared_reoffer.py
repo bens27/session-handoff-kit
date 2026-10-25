@@ -106,7 +106,8 @@ class RestartBlockedReoffer(unittest.TestCase):
         # The hook cannot see the card: it must not claim the hold cleared.
         self.assertNotIn('hold has cleared', reoffer)
         self.assertIn('keep waiting (or pass --hold)', reoffer)
-        self.assertIn('restart_preflight.py restart --root %s' % self.root, reoffer)
+        self.assertIn('restart_preflight.py restart --root %s --path %s' % (self.root, self.path), reoffer)
+        self.assertIn('keep waiting (or pass --hold). Otherwise, finish the action in progress', reoffer)
         self.assertIn('--workers', reoffer)
         self.assertIn('--host-capable', reoffer)
         self.assertIn(self.path, reoffer)

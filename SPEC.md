@@ -84,7 +84,7 @@ The hook cannot see an ask_user card, and a mailbox notification also
 arrives as a prompt, so after a caller hold the re-offer does not claim the
 hold cleared: it says a new prompt arrived and to keep waiting (or pass
 `--hold`) while a question to the user is unanswered. Each notice gives the
-full retry command: `restart --root <project>` with the complete `--workers`
+full retry command: `restart --root <project> --path <checkpoint>` with the complete `--workers`
 inventory and `--host-capable`.
 For any other block reason, or after the re-offer, the watcher reminds
 every N `UserPromptSubmit` turns (N = 5, `CONTEXT_WATCH_REMIND_TURNS`)

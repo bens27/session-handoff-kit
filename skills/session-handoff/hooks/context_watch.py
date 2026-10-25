@@ -1249,9 +1249,9 @@ def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdow
             or record.session_id != session_id or record.fm.get("reason") != "context-pressure"):
         return drop()
     root = marker.get("root") if isinstance(marker.get("root"), str) and marker.get("root") else cwd
-    command = ("%s --root %s with your complete --workers inventory and --host-capable"
+    command = ("%s --root %s --path %s with your complete --workers inventory and --host-capable"
                % (python_command(os.path.join(os.path.dirname(LEDGER), "restart_preflight.py"), "restart"),
-                  shlex.quote(root)))
+                  shlex.quote(root), shlex.quote(marker["path"])))
     label = LABEL.get(_AGENT, LABEL["claude"])
     note = occupancy_note(occupancy, breakdown)
     message = ""
@@ -1270,14 +1270,14 @@ def restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdow
         if marker.get("caller_hold"):
             # The hook cannot see an ask_user card: a mailbox notification is a prompt too.
             status = ("a new prompt arrived since the hold. If a question to the user is still "
-                      "unanswered, keep waiting (or pass --hold); otherwise")
+                      "unanswered, keep waiting (or pass --hold). Otherwise, finish")
         else:
-            status = "the hold has cleared."
+            status = "the hold has cleared. Finish"
         message = ("%s This session's context-pressure restart was blocked by a human hold; %s "
-                   "Context occupancy is ~%s tokens (threshold %s). Finish the action in progress, "
-                   "refresh the checkpoint %s if the state moved, then retry: %s. %s"
-                   % (label, status, format(occupancy, ","), format(limit, ","), marker.get("path"),
-                      command, note))
+                   "the action in progress, refresh the checkpoint %s if the state moved, then retry: "
+                   "%s. Context occupancy is ~%s tokens (threshold %s). %s"
+                   % (label, status, marker.get("path"), command, format(occupancy, ","),
+                      format(limit, ","), note))
     elif event_name == "UserPromptSubmit":
         marker["turns"] = marker.get("turns", 0) + 1
         if marker["turns"] >= RESTART_REMIND_TURNS and occupancy >= limit:
