@@ -154,10 +154,11 @@ class Decide(unittest.TestCase):
 
 
 
-def advise(occupancy, limit=130_000, lead=30_000, latch=Latch(), advised=False, floor=lambda: None):
+def advise(occupancy, limit=130_000, lead=30_000, latch=Latch(), advised=False, floor=lambda: None,
+           startup=None):
     """The advisory rule on top of decide(), both on one occupancy basis (23079574)."""
     decision = decide(occupancy, limit=limit, latch=latch, floor=floor, written=lambda: False)
-    return decision, wd.advise(occupancy, lead, decision, latch, advised)
+    return decision, wd.advise(occupancy, lead, decision, latch, advised, startup)
 
 
 class Advisory(unittest.TestCase):
@@ -181,9 +182,21 @@ class Advisory(unittest.TestCase):
 
     def test_once_per_window_and_rearm(self):
         self.assertIsNone(advise(110_000, advised=True)[1], 'duplicate callback')
-        self.assertIsNone(advise(50_001, advised=True)[1])
-        self.assertEqual(advise(49_999, advised=True)[1], wd.ADVISORY_REARM, 'compaction under half the point')
+        self.assertIsNone(advise(65_001, advised=True)[1])
+        self.assertEqual(advise(64_999, advised=True)[1], wd.ADVISORY_REARM, 'compaction under half the limit')
+        self.assertEqual(advise(55_000, advised=True)[1], wd.ADVISORY_REARM, 'between point/2 and limit/2')
         self.assertIsNone(advise(49_999)[1], 'nothing to re-arm without the latch')
+        # Point under limit/2 (lead 80k, point 50k): re-arm below the point, never at or above it,
+        # so a window sitting past the point cannot re-arm and re-fire on alternate callbacks.
+        self.assertEqual(advise(28_000, lead=80_000, advised=True)[1], wd.ADVISORY_REARM)
+        self.assertIsNone(advise(55_000, lead=80_000, advised=True)[1])
+
+    def test_no_advisory_when_the_point_is_at_the_startup_floor(self):
+        # HANDOFF_AT=50000 with a 27k startup: the point (20k) is under startup + margin.
+        self.assertIsNone(advise(27_000, limit=50_000, startup=27_000)[1])
+        self.assertIsNone(advise(105_000, startup=95_000)[1], 'point 100k within 10k of startup')
+        self.assertEqual(advise(105_000, startup=89_000)[1], wd.ADVISE)
+        self.assertEqual(advise(105_000, startup=None)[1], wd.ADVISE, 'unknown startup: no guard')
 
     def test_no_advisory_once_the_notice_fired_or_floored(self):
         fired = Latch(fired=True, first_occupancy=131_000, first_base=1)
@@ -223,6 +236,8 @@ class Advisory(unittest.TestCase):
                 self.assertIsNone(got[0])
                 self.assertIn('user', got[2])
         self.assertIsNone(lead([('env', 'abc')])[0])
+        self.assertIsNone(lead([('env', '\u00b2')])[0], 'superscript digit: isdigit() but not int()')
+        self.assertIsNone(lead([('env', '\u0663')])[0], 'non-ASCII digit refused too')
         # A malformed lower-precedence value still refuses: strict validation.
         self.assertIsNone(lead([('project', 20_000), ('user', -5)])[0])
 

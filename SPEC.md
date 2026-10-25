@@ -1252,8 +1252,10 @@ precedence and reserve cap remain §6. Warn at max(0, resolved threshold minus l
 Implemented advisory: `CONTEXT_WATCH_WARNING_WINDOW` env, then project, then user
 file; any malformed present value disables the advisory with one handoff-status
 diagnostic. The advisory fires once per window on the notice's occupancy basis,
-only while the notice is quiet, has its own latch (re-armed below half the
-advisory point), and never publishes, restarts or touches the notice latch.
+only while the notice is quiet and the point is above startup context plus the
+floor margin, has its own latch (re-armed below min(half the threshold, the
+point)), fails closed when that latch cannot be written, and never publishes,
+restarts or touches the notice latch. Advisory rows are excluded from `stats`.
 Mandatory point must be at least that warning point and within a reported window
 minus reserve; invalid combinations disable automatic v3 transitions. Missing
 telemetry reports enforcement unavailable, never invented occupancy.

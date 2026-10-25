@@ -21,7 +21,7 @@ CLEAN = ("HANDOFF_AT", "AUTORESUME", "HANDOFF_AUTO", "HANDOFF_AUTO_MAX", "HANDOF
          "TMUX_PANE", "AGENTSROOM_AGENT_ID", "HANDOFF_TERMINAL_ID", "CONTEXT_WATCH_AUTORESUME",
          "CONTEXT_WATCH_TOKENS", "CONTEXT_WATCH_TOKENS_MAP", "CONTEXT_WATCH_PERCENT",
          "CONTEXT_WATCH_MODE", "CONTEXT_WATCH_WINDOW", "CONTEXT_WATCH_RESERVE",
-         "CONTEXT_WATCH_THINKING", "HANDOFF_RUN_ID")
+         "CONTEXT_WATCH_THINKING", "HANDOFF_RUN_ID", "CONTEXT_WATCH_WARNING_WINDOW", "HANDOFF_STATE_DIR")
 BODY = "## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun checks.\n"
 
 
@@ -106,7 +106,9 @@ class AutoSettingsFromConfig(Case):
 
     def test_project_file_enables_auto_mode_at_its_threshold(self):
         self.project_config({"auto": True, "at": 70000})
-        self.assertEqual(self.pressure(65000, {"CONTEXT_WATCH_WARNING_WINDOW": "0"}), "")  # no notice yet
+        early = self.pressure(65000)  # at 70k: advisory point 40k, startup 1k
+        self.assertIn("Early warning", early)
+        self.assertNotIn("Publish with", early)
         msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
         self.assertIn("70,000-token handoff threshold", msg)
         self.assertIn("Fully automatic mode is active", msg)
@@ -171,10 +173,10 @@ class AutoSettingsFromConfig(Case):
 class AdvisoryWindow(Case):
     """23079574: warning_window_tokens early warning before the handoff notice."""
 
-    def at(self, tokens, extra=None):
+    def at(self, tokens, extra=None, startup=1000):
         """One PostToolUse at tokens on a fixed session (latches persist across calls)."""
         with open(self.transcript, "w") as f:
-            for n in (1000, tokens):
+            for n in (startup, tokens):
                 f.write(json.dumps({"message": {"model": "claude-test", "usage": {"input_tokens": n}}}) + "\n")
         evt = dict(hook_event_name="PostToolUse", session_id="adv-fixed", cwd=self.project,
                    transcript_path=self.transcript)
@@ -206,6 +208,26 @@ class AdvisoryWindow(Case):
         self.assertIn("Early warning", self.at(105000))
         self.assertEqual(self.at(40000), "")
         self.assertIn("Early warning", self.at(105000))
+
+    def test_compaction_between_half_point_and_half_limit_rearms(self):
+        self.assertIn("Early warning", self.at(105000))
+        self.assertEqual(self.at(55000), "")
+        self.assertIn("Early warning", self.at(105000))
+
+    def test_no_advisory_at_session_start_over_a_low_threshold(self):
+        self.assertEqual(self.at(28000, {"HANDOFF_AT": "50000"}, startup=27000), "")
+
+    def test_non_ascii_digit_env_is_refused_not_a_crash(self):
+        out = self.at(110000, {"CONTEXT_WATCH_WARNING_WINDOW": "\u00b2"})
+        self.assertNotIn("Early warning", out)
+        self.assertIn("warning_window_tokens", out)
+        self.assertIn("handoff threshold", self.at(135000, {"CONTEXT_WATCH_WARNING_WINDOW": "\u00b2"}))
+
+    def test_valid_env_does_not_rescue_a_malformed_file(self):
+        self.project_config({"warning_window_tokens": -1})
+        out = self.at(110000, {"CONTEXT_WATCH_WARNING_WINDOW": "30000"})
+        self.assertNotIn("Early warning", out)
+        self.assertIn("warning_window_tokens", out)
 
     def test_project_lead_moves_the_point(self):
         self.project_config({"warning_window_tokens": 20000})

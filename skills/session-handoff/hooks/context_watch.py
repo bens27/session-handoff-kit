@@ -858,6 +858,7 @@ def stats_cli():
     try:
         with open(path, encoding="utf-8") as f:
             events = [json.loads(l) for l in f if l.strip()]
+        events = [e for e in events if e.get("notice") != "advisory"]  # early warnings are not triggers
     except Exception:
         print("no analytics log at %s" % path)
         return 0
@@ -1366,7 +1367,7 @@ def build_floor_message(floor, threshold, floor_limit, model, agent):
     )
 
 
-def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision, latch, wd, mode):
+def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision, latch, wd, floor_probe):
     """Early warning a lead before the threshold (23079574): own latch, never publishes or restarts."""
     global _DIAG
     lead, lead_source, error = wd.warning_lead(warning_window_candidates(cwd))
@@ -1375,7 +1376,13 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
             _DIAG = (event_name, "handoff-status: %s; the context-watch early warning is off until it is "
                      "fixed. Continue the current task." % error)
         return
-    action = wd.advise(occupancy, lead, decision, latch, os.path.exists(path))
+    # Startup context on the occupancy basis (the notice's floor measure); the
+    # session note's input-only figure is the fallback when the trace is too long.
+    startup = floor_probe()
+    if startup is None:
+        noted = _ledger().read_session_note(cwd, session=session_id).get('startup_input_tokens')
+        startup = noted if type(noted) is int else None
+    action = wd.advise(occupancy, lead, decision, latch, os.path.exists(path), startup)
     if action == wd.ADVISORY_REARM:
         try:
             os.remove(path)
@@ -1392,7 +1399,7 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
     except FileExistsError:
         sys.exit(0)
     except OSError:
-        pass
+        return  # fail closed: without a latch it would repeat on every callback
     log_event({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "agent": agent, "occupancy": occupancy,
                "threshold": decision.limit, "threshold_source": decision.source, "advisory_point": point,
                "warning_lead": lead, "warning_lead_source": lead_source, "notice": "advisory",
@@ -1539,7 +1546,7 @@ def main():
         notice = restart_block_notice(cwd, session_id, event_name, occupancy, limit, breakdown)
         if notice:
             emit(agent, event_name, notice, "warn")
-        advisory(agent, evt, event_name, cwd, session_id, advised_latch, occupancy, decision, latch, wd, cfg.mode)
+        advisory(agent, evt, event_name, cwd, session_id, advised_latch, occupancy, decision, latch, wd, floor_probe)
         sys.exit(0)
     note_only = decision.action == wd.FLOOR_NOTE
 

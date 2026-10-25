@@ -241,7 +241,7 @@ def warning_lead(candidates):
         if raw is None:
             continue
         if source.startswith('env') and isinstance(raw, str):
-            value = int(raw) if raw.isdigit() else None
+            value = int(raw) if raw.isascii() and raw.isdigit() else None
         elif isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
             value = raw
         else:
@@ -253,14 +253,22 @@ def warning_lead(candidates):
     return chosen or (DEFAULT_WARNING_LEAD, 'builtin-default', None)
 
 
-def advise(occupancy, lead, decision, latch, advised):
-    """ADVISE once per window between limit - lead and limit; ADVISORY_REARM on compaction."""
+def advise(occupancy, lead, decision, latch, advised, startup=None):
+    """ADVISE once per window between limit - lead and limit; ADVISORY_REARM on compaction.
+
+    Compaction re-arms below min(limit * REARM_FACTOR, point): the notice's
+    re-arm level, never above the point (else it would re-arm and re-fire on
+    alternate callbacks). startup is the session's startup context when known:
+    a point within FLOOR_MARGIN of it would fire at session start, so stay silent.
+    """
     if lead is None or lead <= 0:
         return None
     point = max(0, decision.limit - lead)
-    if advised and occupancy < point * REARM_FACTOR:
+    if advised and occupancy < min(decision.limit * REARM_FACTOR, point):
         return ADVISORY_REARM
     if advised or latch.fired or latch.floored or decision.below_floor or decision.action != QUIET:
+        return None
+    if startup is not None and point < startup + FLOOR_MARGIN:
         return None
     if point <= occupancy < decision.limit:
         return ADVISE
