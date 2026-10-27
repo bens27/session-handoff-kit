@@ -102,8 +102,10 @@ Precedence is an existing valid trailer, then `HANDOFF_TICKET_ID`, then no
 attribution. Set the variable for the current commit or ticket-specific session;
 clear it when switching tasks. Checkpoint `task_id` is opaque and is **not**
 automatically read, and the hook never guesses from the newest handoff or branch.
-A ticket ID is 1–128 ASCII characters: an alphanumeric first character followed
-by alphanumerics, `.`, `_`, `/` or `-` (UUIDs and issue keys both work).
+The environment ID uses `handoff_contract.METADATA_FORMATS['ticket']`: a full
+lowercase ticket UUID or its 8-hex short ID. Existing trailer IDs retain the
+broader 1–128 ASCII format: an alphanumeric first character followed by
+alphanumerics, `.`, `_`, `/` or `-` (for example `PROJ-123`).
 
 The hook checks the final trailer paragraph, separated from the subject/body
 by a blank line, with case-insensitive `Ticket:` keys. Exactly one single-line
@@ -112,17 +114,26 @@ trailers reject the commit without editing its message. Missing or invalid
 environment IDs leave the message unchanged and never block a commit. Body
 mentions are not trailers. Other trailers, Git comments and scissors/diff content
 are preserved; `core.commentChar` is supported for a single configured character,
-with `#` as the default (including `auto`). Empty messages remain empty.
+with `#` as the default. With `auto`, any ASCII punctuation-prefixed line
+makes the comment character ambiguous, so the hook skips both insertion and
+validation without changing the message. Plain messages still get attribution.
+This preserves real `#` body lines when Git selected another comment character.
+Empty messages remain empty.
 
 Installation writes only the selected repository's default `commit-msg` hook;
 linked worktrees share this repository hook. No Git configuration is changed.
-Reinstall/uninstall is idempotent. Existing or modified hooks, symlinks and any
-configured `core.hooksPath` are refused without modification. To compose with an
+Reinstall/uninstall is idempotent. The exact line `# session-handoff Ticket hook`
+marks a kit-owned wrapper, which may be replaced or removed from a new install
+path. Unmarked foreign hooks, symlinked hooks or parent `.git` directories, and
+any configured `core.hooksPath` are refused without modification. Regular linked
+worktree `.git` indirection files remain supported. To compose with an
 existing hook, call `python3 /permanent/kit/hooks/commit_ticket.py "$1"` from that
 hook and propagate its exit status, preserving the other hook's failure behavior.
-Uninstall before moving the kit; ownership checks match the exact installed
-wrapper. Missing Python or a removed kit script is a quiet no-op; message I/O or
-encoding errors warn and allow the commit. Message updates use atomic replacement
+After moving the kit, rerun `git-hook` from its new location to update the
+wrapper; do the same before retiring a runtime release it points at. Uninstall
+from a different install path also works. Missing Python or a removed kit script
+is a quiet no-op; message I/O, encoding or missing contract-module errors warn
+and allow the commit. Message updates use atomic replacement
 so a failed write preserves the original. With no source or Ticket candidate,
 the hook reads only the message and does not probe Git or handoff state.
 

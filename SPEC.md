@@ -130,29 +130,36 @@ conversationally or by standing convention; file-ledger fallback checks run
 `install.py git-hook --project PATH [--uninstall]` explicitly installs/removes
 only a repository's default `commit-msg` wrapper. Linked worktrees share it.
 It changes no local/global Git configuration, refuses `core.hooksPath`, foreign
-or modified hooks and symlinks, and is idempotent for its exact wrapper. Keep the
-kit in a permanent location; uninstall before moving it. Runtime snapshots and
-standalone/plugin archives include `hooks/commit_ticket.py`, but ordinary host
+hooks without the exact `# session-handoff Ticket hook` marker line, symlinked
+hooks and parent `.git` directories. Regular linked-worktree `.git` files remain
+supported. Marker-owned wrappers can be reinstalled or removed from a different
+kit path; rerun installation from the new path after moving the kit or before
+retiring an old runtime release. Runtime snapshots and standalone/plugin archives include `hooks/commit_ticket.py`, but ordinary host
 hook registration never installs it automatically.
 
 The public hook CLI is `python3 hooks/commit_ticket.py MESSAGE_FILE`. Existing
 valid final `Ticket:` trailer > `HANDOFF_TICKET_ID` > no attribution. The
 variable is the only automatic source; checkpoint `task_id`, latest handoffs,
-branch names and ledger scans are not attribution sources. IDs match
-`[A-Za-z0-9][A-Za-z0-9._/-]{0,127}`. Ticket keys are case-insensitive in a final
-trailer paragraph separated by a blank line; empty, invalid, multiline or
+branch names and ledger scans are not attribution sources. Environment IDs use
+`handoff_contract.METADATA_FORMATS['ticket']` (full lowercase UUID or its 8-hex
+short ID). Existing trailer IDs retain `[A-Za-z0-9][A-Za-z0-9._/-]{0,127}` so
+other ticket systems such as `PROJ-123` remain valid. Ticket keys are
+case-insensitive in a final trailer paragraph separated by a blank line; empty, invalid, multiline or
 multiple Ticket values return 1 with a diagnostic and no message mutation.
 Other trailer fields and body mentions are preserved. Git comments (single
-`core.commentChar`, default `#`, also the fallback for `auto`) and scissors/diff
-content are excluded from validation and retained after an inserted trailer.
+`core.commentChar`, default `#`) and scissors/diff content are excluded from
+validation and retained after an inserted trailer. With `core.commentChar=auto`,
+any ASCII punctuation-prefixed line triggers a quiet no-op (including validation):
+the actual editor-selected character is unknown, and real `#` body lines must
+remain intact. Unambiguous plain messages still receive attribution.
 
 Missing/invalid environment IDs are nonblocking and do not change the message;
 empty messages remain empty. Existing valid attribution is never replaced by the
 environment. The stdlib-only hook reads no checkpoint/project code; the no-source,
 no-Ticket path only reads the commit message. A bounded Git config probe reads
 the comment character when needed. Missing Python/script makes the wrapper a
-no-op; I/O/encoding failures warn and return 0. Message updates are atomic so
-a failed write leaves the original intact. Manual composition with foreign
+no-op; I/O/encoding or missing contract-module failures warn and return 0.
+Message updates are atomic so a failed write leaves the original intact. Manual composition with foreign
 hooks must propagate both hooks' statuses. This is optional attribution metadata,
 not authority or proof of ticket completion. See README for install examples.
 

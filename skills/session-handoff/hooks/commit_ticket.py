@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import string
 import subprocess
 import tempfile
 
@@ -15,7 +16,7 @@ def comment_character():
         result = subprocess.run(['git', 'config', '--get', 'core.commentChar'],
                                 capture_output=True, text=True, timeout=1)
         value = result.stdout.strip()
-        if result.returncode == 0 and len(value) == 1:
+        if result.returncode == 0 and (len(value) == 1 or value == 'auto'):
             return value
     except (OSError, UnicodeError, subprocess.SubprocessError):
         pass
@@ -33,6 +34,12 @@ def main(argv):
     lines = text.splitlines(keepends=True)
     # Git comments and verbose diff are not commit message content.
     comment = comment_character()
+    if comment == 'auto':
+        # The editor's chosen character is not exposed to commit-msg. Preserve
+        # ambiguous punctuation-prefixed lines, including real '#' body text.
+        if any(line and line[0] in string.punctuation for line in lines):
+            return 0
+        comment = '#'
     visible = []
     for index, line in enumerate(lines):
         if line.startswith(comment + ' ------------------------ >8 '):
@@ -73,7 +80,10 @@ def main(argv):
             print('session-handoff: invalid Ticket trailer (expected one ticket ID)', file=sys.stderr)
             return 1
         return 0
-    if not TICKET_ID.fullmatch(ticket):
+    if not ticket:
+        return 0
+    from handoff_contract import METADATA_FORMATS
+    if not METADATA_FORMATS['ticket'].fullmatch(ticket):
         return 0
     newline = '\r\n' if '\r\n' in text else '\n'
     prefix = ''.join(lines[:end]).rstrip('\r\n')
@@ -95,7 +105,7 @@ def main(argv):
 if __name__ == '__main__':
     try:
         code = main(sys.argv[1:])
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, ImportError) as exc:
         print('session-handoff ticket hook skipped: ' + str(exc), file=sys.stderr)
         code = 0
     sys.exit(code)

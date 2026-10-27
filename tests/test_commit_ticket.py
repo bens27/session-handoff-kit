@@ -172,3 +172,101 @@ def test_message_survives_a_failed_write(tmp_path):
     assert result.returncode == 0 and 'skipped' in result.stderr
     assert message.read_text() == original
     assert list(tmp_path.iterdir()) == [message]
+
+
+def test_auto_comment_character_leaves_ambiguous_message_intact(tmp_path):
+    assert git(tmp_path, 'init', '-q').returncode == 0
+    assert git(tmp_path, 'config', 'core.commentChar', 'auto').returncode == 0
+    path = tmp_path / 'COMMIT_EDITMSG'
+    original = '# Real subject\n\nA body with a hash heading.\n\n; Git comment\n'
+    path.write_text(original)
+    result = subprocess.run([sys.executable, str(HOOK), str(path)], cwd=tmp_path,
+                            env=dict(os.environ, HANDOFF_TICKET_ID=TICKET),
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert path.read_text() == original
+    path.write_text('Plain message\n')
+    result = subprocess.run([sys.executable, str(HOOK), str(path)], cwd=tmp_path,
+                            env=dict(os.environ, HANDOFF_TICKET_ID=TICKET),
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert path.read_text() == f'Plain message\n\nTicket: {TICKET}\n'
+
+
+def test_install_marker_allows_relocation_after_previous_release_is_removed(tmp_path):
+    import shutil
+    project = tmp_path / 'project'
+    project.mkdir()
+    assert git(project, 'init', '-q').returncode == 0
+    first = tmp_path / 'release-one'
+    second = tmp_path / 'release-two'
+    for release in (first, second):
+        release.mkdir()
+        shutil.copy2(INSTALL, release / 'install.py')
+        (release / 'hooks').mkdir()
+        for name in ('commit_ticket.py', 'handoff_contract.py'):
+            shutil.copy2(HOOK.parent / name, release / 'hooks' / name)
+    def from_release(release, *args):
+        return subprocess.run([sys.executable, str(release / 'install.py'), 'git-hook',
+                               '--project', str(project), *args],
+                              capture_output=True, text=True, timeout=10)
+    assert from_release(first).returncode == 0
+    hook = project / '.git/hooks/commit-msg'
+    assert str(first).encode() in hook.read_bytes()
+    shutil.rmtree(first)
+    result = from_release(second)
+    assert result.returncode == 0, result.stderr
+    assert str(second).encode() in hook.read_bytes()
+    message = project / 'MESSAGE'
+    message.write_text('Fix relocated hook\n')
+    result = subprocess.run([str(hook), str(message)], cwd=project,
+                            env=dict(os.environ, HANDOFF_TICKET_ID=TICKET),
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert message.read_text() == f'Fix relocated hook\n\nTicket: {TICKET}\n'
+    assert from_release(second, '--uninstall').returncode == 0
+    assert not hook.exists()
+    # Uninstall must also recognize the first path without needing a reinstall.
+    first.mkdir()
+    shutil.copy2(INSTALL, first / 'install.py')
+    assert from_release(first).returncode == 0
+    result = from_release(second, '--uninstall')
+    assert result.returncode == 0 and not hook.exists(), result.stderr
+
+
+def test_install_refuses_symlinked_parent_git_directory(tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    assert git(project, 'init', '-q').returncode == 0
+    actual = tmp_path / 'actual-git'
+    (project / '.git').rename(actual)
+    (project / '.git').symlink_to(actual, target_is_directory=True)
+    hook = actual / 'hooks/commit-msg'
+    for args in ((), ('--uninstall',)):
+        result = install(project, *args)
+        assert result.returncode != 0, result.stdout
+        assert 'symlink' in result.stderr
+        assert not hook.exists()
+    # A linked worktree's .git is a regular indirection file; it remains supported.
+    (project / '.git').unlink()
+    actual.rename(project / '.git')
+    linked = tmp_path / 'linked'
+    assert git(project, 'worktree', 'add', '--orphan', '-b', 'linked', str(linked)).returncode == 0
+    assert (linked / '.git').is_file()
+    result = install(linked)
+    assert result.returncode == 0, result.stderr
+    assert (project / '.git/hooks/commit-msg').exists()
+
+
+def test_environment_uses_shared_ticket_format_but_existing_trailers_remain_broad(tmp_path):
+    original = 'Fix shared attribution\n'
+    for invalid in ('PROJ-123', 'abc1234', 'abc123456', TICKET.upper(), 'a' * 128):
+        result, message = run_hook(tmp_path, original, ticket=invalid)
+        assert (result.returncode, message) == (0, original), result.stderr
+    for valid in ('39661343', '39661343-1d16-4c04-bf21-33c24edff2e0'):
+        result, message = run_hook(tmp_path, original, ticket=valid)
+        assert result.returncode == 0, result.stderr
+        assert message == f'Fix shared attribution\n\nTicket: {valid}\n'
+    existing = 'Fix\n\nTicket: PROJ-123\n'
+    result, message = run_hook(tmp_path, existing, ticket='invalid env')
+    assert result.returncode == 0 and message == existing, result.stderr

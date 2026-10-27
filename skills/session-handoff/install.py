@@ -516,6 +516,16 @@ def git_hook_main(argv):
     parser.add_argument('--uninstall', action='store_true')
     args = parser.parse_args(argv)
 
+    # Check lexical project ancestors before Git resolves a symlinked .git to
+    # its destination. Regular linked-worktree .git indirection files are safe.
+    project = args.project.absolute()
+    for parent in (project, *project.parents):
+        metadata = parent / '.git'
+        if metadata.is_symlink():
+            raise ValueError('refusing a symlinked parent .git directory')
+        if metadata.exists():
+            break
+
     def git(*words):
         result = subprocess.run(['git', '-C', str(args.project), *words],
                                 capture_output=True, text=True, timeout=5)
@@ -538,7 +548,8 @@ def git_hook_main(argv):
                '    exec python3 ' + quoted + ' "$@"\nfi\nexit 0\n').encode()
     if directory.is_symlink() or hook.is_symlink():
         raise ValueError('refusing a symlinked hooks directory or commit-msg hook')
-    if hook.exists() and hook.read_bytes() != content:
+    marker = b'# session-handoff Ticket hook'
+    if hook.exists() and marker not in hook.read_bytes().splitlines():
         raise ValueError('existing commit-msg hook left intact; compose manually instead')
     if args.uninstall:
         if hook.exists():
