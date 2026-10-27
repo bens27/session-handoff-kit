@@ -132,6 +132,7 @@ class RealAdapterFailures(unittest.TestCase):
             self.assertFalse(real.is_ancestor('/r', 'a', 'b'))
             self.assertEqual(real.position('/r'), '')
             self.assertEqual(real.movement('/r', 'abc'), (None, None))
+            self.assertEqual(real.resolve_commit('/r', 'abcdef1'), '')
 
 
 class RealGitContract(unittest.TestCase):
@@ -170,6 +171,14 @@ class RealGitContract(unittest.TestCase):
             self.assertFalse(real.is_ancestor(root, new[:7], old[:7]))
             self.assertFalse(real.is_ancestor(root, 'f' * 7, new[:7]))
             self.assertEqual(real.position(root), 'main@' + new[:7])
+            self.assertEqual(real.resolve_commit(root, old[:7]), old)
+            self.assertEqual(real.resolve_commit(root, 'f' * 40), '')
+            tree = git('rev-parse', 'HEAD^{tree}')
+            self.assertEqual(real.resolve_commit(root, tree), '')  # an object, but not a commit
+            memory = MemoryWorkspace(commits={root: [old, new]})
+            self.assertEqual(memory.resolve_commit(root, old[:7]), old)
+            self.assertEqual(memory.resolve_commit(root, ''), '')  # ambiguous: matches both
+            self.assertEqual(memory.resolve_commit(outside, old[:7]), '')
             self.assertEqual(real.movement(root, old[:7]), ('1', 3))
             self.assertTrue(real.tracked(os.path.join(root, 'a.py')))
             self.assertFalse(real.tracked(os.path.join(root, 'n.py')))
@@ -196,6 +205,7 @@ class RealGitContract(unittest.TestCase):
             self.assertIsNone(real.snapshot(outside))
             self.assertIsNone(real.changed_files(outside))
             self.assertEqual(real.position(outside), '')
+            self.assertEqual(real.resolve_commit(outside, old), '')
             self.assertFalse(real.tracked(os.path.join(outside, 'x')))
 
 

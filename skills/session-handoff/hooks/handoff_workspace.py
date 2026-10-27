@@ -10,6 +10,7 @@ Each question keeps the failure contract its callers already had:
   snapshot(root)        (head, porcelain) or None when status is unknown
   changed_files(root)   raw `ls-files -z` bytes, or None
   is_ancestor(root,a,b) bool; unknown is False
+  resolve_commit(root,s) full sha of an existing commit, or '' (missing, ambiguous, unknown)
   position(root)        'branch@shortsha', or ''
   movement(root, sha)   (commits_since or None, dirty_count or None)
   tracked(path)         bool; RuntimeError('git-check-indeterminate') if unknown
@@ -54,6 +55,13 @@ class GitWorkspace:
             return self._git(root, ['merge-base', '--is-ancestor', old, new], 5).returncode == 0
         except (OSError, subprocess.SubprocessError):
             return False
+
+    def resolve_commit(self, root, sha):
+        try:
+            result = self._git(root, ['rev-parse', '-q', '--verify', sha + '^{commit}'], 5)
+        except (OSError, subprocess.SubprocessError):
+            return ''
+        return result.stdout.strip() if result.returncode == 0 else ''
 
     def position(self, root):
         try:
@@ -125,7 +133,7 @@ class MemoryWorkspace:
     from a dict answers like a directory Git cannot read."""
 
     def __init__(self, heads=None, branches=None, status=None, changed=None, ancestry=(),
-                 counts=None, tracked=None, common=None):
+                 counts=None, tracked=None, common=None, commits=None):
         self.heads = dict(heads or {})        # root -> full sha
         self.branches = dict(branches or {})  # root -> branch name
         self.status = dict(status or {})      # root -> porcelain text
@@ -134,6 +142,7 @@ class MemoryWorkspace:
         self.counts = dict(counts or {})      # (root, sha) -> commits since
         self.tracked_paths = dict(tracked or {})  # realpath -> bool
         self.common = dict(common or {})      # worktree -> (gitdir, common) or OSError message
+        self.commits = dict(commits or {})    # root -> [full shas]
 
     def snapshot(self, root):
         if root not in self.status:
@@ -147,6 +156,10 @@ class MemoryWorkspace:
 
     def is_ancestor(self, root, old, new):
         return (old, new) in self.ancestry
+
+    def resolve_commit(self, root, sha):
+        found = [c for c in self.commits.get(root, ()) if c.startswith(sha)]
+        return found[0] if len(found) == 1 else ''
 
     def position(self, root):
         sha = self.heads.get(root, '')[:7]
@@ -203,6 +216,10 @@ def changed_files(root):
 
 def is_ancestor(root, old, new):
     return _active.is_ancestor(root, old, new)
+
+
+def resolve_commit(root, sha):
+    return _active.resolve_commit(root, sha)
 
 
 def position(root):

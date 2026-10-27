@@ -134,6 +134,44 @@ def merge_continuity(previous, updates):
     return list(merged.values())
 
 
+# Checkpoint header metadata (SPEC §7.1). Each is one optional `key: value`
+# line; a checkpoint without them is a legacy checkpoint, not an invalid one.
+METADATA_FORMATS = {
+    # AgentsRoom ticket id: full lowercase UUID, or its first 8 hex digits.
+    'ticket': re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?'),
+    # Commit the work started from. Drafts may abbreviate (7+); headers hold the full sha.
+    'base': re.compile(r'[0-9a-f]{7,64}'),
+    'role': re.compile(r'[a-z][a-z0-9]*(?:-[a-z0-9]+)*'),
+}
+METADATA_HINTS = {
+    'ticket': 'a lowercase ticket UUID or its 8-hex short id, for example 6cf33871',
+    'base': 'an existing commit sha of this project (7 to 64 hex digits)',
+    'role': 'a kebab-case role of at most 40 characters, for example backend',
+}
+METADATA_INHERITED = ('ticket', 'role')  # base is a fact of one save, never inherited
+
+
+def metadata_problem(key, value):
+    """Why a draft's metadata value is malformed, or '' when it is acceptable ('' clears)."""
+    if value == '':
+        return ''
+    if not (isinstance(value, str) and METADATA_FORMATS[key].fullmatch(value)
+            and (key != 'role' or len(value) <= 40)):
+        return 'Invalid %s %s: supply %s, or omit it.' % (key, json.dumps(value)[:80], METADATA_HINTS[key])
+    return ''
+
+
+def checkpoint_metadata(fm):
+    """The well-formed ticket/base/role of a parsed header; absent or malformed values are omitted."""
+    out = {}
+    for key, pattern in METADATA_FORMATS.items():
+        value = fm.get(key, '')
+        if value and pattern.fullmatch(value) and (key != 'base' or len(value) in (40, 64)) \
+                and (key != 'role' or len(value) <= 40):
+            out[key] = value
+    return out
+
+
 def continuation_document(document, previous=None):
     """Carry trusted metadata independently of the author's next-action summary.
 
@@ -142,7 +180,7 @@ def continuation_document(document, previous=None):
     """
     previous = previous or {}
     effective = dict(document)
-    for key in ('skills', 'references', 'optional_references'):
+    for key in ('skills', 'references', 'optional_references') + METADATA_INHERITED:
         if key not in effective:
             effective[key] = previous.get(key, '')
     effective['continuity'] = merge_continuity(

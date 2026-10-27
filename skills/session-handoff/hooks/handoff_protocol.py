@@ -15,6 +15,7 @@ from datetime import datetime
 from handoff_contract import (command_template, continuation_command, ledger_command,
                               exit_status, emit_output, render_output, project_output,
                               continuity_items, continuation_document)
+from handoff_contract import METADATA_FORMATS, metadata_problem
 import handoff_identity
 import handoff_ledger as ledger
 import handoff_workspace as workspace
@@ -601,6 +602,26 @@ def _listed(value):
     return value if isinstance(value, str) else None
 
 
+def checkpoint_metadata_refusal(root, document):
+    """(refusal or None, full base sha or ''): validate a draft's ticket/base/role on write.
+
+    The ticket's format is checked; its existence is not, since the backlog is
+    not stored locally. The base must name one existing commit of this project."""
+    for key in METADATA_FORMATS:
+        problem = metadata_problem(key, document.get(key, ''))
+        if problem:
+            return dict(outcome='invalid', action=problem + ' Nothing was saved.'), ''
+    base = document.get('base', '')
+    if not base:
+        return None, ''
+    full = workspace.resolve_commit(root, base)
+    if not full:
+        return dict(outcome='invalid', action=(
+            'Invalid base %s: no single commit with that sha exists in %s (or it is not a Git repository). '
+            'Supply an existing, unambiguous commit sha, or omit base. Nothing was saved.' % (base, root))), ''
+    return None, full
+
+
 def _front_matter_matches(root, document, record):
     """True when the stored metadata is what save would write for this document.
     A verify the document omitted may only be the user-level default or the trusted predecessor's."""
@@ -608,9 +629,13 @@ def _front_matter_matches(root, document, record):
     held = Record.load_trusted(fm['predecessor']) if fm.get('predecessor') else None
     prior = held.fm if held else {}
     effective = continuation_document(document, prior)
-    for key in ('skills', 'references', 'optional_references', 'verify_baseline'):
+    for key in ('skills', 'references', 'optional_references', 'verify_baseline', 'ticket', 'role'):
         if fm.get(key, '') != _listed(effective.get(key, '')):
             return False
+    # The header holds the full sha of the (possibly abbreviated) submitted base.
+    submitted = document.get('base', '')
+    if not (fm.get('base', '').startswith(submitted) if submitted else not fm.get('base')):
+        return False
     if json.loads(fm.get('continuity', '[]')) != effective['continuity']:
         return False
     allowed = {_listed(document.get('verify', '')) or None}
@@ -737,6 +762,9 @@ def save(root, session, request_id, document):
     problems = ledger._problems('---\nstatus: open\n---\n' + body, {'status':'open'})
     if not body.strip() or problems:
         return dict(outcome='invalid', problems=problems[:8], action='Keep the previous checkpoint and draft. Repair the named document problems and retry.')
+    refusal, base = checkpoint_metadata_refusal(root, document)
+    if refusal:
+        return refusal
     identity = hashlib.sha256((os.path.realpath(root) + '\0' + session + '\0' + request_id).encode()).hexdigest()
     fingerprint = hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
     from contextlib import ExitStack
@@ -879,6 +907,10 @@ def save(root, session, request_id, document):
             if isinstance(value, list):
                 value = ', '.join(dict.fromkeys(value))
             fields[key] = value
+        # Optional header metadata: written only when set, so legacy readers see no change.
+        for key, value in (('ticket', document.get('ticket', '')), ('base', base), ('role', document.get('role', ''))):
+            if value:
+                fields[key] = value
         if document['continuity']:
             fields['continuity'] = json.dumps(document['continuity'], sort_keys=True)
         if predecessor:

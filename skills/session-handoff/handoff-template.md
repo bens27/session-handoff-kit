@@ -4,8 +4,12 @@ Supply `topic`, a one-line `description`, and `body` containing the Markdown
 sections below. Optional fields are `predecessor` (authoritative path; required when continuing an existing topic),
 `skills` (only required execution dependencies), `references` (required files
 or `path#L10-L30` excerpts), `optional_references` (background, not loaded),
-`verify` (one relevant command), and `continuity` (durable goals, constraints
-and follow-ups; see below). Arrays are accepted for skills/references.
+`verify` (one relevant command), `continuity` (durable goals, constraints
+and follow-ups; see below), and the work metadata `ticket` (the backlog ticket's
+lowercase UUID or 8-hex short id), `base` (the commit sha the work started from;
+it must exist in the project) and `role` (kebab-case, e.g. `backend`).
+Arrays are accepted for skills/references. A malformed `ticket`/`role` or an
+unknown `base` is refused and nothing is saved.
 Only explicit user parking overrides `reason` with `user-parked`.
 
 ```json
@@ -34,8 +38,9 @@ Omitting `continuity`, sending `[]`, or leaving an ID out retains prior entries.
 The register inherits only from a trusted predecessor. It records work and
 constraints; live user instructions and current authorization take precedence.
 
-For a trusted predecessor, omitted `skills`, `references` and
-`optional_references` inherit. Supply a new list to replace a field, or `[]` to
+For a trusted predecessor, omitted `skills`, `references`,
+`optional_references`, `ticket` and `role` inherit; `base` never does, so pass it again
+on each save that records one. Supply a new list to replace a field, or `[]` to
 clear it when that dependency is no longer needed. Review inherited dependencies
 against the next action. Previously read skills are not loaded in a fresh context.
 

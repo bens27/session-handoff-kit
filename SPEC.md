@@ -416,6 +416,39 @@ references: docs/auth-notes.md, tests/auth_refresh_test.py
 `reason:` records why the handoff was written (`context-pressure` from the
 matching session trigger, or `user-parked`). Live user authorization wins.
 
+**Header format.** The header is the block between the first two `---` lines:
+one `key: value` per line, key lowercase, value a single line taken verbatim
+after the first `:` with surrounding whitespace trimmed. There is no quoting,
+nesting or continuation, so it is not YAML and needs no YAML library; save
+refuses any value containing a newline. Readers ignore keys they do not know.
+A reader in a few lines of stdlib (`handoff_identity.parse_front_matter`):
+
+```python
+lines = text.splitlines()
+end = lines.index('---', 1) if lines and lines[0] == '---' else 0
+fm = {k.strip().lower(): v.strip() for k, _, v in
+      (l.partition(':') for l in lines[1:end] if ':' in l)}
+```
+
+**Work metadata.** Three optional lines tie a checkpoint to the work it belongs
+to, for the resume staleness check. Each is written only when the draft sets
+it, so a checkpoint without them is a legacy checkpoint that still resumes, not
+an invalid one.
+
+| Line | Value written | Draft accepts | Checked on save |
+|---|---|---|---|
+| `ticket:` | AgentsRoom backlog ticket id | lowercase UUID, or its first 8 hex digits | format only; the backlog is not stored locally, so existence is not checked |
+| `base:` | full commit sha (40 or 64 hex) | 7–64 hex digits | must resolve to exactly one existing commit in the project (`git rev-parse --verify <sha>^{commit}`); a missing, ambiguous or non-commit object, or a project that is not a Git repository, is refused |
+| `role:` | role slug, e.g. `backend` | kebab-case, at most 40 characters | format only |
+
+An invalid value fails the save with `outcome: invalid` and an `action` naming
+the field, before any lock or file is taken. An empty string means "not set".
+`ticket` and `role` inherit from a trusted predecessor when the draft omits
+them (an empty string clears them); `base` is a fact of one save and never
+inherits. `handoff_contract.checkpoint_metadata(fm)` returns only the
+well-formed values of a parsed header, so a hand-edited or malformed line reads
+as absent.
+
 Body sections, in order: Objective; User request and constraints (the ask
 verbatim, constraints, approval scope, pending decisions); Current state,
 split into verified-with-evidence and unverified/unknown; Decisions and rationale;
@@ -662,7 +695,7 @@ resolved or retired. Delegation requires owner; resolution/retirement requires
 evidence (result or reason). A trusted predecessor's register merges by ID;
 omission and an empty list preserve prior items. Explicit updates record their
 new disposition. Metadata stores the register as one-line JSON. Trusted
-predecessor skills/references/optional_references inherit only when the draft
+predecessor skills/references/optional_references/ticket/role inherit only when the draft
 omits the field; explicit lists replace it, including `[]`. Untrusted
 predecessors supply neither implicit dependencies nor register entries. The raw
 draft still defines retry identity. These records preserve declared obligations,
