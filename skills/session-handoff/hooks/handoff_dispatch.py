@@ -28,7 +28,7 @@ REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authoriza
                           'request_id', 'reuse', 'expect', 'topic', 'draft'))
 DRAFT_REQUIRED = ('topic', 'description', 'body', 'suggested_skills')
 # ticket/base/role are accepted now for #95's checkpoint-header fields; save ignores them until then.
-DRAFT_OPTIONAL = frozenset(('task_id', 'predecessor', 'references', 'optional_references', 'continuity', 'skills',
+DRAFT_OPTIONAL = frozenset(('predecessor', 'references', 'optional_references', 'continuity', 'skills',
                             'verify', 'verify_baseline', 'reason', 'ticket', 'base', 'role'))
 HOST_WINDOW = intents.HOST_WINDOW
 
@@ -217,8 +217,6 @@ def validate_draft(request):
     if (not isinstance(suggested, list) or not all(isinstance(n, str) and n.strip() for n in suggested)
             or len(set(suggested)) != len(suggested)):
         return 'draft.suggested_skills must be a list of unique skill names ([] allowed).'
-    if 'task_id' in draft and not isinstance(draft['task_id'], str):
-        return 'draft.task_id must be a string.'
     if request.get('topic') is not None and request['topic'] != draft['topic']:
         return 'topic and draft.topic differ.'
     request['topic'] = draft['topic']

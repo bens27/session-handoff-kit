@@ -1651,7 +1651,7 @@ class OneCallSaveTests(Base):
     def test_agentsroom_draft_save_returns_the_one_restart_call(self):
         (self.home / 'skills' / 'tdd').mkdir(parents=True)
         (self.home / 'skills' / 'tdd' / 'SKILL.md').write_text('---\nname: tdd\n---\n')
-        r = self.ar_save(suggested_skills=['tdd'], task_id='T-1')
+        r = self.ar_save(suggested_skills=['tdd'])
         self.assertEqual((r['outcome'], r['code'], r['call'], r['agent']), ('proceed', 'restart', 'agents_restart', 'term-a'), r)
         self.assertIn(' adopt ', r['prompt'])
         self.assertRegex(r['prompt'], r'\bh-[0-9a-f]{24}\b')
@@ -1659,7 +1659,7 @@ class OneCallSaveTests(Base):
         self.assertFalse(r['authorized_to_execute'])
         self.assertTrue(os.path.isfile(r['path']), r)
         text = Path(r['path']).read_text()
-        self.assertIn('\ntask_id: T-1\n', text)
+        self.assertNotIn('task_id', text)
         self.assertIn('\nsuggested_skills: tdd\n', text)
         [location] = self.intents()
         record = json.loads(location.read_text())
@@ -1708,7 +1708,7 @@ class OneCallSaveTests(Base):
         self.record_hook_session('sess-a', env=self.AR)
         bad = [{k: v for k, v in self.draft().items() if k != key} for key in ('topic', 'description', 'body', 'suggested_skills')]
         bad += [self.draft(extra='x'), self.draft(suggested_skills='tdd'), self.draft(suggested_skills=['a', 'a']),
-                self.draft(suggested_skills=[1]), self.draft(task_id=3), 'not-an-object']
+                self.draft(suggested_skills=[1]), self.draft(task_id='T-1'), 'not-an-object']  # task_id dropped for `ticket` (#95)
         for draft in bad:
             r = self.dispatch(operation='save', draft=draft, host=self.HOST, env=self.AR)
             self.assertEqual((r['outcome'], r['code']), ('blocked', 'invalid_request'), (draft, r))

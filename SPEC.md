@@ -375,8 +375,11 @@ assumed 200k would clamp every 1M-context model to 180k.
 
 The config files also carry `"auto"`, `"at"` and `"auto_max"` (same meaning as
 `HANDOFF_AUTO`, `HANDOFF_AT`, `HANDOFF_AUTO_MAX`). Precedence: non-empty env,
-then project file, then user file, then default. Wrongly typed values are
-ignored; these keys are never read as model thresholds.
+then project file, then user file, then default. `"auto"` is user-scope only:
+a project `.context-watch.json` never sets it (both the watcher and the save
+transition read only the user file), and the watcher reports a project file
+that sets it once per session with a `handoff-status:` diagnostic. Wrongly
+typed values are ignored; these keys are never read as model thresholds.
 
 Config files are flat JSON; user-global loads first and project-local
 overrides on key collision:
@@ -786,12 +789,16 @@ pausing on `rapid-resume` and `repeated-topic`; the reasons are still reported a
 `continuous_topic` is true in the diagnostics. Hard limits below are unaffected.
 Sharing a topic with a predecessor alone does not set `continuous_topic`.
 A repository `.context-watch.json` is honored for this key (project scope is intentional), so a repository
-can relax the soft pause for its listed topics; `restart-budget` and `restart-cooldown` stay hard stops.
+can relax the soft pause for its listed topics; `restart-budget`, `restart-cooldown` and `invalid-timing` stay hard stops.
 Required body headings (`## Objective`, `## Current state`, `## Next steps`) match
 at line start; text after a space following the title is allowed.
 Five prior AgentsRoom restart intents within 3600 seconds (`restart-budget`) or
 a different session's intent within 120 seconds (`restart-cooldown`) always
 returns `paused`, regardless of progress. These hard limits are unchanged.
+Both read checkpoint timestamps, so a stamp more than 60 seconds in the future
+(the clock moved back) would hide an intent from them. In AgentsRoom, such a
+stamp on one of this terminal's checkpoints, or a future `resumed_at`, pauses
+with `invalid-timing`, a third hard stop, instead of failing open.
 Intent counts cannot observe restarts outside the kit; the host remains the
 authority for its limits. Durable resume timestamps back up ephemeral notes.
 Successful restart adoption also writes `resumed_at` and `resumed_topic` into the
@@ -1203,7 +1210,7 @@ may invoke the host from the same script, preserving the same state contract.
 **Slice 1 implemented (8ae43aa3).** `handoff_ledger.py dispatch` accepts `draft`
 only with `operation: "save"`; a draft-less save keeps its routing-only result.
 Required draft keys are `topic`, `description`, `body` and `suggested_skills`;
-optional ones are `task_id`, `predecessor`, `references`, `optional_references`,
+optional ones are `predecessor`, `references`, `optional_references`,
 `continuity`, `skills`, `verify`, `verify_baseline`, `reason`, and `ticket`,
 `base` and `role` (reserved for #95; ignored until then). Any other key is
 `invalid_request`. Without `request_id`, the ID is derived from the session and
@@ -1212,8 +1219,8 @@ publication, even after a restart block, and keeps the predecessor its first
 attempt recorded. The draft topic becomes the request topic, and the target
 predecessor is injected when the draft omits one. After every existing gate
 (identity, holds, pending intents), dispatch calls `handoff_protocol.save`.
-`task_id` and `suggested_skills` are written to front matter only when
-supplied, so they are sealed with the content. An uninstalled suggestion only
+`suggested_skills` is written to front matter only when
+supplied, so it is sealed with the content. An uninstalled suggestion only
 warns. A failed publication returns `publication_failed` (stage `publication`).
 Off AgentsRoom, the result is `proceed`/`saved` with path and transition. On
 AgentsRoom (`transition.kind == agents_restart`), host observations must
@@ -1226,7 +1233,7 @@ returns:
     {"operation": "save", "request_id": "r-1",
      "host": {"restart_capable": true, "workers": [], "hold": false},
      "draft": {"topic": "parser", "description": "Parser work", "body": "...",
-               "suggested_skills": ["tdd"], "task_id": "T-1"}}
+               "suggested_skills": ["tdd"]}}
     -> {"outcome": "proceed", "code": "restart", "call": "agents_restart",
         "agent": "<terminal>", "prompt": "<... adopt h-<24 hex> ...>",
         "request_id": "agentsroom:<sha256>", "save_request_id": "r-1",

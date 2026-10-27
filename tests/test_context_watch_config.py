@@ -104,11 +104,31 @@ class AutoSettingsFromConfig(Case):
         with open(os.path.join(self.project, ".context-watch.json"), "w") as f:
             json.dump(data, f)
 
-    def test_project_file_enables_auto_mode_at_its_threshold(self):
+    def test_project_file_auto_is_ignored_and_reported_once(self):
+        # "auto" is user-scope only (Ben, 8ae43aa3): a repository cannot opt a
+        # session into automatic restarts, and saying so once beats silence.
         self.project_config({"auto": True, "at": 70000})
+        msg = self.pressure(75000)
+        self.assertIn("70,000-token handoff threshold", msg)
+        self.assertNotIn("Fully automatic", msg)
+        self.assertNotIn("agents_restart", msg)
+        self.assertIn("handoff-status:", msg)
+        self.assertIn("user-scope only", msg)
+        evt = dict(hook_event_name="PostToolUse", session_id="cfg-%d" % self.n, cwd=self.project,
+                   transcript_path=self.transcript)
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=self.env(),
+                           cwd=self.project, capture_output=True, text=True, timeout=30)
+        self.assertNotIn("user-scope only", p.stdout)  # once per session
+
+    def test_user_file_enables_auto_mode_at_the_project_threshold(self):
+        os.makedirs(os.path.join(self.tmp, ".context-watch"))
+        with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
+            json.dump({"auto": True}, f)
+        self.project_config({"at": 70000})
         early = self.pressure(65000)  # at 70k: advisory point 40k, startup 1k
         self.assertIn("Early warning", early)
         self.assertNotIn("Publish with", early)
+        self.assertNotIn("user-scope only", early)
         msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
         self.assertIn("70,000-token handoff threshold", msg)
         self.assertIn("Fully automatic mode is active", msg)
@@ -131,20 +151,24 @@ class AutoSettingsFromConfig(Case):
         self.assertNotIn("Fully automatic", msg)
         self.assertNotIn("agents_restart", msg)
 
-    def test_project_file_wins_over_user_file_and_keys_are_not_model_thresholds(self):
+    def test_project_file_cannot_override_user_auto_and_keys_are_not_model_thresholds(self):
         os.makedirs(os.path.join(self.tmp, ".context-watch"))
         with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
-            json.dump({"auto": True, "at": 60000, "auto_max": 3}, f)
-        self.project_config({"auto": False})
+            json.dump({"at": 60000, "auto_max": 3}, f)
+        self.project_config({"at": 62000})
         msg = self.pressure(65000)
-        self.assertIn("60,000-token handoff threshold", msg)
+        self.assertIn("62,000-token handoff threshold", msg)  # project still wins for "at"
         self.assertIn("[config:at]", msg)
         self.assertNotIn("Fully automatic", msg)
+        with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
+            json.dump({"auto": False}, f)
+        self.project_config({"auto": True, "at": 62000})
+        self.assertNotIn("Fully automatic", self.pressure(65000, {"AGENTSROOM_AGENT_ID": "agent-x"}))
         # "at"/"auto" are substrings of model ids; they must never match as thresholds.
         with open(self.transcript, "w") as f:
             f.write(json.dumps({"message": {"model": "auto-at-model", "usage": {"input_tokens": 1000}}}) + "\n")
         self.project_config({"auto_max": 5, "auto": True})
-        self.assertEqual(self.run_hook("PostToolUse"), "")
+        self.assertNotIn("[context-watch]", self.run_hook("PostToolUse"))
 
     def test_auto_max_from_config(self):
         sys.path.insert(0, HOOKS)

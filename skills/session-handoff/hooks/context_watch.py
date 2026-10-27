@@ -776,6 +776,7 @@ def _parse_map(raw):
 
 
 SETTING_KEYS = {"auto": bool, "at": int, "auto_max": int}  # not model thresholds
+USER_ONLY_KEYS = ("auto",)  # never read from a project's .context-watch.json
 WARNING_WINDOW_KEY = "warning_window_tokens"  # advisory lead (23079574), never a model threshold
 
 
@@ -802,8 +803,9 @@ def warning_window_candidates(cwd):
 def _load_config_files(cwd, settings=False):
     """Model thresholds (int keys), or with settings=True the auto-mode settings."""
     merged = {}
+    user_path = os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json")
     for path in (
-        os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json"),
+        user_path,
         os.path.join(cwd or os.getcwd(), ".context-watch.json"),
     ):  # user-global first so project-local overrides on key collision
         try:
@@ -816,6 +818,8 @@ def _load_config_files(cwd, settings=False):
                              'resume_pointer_policy', 'activate_suggested_skills'}:
                         continue
                     if k in SETTING_KEYS:
+                        if k in USER_ONLY_KEYS and path != user_path:
+                            continue
                         if settings and type(v) is SETTING_KEYS[k]:
                             merged[k] = v
                     elif not settings and isinstance(v, int) and not isinstance(v, bool):
@@ -823,6 +827,18 @@ def _load_config_files(cwd, settings=False):
         except Exception:
             continue
     return merged
+
+
+def project_sets_user_only_key(cwd):
+    """The user-only keys a project's .context-watch.json sets anyway (ignored)."""
+    try:
+        with open(os.path.join(cwd or os.getcwd(), ".context-watch.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    return [k for k in USER_ONLY_KEYS if k in {str(key).strip().lower() for key in data}]
 
 
 def _best_model_match(table, model):
@@ -1595,6 +1611,13 @@ def main():
             and claim_once(evt, ".telemetry")):
         _DIAG = (event_name, "handoff-status: Context telemetry unavailable (transcript %s); context-pressure "
                  "warnings are off for this session until it is readable. Continue the current task." % TAIL_STATUS)
+
+    if event_name in ("PostToolUse", "UserPromptSubmit") and not _DIAG:
+        ignored = project_sets_user_only_key(evt.get("cwd") or os.getcwd())
+        if ignored and claim_once(evt, ".user-only-config"):
+            _DIAG = (event_name, "handoff-status: %s in this project's .context-watch.json is ignored: "
+                     "it is user-scope only (set it in ~/.context-watch/thresholds.json or HANDOFF_AUTO). "
+                     "Continue the current task." % ", ".join('"%s"' % k for k in ignored))
 
     if event_name == "SessionStart":
         handle_session_start(evt, agent)

@@ -462,7 +462,10 @@ case-insensitive substring:
 The same config files also accept `"auto"` (bool, like `HANDOFF_AUTO`), `"at"`
 (int tokens, like `HANDOFF_AT`) and `"auto_max"` (int, like `HANDOFF_AUTO_MAX`).
 A non-empty environment variable wins, then the project file, then the user file.
-Values of the wrong JSON type are ignored, and these keys are never thresholds.
+`"auto"` is user-scope only: it is read from `~/.context-watch/thresholds.json`
+alone, and a project file that sets it gets a one-time `handoff-status:` note
+saying it is ignored. Values of the wrong JSON type are ignored, and these keys
+are never thresholds.
 
 `"warning_window_tokens"` (int, default `30000`, like `CONTEXT_WATCH_WARNING_WINDOW`)
 sets an early warning that lead before the resolved threshold (130k gives a

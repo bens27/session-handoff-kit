@@ -474,6 +474,19 @@ with patch('time.time', return_value=float(sys.argv[2])):
         result = json.loads(self.cli('prepare', p, '--session', 'holder', '--reuse-receipt', first['delivery_receipt']).stdout)
         self.assertIn('## Next steps', result['body'])
 
+    def test_project_auto_setting_never_enables_restart(self):
+        # "auto" is user-scope only: a repository's .context-watch.json cannot
+        # override the user's "auto": false into an AgentsRoom restart.
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        os.makedirs(os.path.join(self.tmp.name, '.context-watch'))
+        with open(os.path.join(self.tmp.name, '.context-watch', 'thresholds.json'), 'w') as f:
+            json.dump({'auto': False}, f)
+        with open(os.path.join(self.root, '.context-watch.json'), 'w') as f:
+            json.dump({'auto': True}, f)
+        saved = json.loads(self.save().stdout)
+        self.assertNotIn('agents_restart', json.dumps(saved['transition']))
+        self.assertFalse(saved['transition'].get('requires_preflight'))
+
     def test_restart_transition_requires_preflight_not_host_assertions(self):
         self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
         saved = json.loads(self.save().stdout)

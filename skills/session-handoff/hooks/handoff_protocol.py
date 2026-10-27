@@ -494,6 +494,14 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
         reasons.append('rapid-resume')
     if pressure and len(same) >= 2:
         reasons.append('repeated-topic')
+    # Invalid-timing gate: a stamp this far in the future (clock moved back, or a
+    # malformed value) drops out of `recent`, so the budget and cooldown below
+    # would fail open. Distrust the timing and pause instead (#87 finding 1).
+    skew = 60
+    if os.environ.get('AGENTSROOM_AGENT_ID') and (
+            any(-age(r['fm'].get('created')) > skew for r in own)
+            or (elapsed is not None and elapsed < -skew)):
+        reasons.append('invalid-timing')
     if os.environ.get('AGENTSROOM_AGENT_ID') and len(intents) >= 5:
         reasons.append('restart-budget')
     if os.environ.get('AGENTSROOM_AGENT_ID') and any(
@@ -503,7 +511,7 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
     # The hard restart limits are not affected.
     topics = project_setting(root, 'continuous_topics', list) or []
     continuous = bool(topic) and topic in [t for t in topics if isinstance(t, str)]
-    pause_reasons = [r for r in reasons if r in ('restart-budget', 'restart-cooldown')
+    pause_reasons = [r for r in reasons if r in ('restart-budget', 'restart-cooldown', 'invalid-timing')
                      or (progress is not None and not progress['present'] and not continuous)]
     return dict(reasons=reasons, pause_reasons=pause_reasons, continuous_topic=continuous, progress=progress, seconds_since_resume=round(elapsed) if elapsed is not None else None,
                 topic_saves_30m=len(same), restart_intents_1h=len(intents),
@@ -518,8 +526,9 @@ def _transition(root, guard=None, path=None):
         auto = _truthy(os.environ.get('HANDOFF_AUTO'))
     else:
         # Unset means on inside AgentsRoom (its restart is safe and rate-limited by
-        # the app), off elsewhere; an explicit "auto": false always wins.
-        setting = project_setting(root, 'auto', bool)
+        # the app), off elsewhere; an explicit "auto": false always wins. User scope
+        # only: a repository's .context-watch.json cannot opt a session in or out.
+        setting = project_setting(root, 'auto', bool, user_only=True)
         auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
     if auto and guard and guard['pause_reasons']:
         return dict(kind='paused', diagnostics=guard, action=(
@@ -645,9 +654,8 @@ def _front_matter_matches(root, document, record):
     submitted = document.get('base', '')
     if not (fm.get('base', '').startswith(submitted) if submitted else not fm.get('base')):
         return False
-    for key in ('task_id', 'suggested_skills'):
-        if fm.get(key, '') != (_listed(document.get(key)) or ''):
-            return False
+    if fm.get('suggested_skills', '') != (_listed(document.get('suggested_skills')) or ''):
+        return False
     if json.loads(fm.get('continuity', '[]')) != effective['continuity']:
         return False
     allowed = {_listed(document.get('verify', '')) or None}
@@ -926,11 +934,10 @@ def save(root, session, request_id, document):
         for key, value in (('ticket', document.get('ticket', '')), ('base', base), ('role', document.get('role', ''))):
             if value:
                 fields[key] = value
-        # Opaque correlation label and advisory suggestions: written only when supplied, sealed with the content.
-        for key in ('task_id', 'suggested_skills'):
-            value = _listed(document.get(key)) or ''
-            if value:
-                fields[key] = value
+        # Advisory suggestions: written only when supplied, sealed with the content.
+        suggested = _listed(document.get('suggested_skills')) or ''
+        if suggested:
+            fields['suggested_skills'] = suggested
         if document['continuity']:
             fields['continuity'] = json.dumps(document['continuity'], sort_keys=True)
         if predecessor:

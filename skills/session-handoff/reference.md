@@ -202,7 +202,8 @@ hour (the park, `/clear`, "Continue the handoff" case), that one is selected as
 `just_parked` and the older ones are listed as alternatives. Two fresh parks, or a
 newest checkpoint from another terminal, still ask.
 Trade-off: `<root>/.context-watch.json` is project scope, so a repository file can relax the pause for
-the topics it lists; `restart-budget` and `restart-cooldown` remain hard stops regardless.
+the topics it lists; `restart-budget`, `restart-cooldown` and `invalid-timing` (a checkpoint or resume
+stamp over 60 s in the future, which would hide intents from the budget) remain hard stops regardless.
 Five previous AgentsRoom restart intents within an hour or another session's
 intent within two minutes remain hard stops, even with progress. Intent counts
 are terminal-local and cannot observe restarts outside this kit. Durable resume
@@ -663,7 +664,7 @@ remains for manual recovery and audits.
 
 Write the session status first, then run:
 `python3 <hooks>/handoff_ledger.py dispatch --input -`, with
-`{"operation": "save", "draft": {topic, description, body, suggested_skills[, task_id, ...]},
+`{"operation": "save", "draft": {topic, description, body, suggested_skills[, ticket, ...]},
 "host": {"restart_capable": <bool>, "workers": [...], "hold": <bool>}}`; all three
 host observations are required.
 It publishes the checkpoint and, inside AgentsRoom, runs the restart preflight.

@@ -468,6 +468,30 @@ with patch('time.time', return_value=stamp):
         self.assertTrue(out['transition']['diagnostics']['progress']['audit_changed'])
         self.assertIn('restart-budget', out['transition']['diagnostics']['pause_reasons'])
 
+    def test_clock_moved_back_pauses_instead_of_hiding_restart_intents(self):
+        # Invalid-timing gate (#87 finding 1): a restart intent stamped in the
+        # future no longer counts as recent, so budget and cooldown would fail
+        # open. Untrustworthy timing pauses the automatic restart instead.
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        self.assertEqual(self.save()['transition']['kind'], 'agents_restart')
+        self.clock -= 7200
+        out = self.save(session='s2')
+        self.assertEqual(out['outcome'], 'saved')
+        self.assertEqual(out['transition']['kind'], 'paused', out['transition'])
+        self.assertIn('invalid-timing', out['transition']['diagnostics']['pause_reasons'])
+        self.clock += 7200 + 3601  # timing valid again, outside the hour: restart allowed
+        self.hook(140000, session='s3')
+        self.assertEqual(self.save(session='s3')['transition']['kind'], 'agents_restart')
+
+    def test_small_clock_skew_is_tolerated(self):
+        self.clock = float(int(time.time()))
+        self.hook(140000)
+        self.save()
+        self.clock -= 30
+        out = self.save(session='s2')
+        self.assertNotIn('invalid-timing', json.dumps(out['transition']))
+
     def test_body_only_changes_do_not_establish_progress(self):
         self.hook(140000)
         self.save(body=BODY + 'first\n')
