@@ -27,8 +27,9 @@ OPERATIONS = ('save', 'pressure', 'retrieve', 'resume', 'autoresume')
 REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authorization', 'override', 'host',
                           'request_id', 'reuse', 'expect', 'topic', 'draft'))
 DRAFT_REQUIRED = ('topic', 'description', 'body', 'suggested_skills')
+# ticket/base/role are accepted now for #95's checkpoint-header fields; save ignores them until then.
 DRAFT_OPTIONAL = frozenset(('task_id', 'predecessor', 'references', 'optional_references', 'continuity', 'skills',
-                            'verify', 'verify_baseline', 'reason'))
+                            'verify', 'verify_baseline', 'reason', 'ticket', 'base', 'role'))
 HOST_WINDOW = intents.HOST_WINDOW
 
 HOST_KEYS = frozenset(('restart_capable', 'workers', 'hold', 'restart_request_id'))
@@ -251,12 +252,28 @@ def run_restart(root, path, workers, capable, hold):
                     action='Do not call agents_restart; restart state is unknown. Reconcile before any retry.')
 
 
+def draft_request_id(root, session, draft):
+    """Same session and same draft give the same ID before and after it lands: a retry never publishes twice."""
+    key = '\0'.join((os.path.realpath(root), session, json.dumps(draft, sort_keys=True)))
+    return 'draft-' + hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+def published_under(root, session, request_id):
+    """Front matter of the checkpoint this save request already published, or None."""
+    identity = hashlib.sha256((os.path.realpath(root) + '\0' + session + '\0' + request_id).encode()).hexdigest()
+    return next((r['fm'] for r in ledger._records(root, []) if r['fm'].get('checkpoint_id') == identity), None)
+
+
 def draft_save(root, request, session, target, common):
     """Publish the draft, then on the AgentsRoom profile run the restart preflight once."""
     draft = dict(request['draft'])
-    if not draft.get('predecessor') and target.get('predecessor'):
-        draft['predecessor'] = target['predecessor']
-    request_id = request.get('request_id') or save_request_id(root, session, target.get('topic'))
+    request_id = request.get('request_id') or draft_request_id(root, session, draft)
+    if not draft.get('predecessor'):
+        # A retry keeps the predecessor its first attempt recorded, so the content hash still matches.
+        prior = published_under(root, session, request_id)
+        predecessor = prior.get('predecessor') if prior is not None else target.get('predecessor')
+        if predecessor:
+            draft['predecessor'] = predecessor
     warnings = list(common.pop('warnings', []))
     catalog = protocol.installed_catalog()['skills']
     warnings += ['Suggested skill %r is not installed; it stays advisory.' % n
@@ -278,12 +295,12 @@ def draft_save(root, request, session, target, common):
             kind='continue', command='', text=saved['transition'].get('action', saved.get('action', ''))), **extra)
     host = request.get('host') or {}
     workers = host.get('workers')
-    if not isinstance(host.get('restart_capable'), bool) or not isinstance(workers, list) or not isinstance(host.get('hold', False), bool):
+    if not isinstance(host.get('restart_capable'), bool) or not isinstance(workers, list) or not isinstance(host.get('hold'), bool):
         return blocked(request, 'restart_blocked', 'The checkpoint is published, but restart needs current host '
                        'observations: restart_capable (bool), the complete workers list ([] when observed empty) and '
-                       'hold. Do not call agents_restart; continue manually in a fresh session.',
+                       'hold (bool). Do not call agents_restart; continue manually in a fresh session.',
                        stage='host_observations', **extra)
-    out = run_restart(root, saved['path'], workers, host['restart_capable'], host.get('hold', False))
+    out = run_restart(root, saved['path'], workers, host['restart_capable'], host['hold'])
     warnings += out.get('warnings') or []
     if out.get('outcome') != 'ready' or out.get('call') != 'agents_restart':
         extra['request_id'] = out.get('request_id', request_id)

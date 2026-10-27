@@ -664,7 +664,8 @@ remains for manual recovery and audits.
 Write the session status first, then run:
 `python3 <hooks>/handoff_ledger.py dispatch --input -`, with
 `{"operation": "save", "draft": {topic, description, body, suggested_skills[, task_id, ...]},
-"host": {"restart_capable": <bool>, "workers": [...], "hold": <bool>}}`.
+"host": {"restart_capable": <bool>, "workers": [...], "hold": <bool>}}`; all three
+host observations are required.
 It publishes the checkpoint and, inside AgentsRoom, runs the restart preflight.
 Only `outcome: proceed` with `code: restart` permits a host call. In that case,
 call `agents_restart` for `agent` with the exact `prompt` as the final tool

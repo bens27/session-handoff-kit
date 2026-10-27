@@ -1678,13 +1678,31 @@ class OneCallSaveTests(Base):
 
     def test_unknown_host_observations_block_after_publication(self):
         for i, host in enumerate(({}, {'restart_capable': True}, {'workers': []},
-                                  {'restart_capable': 'yes', 'workers': []})):
+                                  {'restart_capable': 'yes', 'workers': []},
+                                  {'restart_capable': True, 'workers': []})):
             r = self.ar_save(host=host, topic='topic-%d' % i)
             self.assertEqual((r['outcome'], r['code']), ('blocked', 'restart_blocked'), (host, r))
             self.assertEqual(r['stage'], 'host_observations', r)
             self.assertNotIn('call', r)
             self.assertTrue(os.path.isfile(r['path']), r)
         self.assertEqual(self.intents(), [])
+
+    def test_retry_without_request_id_returns_the_same_publication(self):
+        """Review r87-2: a draft save retried after restart_blocked must not publish a second checkpoint."""
+        blocked = self.ar_save(host={})
+        self.assertEqual(blocked['code'], 'restart_blocked', blocked)
+        again = self.ar_save(host={})
+        self.assertEqual((again['code'], again['path']), ('restart_blocked', blocked['path']), again)
+        ok = self.ar_save()
+        self.assertEqual((ok['code'], ok['path']), ('restart', blocked['path']), ok)
+        self.assertEqual(len(list((Path(self.root) / '.handoffs').glob('*.md'))), 1)
+
+    def test_changed_draft_without_request_id_continues_the_lineage(self):
+        first = self.ar_save(host={})
+        second = self.ar_save(host={}, body=BODY + 'More.\n')
+        self.assertEqual(second['code'], 'restart_blocked', second)
+        self.assertNotEqual(second['path'], first['path'])
+        self.assertIn('\npredecessor: %s\n' % first['path'], Path(second['path']).read_text())
 
     def test_invalid_draft_is_rejected_before_publication(self):
         self.record_hook_session('sess-a', env=self.AR)

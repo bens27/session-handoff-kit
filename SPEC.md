@@ -1204,8 +1204,12 @@ may invoke the host from the same script, preserving the same state contract.
 only with `operation: "save"`; a draft-less save keeps its routing-only result.
 Required draft keys are `topic`, `description`, `body` and `suggested_skills`;
 optional ones are `task_id`, `predecessor`, `references`, `optional_references`,
-`continuity`, `skills`, `verify`, `verify_baseline` and `reason`. Any other key
-is `invalid_request`. The draft topic becomes the request topic, and the target
+`continuity`, `skills`, `verify`, `verify_baseline`, `reason`, and `ticket`,
+`base` and `role` (reserved for #95; ignored until then). Any other key is
+`invalid_request`. Without `request_id`, the ID is derived from the session and
+the draft fingerprint. An unchanged retry therefore returns the same
+publication, even after a restart block, and keeps the predecessor its first
+attempt recorded. The draft topic becomes the request topic, and the target
 predecessor is injected when the draft omits one. After every existing gate
 (identity, holds, pending intents), dispatch calls `handoff_protocol.save`.
 `task_id` and `suggested_skills` are written to front matter only when
@@ -1213,7 +1217,7 @@ supplied, so they are sealed with the content. An uninstalled suggestion only
 warns. A failed publication returns `publication_failed` (stage `publication`).
 Off AgentsRoom, the result is `proceed`/`saved` with path and transition. On
 AgentsRoom (`transition.kind == agents_restart`), host observations must
-include a boolean `restart_capable` and a `workers` list. Otherwise the
+include a boolean `restart_capable`, a `workers` list and a boolean `hold`. Otherwise the
 checkpoint stays published and the result is `restart_blocked` with
 `stage: host_observations`. Next, `restart_preflight.py restart --path <saved>`
 (run out of process; dispatch and preflight never import each other) writes the pointer and intent, then `dispatch_started_at`, before the result
