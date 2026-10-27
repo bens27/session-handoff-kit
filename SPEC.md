@@ -547,6 +547,22 @@ The published successor is the committed replacement record, so a crash after
 publication cannot resurrect its predecessor. All state changes check owner
 under a sidecar lock. Omitted owners do not bypass another session's claim.
 
+`review PATH` reads a checkpoint review observation; `review PATH --input JSON`
+records one against the exact fingerprint observed during review. The stdlib
+`handoff_review` reader resolves explicit native review observations first,
+exact `review:accept|reject` tags second, and `none` otherwise. Isolated ticket
+status or reviewer/submitter IDs never prove a review; a native transition must
+be observed, with newly appended reviewer feedback required for rejection.
+Contradictory fallback tags yield `none`. Evidence lives in a versioned `.review`
+sidecar, bound to checkpoint ID and content fingerprint; no header changes or
+ticket writes occur. Changed content, malformed evidence and absent records
+project `none`. Preparation/resume expose `reviewed: accept|reject|none` plus
+`review` provenance; field projection retains both and replay refreshes them.
+This is historical evidence, not authorization or a live staleness check. No MCP
+client is included; #99 can call the pure ticket-snapshot/tag adapter, including
+the offline tag-only path. See [Review verdicts](docs/review-verdicts.md) for the
+native transition contract, input schema and persistence limits.
+
 `prepare TOPIC-OR-PATH --session ID` is read-only retrieval. With `--execute`
 it claims a validated, complete package and records a recoverable preparation
 receipt. Claims expire after two hours or can be released explicitly. Checkpoint

@@ -585,6 +585,13 @@ transfer. Multiple candidates require a choice (including none), except fully
 automatic mode, which selects the newest. Execution skills load only during
 execution preparation, not to discover that there is nothing to resume.
 
+Checkpoint preparation and resume also report `reviewed: accept|reject|none`.
+Use `handoff_ledger.py review PATH` to inspect recorded evidence, or add
+`--input verdict.json` to record a fingerprint-bound observation. Native review
+observations take precedence over exact `review:accept|reject` fallback labels;
+ticket status alone is not a verdict. See [review verdicts](docs/review-verdicts.md)
+for the offline reader, input format and #99 integration boundary.
+
 The preferred workflow is:
 
 ```sh

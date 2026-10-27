@@ -18,6 +18,7 @@ from handoff_contract import (command_template, continuation_command, ledger_com
 from handoff_contract import METADATA_FORMATS, metadata_problem
 import handoff_identity
 import handoff_ledger as ledger
+from handoff_review import read_review
 import handoff_workspace as workspace
 from handoff_record import Record
 from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
@@ -1325,6 +1326,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                       trusted=own,
                       workspace=ledger.claim_report(path) if execute else [],
                       optional_references=ledger._split_csv(fm.get('optional_references', ''))[:8])
+        result['review'] = read_review(path)
+        result['reviewed'] = result['review']['reviewed']
         if fm.get('continuity'):
             result['continuity'] = continuity_items(json.loads(fm['continuity']))
         if fm.get('predecessor'):
@@ -1627,6 +1630,8 @@ def replay_transfer(root, session, target):
                             action='A replay dependency changed: ' + spec + '; inspect history and reconcile before continuing.')
         # Refresh workspace findings; replay never runs verification a second time.
         package['workspace'] = ledger.claim_report(path)
+        package['review'] = read_review(path)
+        package['reviewed'] = package['review']['reviewed']
         return package
 
 
@@ -1705,7 +1710,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                   next_step_section='Next steps', verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
                   metrics=prepared['metrics'], action='Continue with ## Next steps in the delivered body.')
-    for key in ('continuity', 'predecessor'):
+    for key in ('continuity', 'predecessor', 'reviewed', 'review'):
         if key in prepared:
             result[key] = prepared[key]
     if 'body' in prepared:
@@ -2003,6 +2008,9 @@ def cli(argv):
     sub = p.add_subparsers(dest='command', required=True)
     session_p = sub.add_parser('session', description='Read current identity, transcript path and pressure state without modifying hook state or scanning transcripts.')
     session_p.add_argument('--root', default='.')
+    review_p = sub.add_parser('review', description='Read a checkpoint review snapshot, or record explicit evidence with --input. Does not contact AgentsRoom.')
+    review_p.add_argument('path')
+    review_p.add_argument('--input', help='JSON observation file or - for stdin; requires the fingerprint observed during review')
     report_p = sub.add_parser('report', description='Summarize live resume metrics, excluding tests and separating legacy origin.')
     report_p.add_argument('--log', default=os.path.expanduser('~/.context-watch/resumes.jsonl'))
     lookup_p = sub.add_parser('lookup')
@@ -2074,6 +2082,19 @@ def cli(argv):
     for parser in (session_p, lookup_p, save_p, prepare_p, ack_p, verify_p, resume_p):
         parser.add_argument('--fields', help='Comma-separated optional top-level keys; diagnostics and successful delivery context are always included')
     a = p.parse_args(argv)
+    if a.command == 'review':
+        from handoff_review import record_review
+        try:
+            if a.input is None:
+                result = dict(outcome='review-read', **read_review(a.path))
+            else:
+                observation = decode_state_json(read_cli_input(a.input))
+                result = dict(outcome='review-recorded', **record_review(a.path, **observation))
+        except (OSError, ValueError, TypeError, ledger.ConflictError) as exc:
+            emit_output(dict(outcome='invalid', action=str(exc)[:500]))
+            return 1
+        emit_output(result, profile='protocol')
+        return 0
     if a.command == 'session':
         result = session_info(a.root)
         if a.fields:

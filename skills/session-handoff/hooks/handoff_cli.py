@@ -14,7 +14,7 @@ from handoff_contract import emit_output
 
 PROTOCOL_COMMANDS = frozenset(('lookup', 'save', 'prepare', 'verify', 'acknowledge',
                               'history', 'report', 'resume', 'wait', 'session',
-                              'repair', 'recover-transfer'))
+                              'repair', 'recover-transfer', 'review'))
 JSON_OPTIONS = ('json', 'pretty')
 OWNER_COMMANDS = ('resume', 'supersede', 'abandon', 'claim', 'release')
 LEGACY_OPTIONS = {

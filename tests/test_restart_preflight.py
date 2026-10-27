@@ -1035,6 +1035,9 @@ class AdoptTests(unittest.TestCase):
         self.pointer('new')
         fixture = json.loads((Path(__file__).parent / 'fixtures/contract/adopt.json').read_text())
         expected_keys = list(json.loads(fixture['stdout']))
+        # Preserve the historical order fixture; #97 adds review evidence to delivery.
+        index = expected_keys.index('restart')
+        expected_keys[index:index] = ['reviewed', 'review']
         for attempt in ('first delivery', 'same-successor replay'):
             with self.subTest(attempt=attempt):
                 code, raw, out = self.adopt()
@@ -1043,6 +1046,8 @@ class AdoptTests(unittest.TestCase):
                                  ['outcome', 'action', 'next_step', 'path', 'next_step_section'])
                 self.assertEqual(list(out)[-3:], ['references', 'skills', 'body'])
                 self.assertEqual(list(out), expected_keys)
+                self.assertEqual(out['reviewed'], 'none')
+                self.assertEqual(out['review']['source'], 'none')
                 self.assertEqual(out['next_step'].strip(), 'Test it')
                 self.assertIn('UNIQUE-BODY-MARKER', out['body'])
                 self.assertEqual(raw.count('UNIQUE-BODY-MARKER'), 1)
