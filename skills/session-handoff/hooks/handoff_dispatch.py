@@ -27,7 +27,7 @@ OPERATIONS = ('save', 'pressure', 'retrieve', 'resume', 'autoresume')
 REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authorization', 'override', 'host',
                           'request_id', 'reuse', 'expect', 'topic', 'draft'))
 DRAFT_REQUIRED = ('topic', 'description', 'body', 'suggested_skills')
-# ticket/base/role are accepted now for #95's checkpoint-header fields; save ignores them until then.
+# ticket/base/role are #95's checkpoint-header fields: save checks their format and writes them.
 DRAFT_OPTIONAL = frozenset(('predecessor', 'references', 'optional_references', 'continuity', 'skills',
                             'verify', 'verify_baseline', 'reason', 'ticket', 'base', 'role'))
 HOST_WINDOW = intents.HOST_WINDOW

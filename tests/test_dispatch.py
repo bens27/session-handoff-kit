@@ -1648,6 +1648,17 @@ class OneCallSaveTests(Base):
     def intents(self):
         return sorted((Path(self.root) / '.handoffs' / 'restart').glob('*.json'))
 
+    def test_draft_ticket_and_role_reach_the_checkpoint_header(self):
+        # #95 landed the header fields; the draft passes them straight to save.
+        r = self.ar_save(ticket='8ae43aa3', role='backend')
+        self.assertEqual((r['outcome'], r['call']), ('proceed', 'agents_restart'), r)
+        text = Path(r['path']).read_text()
+        self.assertIn('\nticket: 8ae43aa3\n', text)
+        self.assertIn('\nrole: backend\n', text)
+        bad = self.ar_save(session='sess-b', ticket='T-1')
+        self.assertNotEqual(bad['outcome'], 'proceed', bad)
+        self.assertNotIn('call', bad)
+
     def test_agentsroom_draft_save_returns_the_one_restart_call(self):
         (self.home / 'skills' / 'tdd').mkdir(parents=True)
         (self.home / 'skills' / 'tdd' / 'SKILL.md').write_text('---\nname: tdd\n---\n')

@@ -1212,7 +1212,7 @@ only with `operation: "save"`; a draft-less save keeps its routing-only result.
 Required draft keys are `topic`, `description`, `body` and `suggested_skills`;
 optional ones are `predecessor`, `references`, `optional_references`,
 `continuity`, `skills`, `verify`, `verify_baseline`, `reason`, and `ticket`,
-`base` and `role` (reserved for #95; ignored until then). Any other key is
+`base` and `role` (the #95 header fields, format-checked and written by save). Any other key is
 `invalid_request`. Without `request_id`, the ID is derived from the session and
 the draft fingerprint. An unchanged retry therefore returns the same
 publication, even after a restart block, and keeps the predecessor its first
