@@ -930,6 +930,9 @@ def bounded_opening_note(evt):
         return ''
 
 
+STARTUP_TIMEOUT = 8  # below the 10 s SessionStart hook timeout (install.py, hooks.json)
+
+
 def startup_adoption(cwd, sid):
     """v3-3: adopt one eligible restart pointer, isolated so a broken store cannot block startup.
 
@@ -942,12 +945,37 @@ def startup_adoption(cwd, sid):
         if not os.path.isfile(script) or not os.path.isdir(os.path.join(root, '.handoffs', 'pointers')):
             return ''  # Fast no-op: no pointer index, or no installed service to read it.
         result = subprocess.run([sys.executable, script, 'startup', '--cwd', cwd, '--session', sid],
-                                capture_output=True, text=True, encoding='utf-8', timeout=20,
+                                capture_output=True, text=True, encoding='utf-8', timeout=STARTUP_TIMEOUT,
                                 env=dict(os.environ, PYTHONIOENCODING='utf-8'))
     except Exception:
         return ''
     out = result.stdout.strip()
-    return 'startup-adoption: ' + out if result.returncode == 0 and out else ''
+    if result.returncode != 0 or not out:
+        return ''
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return ''
+    if isinstance(data, dict) and data.get('quiet'):
+        log_event({'ts': time.time(), 'event': 'startup-adoption', 'outcome': data.get('outcome'),
+                   'session': sid})
+        return ''
+    return 'startup-adoption: ' + out
+
+
+def mark_startup_delivered(text):
+    """After the delivery is flushed: record it so a later exact prompt does not repeat the body."""
+    try:
+        data = json.loads(text[len('startup-adoption: '):])
+        info = data.get('startup') or {}
+        if data.get('outcome') != 'resumed' or not info.get('request_id'):
+            return
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')
+        subprocess.run([sys.executable, script, 'startup', '--root', info['root'],
+                        '--request-id', info['request_id'], '--session', info['session']],
+                       capture_output=True, timeout=1)
+    except Exception:
+        pass  # No marker: a later exact prompt may deliver the body again, never lose it.
 
 
 def reserve_handoff_status(evt):
@@ -991,6 +1019,8 @@ def handle_session_start(evt, agent):
     adopted = startup_adoption(cwd, session_key(evt)) if _MISSING_INSTALL is None else ''
     if adopted:
         emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': adopted}})
+        sys.stdout.flush()
+        mark_startup_delivered(adopted)
         sys.exit(0)
     note = bounded_opening_note(evt)
     if note:

@@ -1295,23 +1295,26 @@ observed identity and transport delivery remain separate evidence.
 
 **Slice 3 implemented (c25292d2).** `context_watch.handle_session_start`
 (startup/clear only) records the session note, then runs
-`restart_preflight.py startup --cwd --session` in a 20 s subprocess when
-`<project_root(cwd)>/.handoffs/pointers/` exists; a lone hook skips it. Without
-user-scope continuation authorization startup returns at once and stays
-silent: the manual `agents_restart` prompt (`adopt h-...`) is the only path.
+`restart_preflight.py startup --cwd --session` in an 8 s subprocess (below the
+10 s hook timeout) when `<project_root(cwd)>/.handoffs/pointers/` exists; a lone
+hook skips it. Without user-scope continuation authorization startup returns at
+once, silent to the model and logged as a `startup-adoption`/`unauthorized`
+event: the manual `agents_restart` prompt (`adopt h-...`) is the only path.
 Candidates are `pointers.scan` results whose terminal is the environment
-terminal, whose predecessor session differs and whose intent is pending.
-`HANDOFF_RESTART_REQUEST_ID` is the exact host request (it selects before
-policy; an absent or ineligible one reports `requested-intent-not-eligible` and
-never falls back). Non-quiet diagnostics (all except `incomplete-index` and
+terminal, whose predecessor session differs and whose intent is pending and not
+stale-marked (#87 host window). `HANDOFF_RESTART_REQUEST_ID` is the exact host
+request: it selects before policy, an unsettled absent or ineligible one reports
+`requested-intent-not-eligible` and never falls back, and a settled one is
+ignored. Non-quiet diagnostics (all except `incomplete-index` and
 `continuation-not-authorized`) block selection as `invalid-relevant-pointer`.
 `ask`/`manual` output `choose` with each exact adopt command; `latest-owned`
 picks the largest (created_at, pointer path); a malformed value reports
-`invalid-resume-pointer-policy` and selects nothing. Before adopting, startup
-creates an `O_EXCL` marker `<intent>.startup-<sha256(request_id\0session)[:24]>`
-beside the intent and removes it if adopt does not resume. A later exact adopt
-by that successor returns `already-delivered` without the body; reruns without
-the marker keep the existing replay. A scratch cwd under a temp base finds no
+`invalid-resume-pointer-policy` and selects nothing. Only after the hook has
+emitted and flushed a resumed delivery does it write the `O_EXCL` marker
+`<intent>.startup-<sha256(request_id\0session)[:24]>` beside the intent. A later
+exact adopt by that successor returns `already-delivered` without the body;
+without the marker (hook killed, output lost) the existing replay delivers the
+body again, so a failure duplicates rather than loses it. A scratch cwd under a temp base finds no
 index and creates nothing (ce8a995f). The save side keeps one pending intent per
 terminal, so several same-terminal candidates come only from older ledgers or
 races; tests stage that case.

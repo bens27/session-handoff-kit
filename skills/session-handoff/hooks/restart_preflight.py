@@ -688,6 +688,32 @@ STARTUP_PREFIX = 'startup-adoption: '
 QUIET_REASONS = ('incomplete-index', 'continuation-not-authorized')
 
 
+HOST_WINDOW = getattr(intents, 'HOST_WINDOW', 1800)
+
+
+def _stale_marked(record, now=None):
+    """Pending, dispatch marked over HOST_WINDOW ago, no host evidence: never auto-adopted.
+
+    Same rule as intents.stale_marked (#87); this fallback serves until that lands."""
+    if hasattr(intents, 'stale_marked'):
+        return intents.stale_marked(record, now)
+    started = record.get('dispatch_started_at')
+    if record.get('state') != 'pending' or record.get('host_confirmed') is True:
+        return False
+    if not isinstance(started, (int, float)) or isinstance(started, bool):
+        return False
+    return (time.time() if now is None else now) - started > HOST_WINDOW
+
+
+def mark_startup_delivered(root, request_id, session):
+    """Called by the hook only after the delivery was emitted and flushed."""
+    try:
+        os.close(os.open(startup_delivery_path(root, request_id, session),
+                         os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        pass
+
+
 def startup_delivery_path(root, request_id, session):
     """Once-only marker beside the intent: SessionStart delivered this body to this session."""
     digest = hashlib.sha256(('%s\0%s' % (request_id, session)).encode()).hexdigest()[:24]
@@ -723,16 +749,32 @@ def startup(cwd, session):
     otherwise a dict for the hook to deliver as context. Identity is the
     hook-recorded session and the environment terminal, never a caller claim."""
     terminal = protocol.terminal_id()
-    if not session or not terminal or not pointers.user_continuation_authorized():
-        return None  # Not authorized: the manual restart prompt stays the only path.
+    if not session or not terminal:
+        return None
+    if not pointers.user_continuation_authorized():
+        # Not authorized: the manual restart prompt stays the only path. Silent to
+        # the model; the hook logs it for stats.
+        return dict(outcome='unauthorized', quiet=True)
     root = os.path.realpath(handoff_identity.project_root(cwd))
     if not os.path.isdir(pointers.pointer_dir(root)):
         return None
     found = pointers.scan(root, session)
+    def fresh(candidate):
+        try:
+            return not _stale_marked(status(root, candidate['request_id']) or {})
+        except (ValueError, handoff_identity.UntrustedStateDir):
+            return False
     owned = [c for c in found['candidates']
-             if c['terminal'] == terminal and c['session'] != session and c['mode'] == 'adopt']
+             if c['terminal'] == terminal and c['session'] != session and c['mode'] == 'adopt' and fresh(c)]
     diagnostics = [d for d in found['diagnostics'] if d.get('reason') not in QUIET_REASONS]
     requested = os.environ.get('HANDOFF_RESTART_REQUEST_ID', '').strip()
+    if requested:
+        try:
+            settled = (status(root, requested) or {}).get('state') in ('retrieved', 'refused')
+        except (ValueError, handoff_identity.UntrustedStateDir):
+            settled = False
+        if settled:
+            requested = ''  # A settled request is history, not a selection.
 
     def note(outcome, **extra):
         return dict(outcome=outcome, root=root, session=session, terminal=terminal, **extra)
@@ -769,20 +811,13 @@ def startup(cwd, session):
                                'Several restart checkpoints are pending (manual policy). Report them; '
                                'run one command only on the user\'s instruction.')
         chosen = max(owned, key=lambda c: (c['created_at'], c['pointer']))
-    marker = startup_delivery_path(root, chosen['request_id'], session)
-    try:
-        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-    except FileExistsError:
+    if os.path.exists(startup_delivery_path(root, chosen['request_id'], session)):
         return None  # Already delivered to this session: never twice.
-    except OSError as exc:
-        return note('blocked', reason='startup-marker-unwritable', detail=str(exc)[:200])
+    # No marker yet: the hook writes it only after emitting this result, so a
+    # killed hook or lost output leaves the exact prompt able to deliver the body.
     result = adopt(root, chosen['request_id'], _deliver_body=True)
-    if result.get('outcome') != 'resumed':
-        try:
-            os.unlink(marker)  # Nothing delivered: a later exact prompt may still adopt.
-        except OSError:
-            pass
-    result['startup'] = dict(policy=policy, policy_source=source, request_id=chosen['request_id'])
+    result['startup'] = dict(policy=policy, policy_source=source, request_id=chosen['request_id'],
+                             root=root, session=session)
     return result
 
 
@@ -922,6 +957,9 @@ def cli():
     args = parser.parse_args()
     try:
         if args.operation == 'startup':
+            if args.request_id:
+                mark_startup_delivered(os.path.realpath(args.root), args.request_id, args.session or '')
+                return 0
             result = startup(args.cwd or os.getcwd(), args.session or '')
             if result is not None:
                 emit_output(project_output(result) if result.get('outcome') == 'resumed' else result)

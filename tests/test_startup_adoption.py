@@ -141,6 +141,60 @@ class StartupAdoptionTests(unittest.TestCase):
         self.assertEqual(raw.count('MANUAL-MARKER'), 1)
         self.assertEqual(self.state('req-1'), ('retrieved', 'new'))
 
+    def startup_cli(self, session='new'):
+        run = subprocess.run([sys.executable, str(HOOKS / 'restart_preflight.py'), 'startup',
+                              '--cwd', self.root, '--session', session],
+                             env=self.env, cwd=self.root, text=True, capture_output=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run.stdout
+
+    def test_lost_startup_output_never_loses_the_body(self):
+        # Review finding 1: the hook may be killed or its output lost after adopt
+        # recorded retrieval. Without the hook's post-flush marker the exact
+        # prompt must still deliver the body, never answer already-delivered.
+        self.park('LOST-MARKER', 'req-1')
+        self.start()  # unauthorized: records the successor identity only
+        self.authorize()
+        self.assertEqual(self.startup_cli().count('LOST-MARKER'), 1)
+        self.assertEqual(self.state('req-1'), ('retrieved', 'new'))
+        raw, again = self.adopt_prompt('req-1')
+        self.assertEqual(again['outcome'], 'resumed', again)
+        self.assertEqual(raw.count('LOST-MARKER'), 1)
+
+    def test_startup_subprocess_timeout_is_below_the_hook_timeout(self):
+        import context_watch
+        self.assertLess(context_watch.STARTUP_TIMEOUT + 1, 10)
+
+    def test_stale_marked_intent_is_never_auto_adopted(self):
+        # Review finding 2 (#87 rule): dispatch marked past the host window, no host evidence.
+        self.park('STALE-MARKER', 'req-1')
+        self.start()
+        self.authorize()
+        later = time.time() + restart.HOST_WINDOW + 60
+        with patch('time.time', return_value=later):
+            self.assertIsNone(restart.startup(self.root, 'new'))
+        self.assertEqual(self.state('req-1'), ('pending', None))
+
+    def test_settled_exact_request_is_ignored(self):
+        # Review finding 3: a settled HANDOFF_RESTART_REQUEST_ID is history, not a selection.
+        self.park('OLD-MARKER', 'req-1')
+        restart.record_refusal(self.root, 'req-1', 'user-declined')
+        self.park('NEW-MARKER', 'req-2', topic='beta')
+        self.authorize()
+        context = self.start(HANDOFF_RESTART_REQUEST_ID='req-1')
+        self.assertNotIn('requested-intent-not-eligible', context)
+        self.assertEqual(context.count('NEW-MARKER'), 1, context)
+        self.assertEqual(self.state('req-2'), ('retrieved', 'new'))
+
+    def test_unauthorized_startup_is_silent_but_logged(self):
+        # Review finding 4: silent to the model, visible in stats.
+        self.park('QUIET-MARKER', 'req-1')
+        log = Path(self.root) / 'events.jsonl'
+        self.assertEqual(self.start(CONTEXT_WATCH_LOG=str(log)), '')
+        events = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+        self.assertIn(dict(event='startup-adoption', outcome='unauthorized'),
+                      [dict(event=e.get('event'), outcome=e.get('outcome')) for e in events])
+
     # -- identity -----------------------------------------------------------
     def test_foreign_terminal_pointer_is_never_a_candidate(self):
         self.park('FOREIGN-MARKER', 'req-1', terminal='elsewhere')
