@@ -2,6 +2,7 @@
 """Register (or remove) the session-handoff hooks for Claude Code and Codex.
 
 Usage: python3 install.py [claude|codex ...] [--uninstall]
+       python3 install.py git-hook --project PATH [--uninstall]
        python3 install.py plugin-hooks > plugins/session-handoff/hooks/hooks.json
        python3 install.py runtime --root PATH create VERSION
        python3 install.py runtime --root PATH activate RELEASE claude|codex
@@ -32,7 +33,7 @@ import time
 RUNTIME_FORMAT = 1
 REQUIRED_RUNTIME = {"SKILL.md", "branches/save.md", "branches/resume.md", "continuation.md", "handoff-template.md", "reference.md",
                     "install.py", "hooks/context_watch.py", "hooks/handoff_ledger.py",
-                    "hooks/handoff_protocol.py", "hooks/handoff_contract.py", "hooks/handoff_cli.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_record.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
+                    "hooks/handoff_protocol.py", "hooks/handoff_contract.py", "hooks/handoff_cli.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_record.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "hooks/commit_ticket.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
 # Explicit product inputs, independent of Git metadata so extracted packages
 # behave exactly like checkouts. Local config, secrets and editor files are not
 # distributable inputs. Update this declaration when adding a product file.
@@ -493,7 +494,53 @@ def codex(uninstall):
     so the handoff fires before auto-compaction.""" % home)
 
 
+def git_hook_main(argv):
+    """Install only in the explicitly selected repository's default hooks dir."""
+    parser = argparse.ArgumentParser(description="Opt-in per-project Ticket commit-msg hook")
+    parser.add_argument('--project', required=True, type=Path)
+    parser.add_argument('--uninstall', action='store_true')
+    args = parser.parse_args(argv)
+
+    def git(*words):
+        result = subprocess.run(['git', '-C', str(args.project), *words],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode not in (0, 1):
+            raise ValueError(result.stderr.strip())
+        return result
+
+    custom = git('config', '--get', 'core.hooksPath')
+    if custom.returncode == 0:
+        raise ValueError('core.hooksPath is configured; compose the hook manually instead')
+    common = git('rev-parse', '--path-format=absolute', '--git-common-dir')
+    if common.returncode != 0 or not common.stdout.strip():
+        raise ValueError('project must be a Git repository')
+    directory = Path(common.stdout.strip()) / 'hooks'
+    hook = directory / 'commit-msg'
+    script = str(Path(__file__).resolve().parent / 'hooks/commit_ticket.py')
+    quoted = shlex.quote(script)
+    content = ('#!/bin/sh\n# session-handoff Ticket hook\n'
+               'if command -v python3 >/dev/null 2>&1 && [ -f ' + quoted + ' ]; then\n'
+               '    exec python3 ' + quoted + ' "$@"\nfi\nexit 0\n').encode()
+    if directory.is_symlink() or hook.is_symlink():
+        raise ValueError('refusing a symlinked hooks directory or commit-msg hook')
+    if hook.exists() and hook.read_bytes() != content:
+        raise ValueError('existing commit-msg hook left intact; compose manually instead')
+    if args.uninstall:
+        if hook.exists():
+            hook.unlink()
+    else:
+        directory.mkdir(parents=True, exist_ok=True)
+        atomic_bytes(hook, content, mode=0o755)
+    print(('Removed' if args.uninstall else 'Registered') + ' Ticket hook: ' + str(hook))
+
+
 def main(argv):
+    if argv[:1] == ["git-hook"]:
+        try:
+            git_hook_main(argv[1:])
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            sys.exit("Git hook operation failed: " + str(exc))
+        return
     if argv == ["plugin-hooks"]:
         print(json.dumps(plugin_hooks(), indent=2))
         return

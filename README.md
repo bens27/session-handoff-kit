@@ -86,6 +86,46 @@ python3 skills/session-handoff/install.py plugin-hooks > plugins/session-handoff
 `python3 tests/verify-packaging.py` rejects any difference between the generated
 and committed plugin JSON, including timeout drift.
 
+### Opt-in Ticket commit trailer
+
+Git attribution is separate from the Claude/Codex watcher registration. Install
+it explicitly for each repository, from the kit's permanent location:
+
+```sh
+python3 ~/.agents/skills/session-handoff/install.py git-hook --project /path/to/project
+HANDOFF_TICKET_ID=222a49df-730b-437d-99e3-05c3acda0a29 git commit -m "Fix resume"
+python3 ~/.agents/skills/session-handoff/install.py git-hook --project /path/to/project --uninstall
+```
+
+The stdlib Python `hooks/commit_ticket.py MESSAGE_FILE` adds `Ticket: <id>`.
+Precedence is an existing valid trailer, then `HANDOFF_TICKET_ID`, then no
+attribution. Set the variable for the current commit or ticket-specific session;
+clear it when switching tasks. Checkpoint `task_id` is opaque and is **not**
+automatically read, and the hook never guesses from the newest handoff or branch.
+A ticket ID is 1–128 ASCII characters: an alphanumeric first character followed
+by alphanumerics, `.`, `_`, `/` or `-` (UUIDs and issue keys both work).
+
+The hook checks the final trailer paragraph, separated from the subject/body
+by a blank line, with case-insensitive `Ticket:` keys. Exactly one single-line
+ID is allowed when present. Empty, malformed, multiline or duplicate Ticket
+trailers reject the commit without editing its message. Missing or invalid
+environment IDs leave the message unchanged and never block a commit. Body
+mentions are not trailers. Other trailers, Git comments and scissors/diff content
+are preserved; `core.commentChar` is supported for a single configured character,
+with `#` as the default (including `auto`). Empty messages remain empty.
+
+Installation writes only the selected repository's default `commit-msg` hook;
+linked worktrees share this repository hook. No Git configuration is changed.
+Reinstall/uninstall is idempotent. Existing or modified hooks, symlinks and any
+configured `core.hooksPath` are refused without modification. To compose with an
+existing hook, call `python3 /permanent/kit/hooks/commit_ticket.py "$1"` from that
+hook and propagate its exit status, preserving the other hook's failure behavior.
+Uninstall before moving the kit; ownership checks match the exact installed
+wrapper. Missing Python or a removed kit script is a quiet no-op; message I/O or
+encoding errors warn and allow the commit. Message updates use atomic replacement
+so a failed write preserves the original. With no source or Ticket candidate,
+the hook reads only the message and does not probe Git or handoff state.
+
 ### Validated runtime snapshots
 
 For development checkouts, create a separate runtime instead of registering

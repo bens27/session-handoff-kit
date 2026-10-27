@@ -117,12 +117,44 @@ conversationally or by standing convention; file-ledger fallback checks run
 | Component | Role |
 | --- | --- |
 | `hooks/context_watch.py` | Watcher (threshold trigger) + announcer (session-start handoff scan) + analytics logger + `stats` CLI. Stdlib Python, single file, used by both Claude Code and Codex from the skill folder. |
+| `hooks/commit_ticket.py` | Optional project Git `commit-msg` hook: validate an existing Ticket trailer or append one from `HANDOFF_TICKET_ID`; never infer attribution from ledger state. |
 | `hooks/handoff_ledger.py` | State and chain tracking over handoff files. Importable module + CLI (`list`, `resolve`, `claim`, `resume`, `supersede`, `abandon`, `save-path`, `new-path`). |
 | `skills/session-handoff/SKILL.md` | Agent-surface skill pointer: runs a complete hook command directly, otherwise routes one request through `handoff_ledger.py dispatch` and loads only the named branch (`branches/save.md`, `branches/resume.md`). The folder also holds `hooks/` and `install.py`. |
 | `hooks/handoff_dispatch.py` | Deterministic lifecycle dispatcher (§7.3c): operation precedence, identity resolution, target selection, holds, restart eligibility, one next action. Writes only synthetic identity, explicit holds and lock sidecars (§7.3c item 14). |
 | `chat/session-handoff-chat/SKILL.md` | Chat-surface skill: memory ledger, past-chat marker, file fallback, resume resolution. |
 | `chrome-extension/` | MV3 extension for Chrome/Edge: pre-populates new-chat initialization prompts on claude.ai. |
 | Packaging | `.claude-plugin/marketplace.json` (kit root), plugin manifest, `.plugin` (Cowork), `.skill` (chat), `skills/session-handoff/install.py` (hook registration for Claude Code `settings.json` and Codex `hooks.json`). |
+
+### Optional Git ticket attribution
+
+`install.py git-hook --project PATH [--uninstall]` explicitly installs/removes
+only a repository's default `commit-msg` wrapper. Linked worktrees share it.
+It changes no local/global Git configuration, refuses `core.hooksPath`, foreign
+or modified hooks and symlinks, and is idempotent for its exact wrapper. Keep the
+kit in a permanent location; uninstall before moving it. Runtime snapshots and
+standalone/plugin archives include `hooks/commit_ticket.py`, but ordinary host
+hook registration never installs it automatically.
+
+The public hook CLI is `python3 hooks/commit_ticket.py MESSAGE_FILE`. Existing
+valid final `Ticket:` trailer > `HANDOFF_TICKET_ID` > no attribution. The
+variable is the only automatic source; checkpoint `task_id`, latest handoffs,
+branch names and ledger scans are not attribution sources. IDs match
+`[A-Za-z0-9][A-Za-z0-9._/-]{0,127}`. Ticket keys are case-insensitive in a final
+trailer paragraph separated by a blank line; empty, invalid, multiline or
+multiple Ticket values return 1 with a diagnostic and no message mutation.
+Other trailer fields and body mentions are preserved. Git comments (single
+`core.commentChar`, default `#`, also the fallback for `auto`) and scissors/diff
+content are excluded from validation and retained after an inserted trailer.
+
+Missing/invalid environment IDs are nonblocking and do not change the message;
+empty messages remain empty. Existing valid attribution is never replaced by the
+environment. The stdlib-only hook reads no checkpoint/project code; the no-source,
+no-Ticket path only reads the commit message. A bounded Git config probe reads
+the comment character when needed. Missing Python/script makes the wrapper a
+no-op; I/O/encoding failures warn and return 0. Message updates are atomic so
+a failed write leaves the original intact. Manual composition with foreign
+hooks must propagate both hooks' statuses. This is optional attribution metadata,
+not authority or proof of ticket completion. See README for install examples.
 
 ## 4. Measurement specification
 
