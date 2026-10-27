@@ -156,6 +156,13 @@ configuration, preserving foreign hooks. Commands pin the exact release path;
 there is no changing runtime symlink. Codex feature flags and native hook trust
 still apply; approve the new command through Codex's hook review.
 
+Claude runtime activation also registers `mandatory_gate.py` for `PreToolUse`
+and `Stop` in user settings, with isolated Python (`-I -B`). These gates are
+excluded from checkout/plugin registration, whose code may live in a project.
+The gate checks the sealed payload, ownership, write permissions and location
+before importing any kit module. A project without `"handoff_v3": true` returns
+before importing kit code or reading its transcript.
+
 Also point your host's discovered `session-handoff` skill folder at the returned
 `snapshot` path (a symlink to that immutable directory is suitable), preserving
 the old skill folder first. Activation only registers hooks: it does not move
@@ -456,6 +463,46 @@ The project file can choose the policy but never authorize continuation. A
 malformed value turns automatic selection off and reports it. The body is
 delivered once: a later restart prompt for the same session answers
 `already-delivered`.
+
+`"mandatory_at_tokens"` (positive integer or `null`, default `null`) enables a
+save obligation for a project with `"handoff_v3": true`. Project values override
+`~/.context-watch/thresholds.json`; a project `null` disables the gate even when
+the user file sets a point. The point must be at or above the warning point and,
+when the host reports its window, at or below window minus reserve. Invalid
+timing disables automatic v3 transitions with a named diagnostic. Timing keys
+never enter model threshold maps. No setting here grants restart permission.
+For opted-in v3 projects, project `auto: true` alone cannot request automatic
+continuation: use launch-level `HANDOFF_AUTO` or user-scope `auto: true`.
+
+Only Claude's validated runtime installation enforces this obligation. At the
+point it denies new work, while allowing `Read`, `Glob`, `Grep`, `TaskGet`,
+`TaskList`, `AskUserQuestion`, and the exact save command printed in the denial.
+Shell reads and status commands are not classified as read tools. Supply the
+JSON draft through a quoted literal heredoc, without additional shell commands:
+
+```sh
+# Use the exact command printed by the hook, including its root and session:
+HANDOFF_AUTO=0 python3 -B /runtime/RELEASE/hooks/handoff_ledger.py save /project --session SESSION --input - <<'HANDOFF_JSON'
+{"topic":"work","description":"Continue work","body":"## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nReview."}
+HANDOFF_JSON
+```
+
+The printed command binds `HANDOFF_AUTO` to the launch/user authorization so a
+project-local auto setting cannot grant continuation through the save result.
+
+The obligation remains latched until a trusted publication matches its session
+and trigger. A normal Stop asks for publication; recursive Stop, lack of save
+progress, or two blocked Stop attempts permits reporting a human blocker and
+the checkpoint text. Reads and user decisions remain available on state errors;
+an exact save command remains available when gate state is damaged. Publication
+releases only the save gate, preserving restart holds. Missing/stale telemetry
+reports enforcement unavailable without inventing occupancy; a previously
+latched obligation remains active. Claude window assumptions are not reported
+model specifications. Codex has no supported gate in this kit's host table and
+reports `mandatory-unenforced`; checkout/plugin Claude installations do too.
+To roll back, set project `handoff_v3` false, `mandatory_at_tokens` null, use
+`CONTEXT_WATCH_DISABLE=1`, or restore the prior runtime configuration. Checkpoint
+records remain available for explicit adoption. No live rollout is automatic.
 
 Config file format (see `hooks/thresholds.example.json`):
 

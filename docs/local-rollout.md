@@ -28,6 +28,35 @@ CODEX_HOME="$HOME/.codex" CLAUDE_CONFIG_DIR="$HOME/.claude" \
 
 The installer preserves other hooks and backs up config files. Use one handoff installation per active runtime: either the standalone registration or a plugin that registers the same hooks. The audited Claude plugin registry contained no installed Session Handoff plugin, despite old cache directories on disk.
 
+## Optional mandatory save gate
+
+The mandatory gate requires a validated runtime outside project trees, activated
+for Claude as described in README's **Validated runtime snapshots**. Ordinary
+checkout/plugin installation stays advisory. Do not run activation against live
+profiles as part of testing or packaging.
+
+Before opting a project in, run the repository tests, create and validate a
+release, then inspect an isolated Claude settings file: PreToolUse and Stop
+must include `python3 -I -B .../hooks/mandatory_gate.py` at that exact release.
+Preserve foreign hooks and approve native trust normally. Project configuration
+then needs `handoff_v3: true` and a positive `mandatory_at_tokens`; timing can
+come from the user thresholds file, with project overrides. A reported window
+must leave the configured reserve; an assumed Claude window is not verified.
+
+On denial, use builtin reads/user decisions or the exact printed save command
+with its quoted JSON heredoc. Do not append shell commands. Confirm `outcome:
+saved` and preserve the publication sidecar. If publication is blocked, preserve
+the draft and report its text and the human blocker. Stop yields on recursion or
+lack of progress, with at most two blocked Stop attempts; ordinary work remains
+gated. State errors permit reads and the exact save command, without allowing
+ordinary work. Neither publication nor this gate clears restart holds.
+
+Rollback by disabling the project's v3 opt-in or setting its mandatory point to
+null, or use the runtime rollback command to restore the previous settings.
+`CONTEXT_WATCH_DISABLE=1` disables both watcher and gate for a launch. Preserve
+checkpoints for explicit adoption. Codex stays diagnostic-only for mandatory
+enforcement; no live rollout or restart is implied by these instructions.
+
 ## AgentsRoom-managed Codex profiles
 
 The initial audit found ten profile config files below `~/.agentsroom/codex/`, with no handoff `hooks.json` or inline hook registrations there. The active environment used one of these custom homes. Hook support was enabled in the installed Codex 0.157.1, but feature availability does not prove a hook is registered and trusted in each host session.

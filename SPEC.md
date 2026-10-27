@@ -1343,8 +1343,8 @@ flat project `.context-watch.json` and user `~/.context-watch/thresholds.json`:
 | `handoff_v3` | Boolean false; project opt-in for the lifecycle. |
 | `resume_pointer_policy` | ask (default), latest-owned or manual; implemented (c25292d2). |
 | `activate_suggested_skills` | Boolean false; skills ticket, user-scope opt-in required. |
-| `warning_window_tokens` | Nonnegative lead before resolved §6 threshold, default 30000 (0 disables); advisory implemented (23079574), mandatory gate still reserved. |
-| `mandatory_at_tokens` | Positive absolute occupancy or null (default); gate ticket. |
+| `warning_window_tokens` | Nonnegative lead before resolved §6 threshold, default 30000 (0 disables); advisory implemented (23079574). |
+| `mandatory_at_tokens` | Positive absolute occupancy or null (default); Claude validated-runtime save gate (a8550ff5). |
 
 Project overrides global timing/selection values; report effective value/source.
 Strict validation names malformed keys and disables automatic v3 transitions;
@@ -1376,6 +1376,21 @@ gate without releasing restart holds. These hook controls are documented in the
 [Claude Code hooks reference](https://code.claude.com/docs/en/hooks).
 Verify Codex's installed hook support separately before advertising the same
 gate; use `mandatory-unenforced` only where no supported gate exists.
+
+Implemented gate deployment (a8550ff5): only runtime activation registers the
+isolated `mandatory_gate.py` handler, using shared host registration tables.
+Checkout/plugin installs remain advisory. Classified tools are the exact builtin
+names Read, Glob, Grep, TaskGet, TaskList and AskUserQuestion; MCP names and shell
+strings are never inferred to be reads. The printed save command accepts only
+literal JSON through a quoted HANDOFF_JSON heredoc, without extra shell syntax.
+Private per-project/session gate state records the trigger and save attempts.
+Stop blocks once without progress, allows at most two blocks with progress, and
+always yields on stop_hook_active. Yielding permits human-blocker reporting;
+ordinary tool work stays denied. A trusted matching publication releases the
+save obligation without altering restart holds. Missing or stale telemetry
+cannot create an obligation; an already latched obligation survives it. A host
+reported window caps mandatory timing; Claude's assumed window is never
+presented as reported telemetry.
 
 Kit Claude hooks **already** register in user-scope settings through
 `install.py claude` (`CLAUDE_CONFIG_DIR/settings.json`). The inspected main and

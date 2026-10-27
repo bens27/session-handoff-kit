@@ -192,6 +192,28 @@ def config_setting(name, key, cwd=None):
 def auto_mode_on():
     """Unset means on inside AgentsRoom (the tab restarts itself), off elsewhere;
     an explicit HANDOFF_AUTO=0 or "auto": false always wins."""
+    if globals().get('_V3_INVALID', False):
+        return False
+    cwd = (_EVT or {}).get('cwd') or os.getcwd()
+    v3_enabled = False
+    try:
+        with open(os.path.join(cwd, '.context-watch.json'), encoding='utf-8') as stream:
+            project = json.load(stream)
+        if isinstance(project, dict) and project.get('handoff_v3') is True:
+            v3_enabled = True
+            import mandatory_gate
+            entries = load_transcript_tail((_EVT or {}).get('transcript_path') or '')
+            model = claude_usage(entries)[1]
+            mandatory_gate.timing(project, cwd, sys.modules[__name__], model,
+                                  (_EVT or {}).get('context_window'))
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        if v3_enabled:
+            return False
+    if v3_enabled:
+        # Project data may disable continuation, never grant user authority.
+        return mandatory_gate.user_auto(project)
     value = config_setting("HANDOFF_AUTO", "auto")
     if value is None:
         return bool(env("AGENTSROOM_AGENT_ID"))
@@ -789,7 +811,8 @@ def _load_config_files(cwd, settings=False):
             if isinstance(data, dict):
                 for k, v in data.items():
                     k = str(k).strip().lower()
-                    if k == WARNING_WINDOW_KEY:
+                    if k in {WARNING_WINDOW_KEY, 'handoff_v3', 'mandatory_at_tokens',
+                             'resume_pointer_policy', 'activate_suggested_skills'}:
                         continue
                     if k in SETTING_KEYS:
                         if settings and type(v) is SETTING_KEYS[k]:
@@ -1483,6 +1506,34 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
                                           lead_source, format(decision.limit, ','), decision.source), "warn")
 
 
+def mandatory_status(evt, agent, cwd, model, window, window_source):
+    """Diagnostics only; supported Claude enforcement lives in the sealed gate."""
+    global _DIAG, _V3_INVALID
+    try:
+        with open(os.path.join(cwd, '.context-watch.json'), encoding='utf-8') as stream:
+            project = json.load(stream)
+    except (OSError, ValueError):
+        return
+    if not isinstance(project, dict) or project.get('handoff_v3') is not True:
+        return
+    import mandatory_gate
+    try:
+        point, source, _, _ = mandatory_gate.timing(project, cwd, sys.modules[__name__], model,
+                                                   window if window_source == 'reported' else None)
+    except ValueError as exc:
+        _V3_INVALID = True
+        message = 'invalid mandatory configuration: %s; automatic v3 transitions disabled.' % exc
+    else:
+        if point is None:
+            return
+        if agent == 'claude' and os.path.isfile(os.path.join(os.path.dirname(__file__), '..', 'runtime-manifest.json')):
+            return
+        message = ('mandatory-unenforced: %s has no installed supported mandatory gate; '
+                   'effective mandatory_at_tokens=%s [%s]. Advisory only.' % (agent, point, source))
+    if claim_once(evt, '.mandatory-config'):
+        _DIAG = (evt['hook_event_name'], 'handoff-status: ' + message)
+
+
 def emit(agent, event_name, message, mode):
     global _DIAG, _OPENING_NOTE
     if _OPENING_NOTE:
@@ -1575,6 +1626,7 @@ def main():
 
     cwd = evt.get("cwd") or os.getcwd()
     limit, source = wd.cap_threshold(*resolve_threshold(model, window, cwd), window, window_source, cfg.reserve)
+    mandatory_status(evt, agent, cwd, model, window, window_source)
     write_session_note(cwd, evt, os.path.exists(first), dict(observed_occupancy_tokens=occupancy,
                        threshold=limit, threshold_source=source, window=window,
                        window_source=window_source, model=model))

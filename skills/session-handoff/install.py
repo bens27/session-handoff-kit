@@ -32,7 +32,7 @@ import time
 
 RUNTIME_FORMAT = 1
 REQUIRED_RUNTIME = {"SKILL.md", "branches/save.md", "branches/resume.md", "continuation.md", "handoff-template.md", "reference.md",
-                    "install.py", "hooks/context_watch.py", "hooks/handoff_ledger.py",
+                    "install.py", "hooks/context_watch.py", "hooks/mandatory_gate.py", "hooks/handoff_ledger.py",
                     "hooks/handoff_protocol.py", "hooks/handoff_contract.py", "hooks/handoff_cli.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_record.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "hooks/commit_ticket.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
 # Explicit product inputs, independent of Git metadata so extracted packages
 # behave exactly like checkouts. Local config, secrets and editor files are not
@@ -251,7 +251,7 @@ def pinned_release(root, data):
         for group in groups:
             for hook in group.get("hooks", []):
                 command = hook.get("command", "")
-                if not isinstance(command, str) or MARKER not in command:
+                if not isinstance(command, str) or not any(m in command for m in MARKERS):
                     continue
                 try:
                     words = shlex.split(command)
@@ -259,7 +259,7 @@ def pinned_release(root, data):
                     continue  # foreign shell syntax is not ours to validate
                 for word in words:
                     path = Path(word)
-                    if path.name == MARKER and path.parent.name == "hooks" and path.parent.parent.parent == root / "releases":
+                    if path.name in MARKERS and path.parent.name == "hooks" and path.parent.parent.parent == root / "releases":
                         found.add(path.parent.parent.name)
     if len(found) > 1:
         raise ValueError("configuration refers to multiple runtime releases")
@@ -347,7 +347,8 @@ def switch_runtime(root, args):
         hooks = data.setdefault("hooks", {})
         strip(hooks)
         command = "python3 -B " + shlex.quote(str(folder / "hooks/context_watch.py"))
-        for event, groups in hook_groups(args.target, command).items():
+        gate_command = "python3 -I -B " + shlex.quote(str(folder / "hooks/mandatory_gate.py"))
+        for event, groups in hook_groups(args.target, command, gate_command).items():
             hooks.setdefault(event, []).extend(groups)
         after = (json.dumps(data, indent=2) + "\n").encode()
         if before == after:
@@ -366,6 +367,7 @@ def switch_runtime(root, args):
 WATCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "context_watch.py")
 CMD = "python3 " + shlex.quote(WATCHER)
 MARKER = "context_watch.py"
+MARKERS = (MARKER, "mandatory_gate.py")
 # Recognize fan-outs written by older installers so upgrades restore the
 # original command. Current Codex runs independent matching hook groups.
 FANOUT = re.compile(r'^payload=\$\(cat\); printf %s "\$payload" \| (?P<base>.*); '
@@ -385,8 +387,15 @@ HOST_HOOKS = {
     },
 }
 
+# Enforcing handlers are available only from isolated, sealed runtime releases.
+# Keep the legacy/plugin hook tables unchanged: those may execute project code.
+HOST_GATE_HOOKS = {
+    'claude': {'PreToolUse': {'timeout': 10, 'matcher': ''}, 'Stop': {'timeout': 10}},
+    'codex': {},
+}
 
-def hook_groups(host, command):
+
+def hook_groups(host, command, gate_command=None):
     """Render one host's registrations with the deployment's command path."""
     groups = {}
     for event, registration in HOST_HOOKS[host].items():
@@ -394,6 +403,12 @@ def hook_groups(host, command):
         group["hooks"] = [{"type": "command", "command": command,
                            "timeout": registration["timeout"]}]
         groups[event] = [group]
+    if gate_command:
+        for event, registration in HOST_GATE_HOOKS[host].items():
+            group = {key: value for key, value in registration.items() if key != 'timeout'}
+            group['hooks'] = [{'type': 'command', 'command': gate_command,
+                               'timeout': registration['timeout']}]
+            groups.setdefault(event, []).append(group)
     return groups
 
 
@@ -434,7 +449,7 @@ def strip(hooks):
             kept = []
             for h in g.get("hooks", []):
                 cmd = h.get("command", "")
-                if MARKER not in cmd:
+                if not any(m in cmd for m in MARKERS):
                     kept.append(h)
                     continue
                 touched.add(event)
