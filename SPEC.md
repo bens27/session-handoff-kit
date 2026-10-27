@@ -1293,6 +1293,29 @@ body/skills. Keep binding, environment-terminal, native-session, workspace,
 verification, dependency, hold and receipt checks. Transcript acceptance,
 observed identity and transport delivery remain separate evidence.
 
+**Slice 3 implemented (c25292d2).** `context_watch.handle_session_start`
+(startup/clear only) records the session note, then runs
+`restart_preflight.py startup --cwd --session` in a 20 s subprocess when
+`<project_root(cwd)>/.handoffs/pointers/` exists; a lone hook skips it. Without
+user-scope continuation authorization startup returns at once and stays
+silent: the manual `agents_restart` prompt (`adopt h-...`) is the only path.
+Candidates are `pointers.scan` results whose terminal is the environment
+terminal, whose predecessor session differs and whose intent is pending.
+`HANDOFF_RESTART_REQUEST_ID` is the exact host request (it selects before
+policy; an absent or ineligible one reports `requested-intent-not-eligible` and
+never falls back). Non-quiet diagnostics (all except `incomplete-index` and
+`continuation-not-authorized`) block selection as `invalid-relevant-pointer`.
+`ask`/`manual` output `choose` with each exact adopt command; `latest-owned`
+picks the largest (created_at, pointer path); a malformed value reports
+`invalid-resume-pointer-policy` and selects nothing. Before adopting, startup
+creates an `O_EXCL` marker `<intent>.startup-<sha256(request_id\0session)[:24]>`
+beside the intent and removes it if adopt does not resume. A later exact adopt
+by that successor returns `already-delivered` without the body; reruns without
+the marker keep the existing replay. A scratch cwd under a temp base finds no
+index and creates nothing (ce8a995f). The save side keeps one pending intent per
+terminal, so several same-terminal candidates come only from older ledgers or
+races; tests stage that case.
+
 On AgentsRoom, suggested skills use adopt's existing `skills` context output;
 report `delivered-as-context`, not native activation. With user-scope
 `activate_suggested_skills=true`, resolve installed catalogs, deduplicate canonical
@@ -1315,7 +1338,7 @@ flat project `.context-watch.json` and user `~/.context-watch/thresholds.json`:
 | Key | Meaning and default |
 | --- | --- |
 | `handoff_v3` | Boolean false; project opt-in for the lifecycle. |
-| `resume_pointer_policy` | ask (default), latest-owned or manual; startup ticket. |
+| `resume_pointer_policy` | ask (default), latest-owned or manual; implemented (c25292d2). |
 | `activate_suggested_skills` | Boolean false; skills ticket, user-scope opt-in required. |
 | `warning_window_tokens` | Nonnegative lead before resolved §6 threshold, default 30000 (0 disables); advisory implemented (23079574), mandatory gate still reserved. |
 | `mandatory_at_tokens` | Positive absolute occupancy or null (default); gate ticket. |

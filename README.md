@@ -446,6 +446,17 @@ restarting. It fires once per window, re-arms after compaction, and `0` turns it
 off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
 
+`"resume_pointer_policy"` (`"ask"` default, `"latest-owned"` or `"manual"`) decides
+what a fresh session does when several restart checkpoints for its terminal
+are pending: `ask` and `manual` list them with their adopt commands and adopt
+nothing, while `latest-owned` adopts the newest. One pending checkpoint is
+adopted at startup only when continuation is authorized in user scope
+(`"autoresume": true` in `~/.context-watch/thresholds.json` or `AUTORESUME=1`).
+The project file can choose the policy but never authorize continuation. A
+malformed value turns automatic selection off and reports it. The body is
+delivered once: a later restart prompt for the same session answers
+`already-delivered`.
+
 Config file format (see `hooks/thresholds.example.json`):
 
 ```json

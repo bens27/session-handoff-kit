@@ -496,7 +496,7 @@ def pointer_ts(where, terminal):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def adopt(root, request_id, binding=None):
+def adopt(root, request_id, binding=None, _deliver_body=False):
     """Successor's single atomic command: identity, retrieval, receipt, resume.
 
     Identity comes only from hook/host facts and the environment terminal, never
@@ -636,6 +636,14 @@ def adopt(root, request_id, binding=None):
         record['session'], session, terminal,
         'Native transcript records host acceptance/scheduling: host_confirmed=true; replacement is a separate observation.'
         if record['host_confirmed'] else 'Host request acceptance is not observed: host_confirmed=false.'))
+    if not _deliver_body and record['state'] == 'retrieved' and os.path.exists(
+            startup_delivery_path(root, request_id, session)):
+        # SessionStart already delivered this body to this successor: reuse that
+        # receipt and never emit the body or skills a second time.
+        return dict(outcome='already-delivered', stage='startup', path=record['path'], restart=identity,
+                    report=report, host_confirmed=record['host_confirmed'],
+                    action='SessionStart already delivered this checkpoint to this session. Continue from '
+                           'its ## Next steps in your context; do not rerun adopt or restart.')
     # Dispatcher holds gate execution, not retrieval: the receipt above stays recorded.
     try:
         topic = Record.load(record['path']).topic
@@ -668,6 +676,113 @@ def adopt(root, request_id, binding=None):
             pass  # Optional note repair must not fail an already successful transfer.
         # Account for the final adopt envelope and its ASCII-escaped wire format.
         protocol.delivery_metrics(result, identity_root or root, session, profile='raw')
+    return result
+
+
+# ---------------------------------------------------------------- startup adoption (v3-3)
+
+RESUME_POINTER_POLICIES = ('ask', 'latest-owned', 'manual')
+STARTUP_PREFIX = 'startup-adoption: '
+# Diagnostics that only mean "not mine to continue automatically"; the manual
+# restart prompt remains the path, so startup stays quiet about them.
+QUIET_REASONS = ('incomplete-index', 'continuation-not-authorized')
+
+
+def startup_delivery_path(root, request_id, session):
+    """Once-only marker beside the intent: SessionStart delivered this body to this session."""
+    digest = hashlib.sha256(('%s\0%s' % (request_id, session)).encode()).hexdigest()[:24]
+    return intents.location(root, request_id)[:-len('.json')] + '.startup-' + digest
+
+
+def resume_pointer_policy(root):
+    """Effective (policy, source, error): project .context-watch.json over user thresholds.json.
+
+    Strict: a present but malformed value names the key and disables automatic selection."""
+    policy, source = 'ask', 'default'
+    for scope, path in (('global', os.path.join(os.path.expanduser('~'), '.context-watch', 'thresholds.json')),
+                        ('project', os.path.join(root, '.context-watch.json'))):
+        try:
+            data = protocol.load_state_json(path)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None, scope, 'unreadable-config:' + path
+        if not isinstance(data, dict) or 'resume_pointer_policy' not in data:
+            continue
+        value = data['resume_pointer_policy']
+        if value not in RESUME_POINTER_POLICIES:
+            return None, scope, 'invalid-resume-pointer-policy'
+        policy, source = value, scope
+    return policy, source, None
+
+
+def startup(cwd, session):
+    """SessionStart side of v3 restart: select at most one pointer and adopt it once.
+
+    Returns None for the fast no-op (no candidate: the existing announcer runs),
+    otherwise a dict for the hook to deliver as context. Identity is the
+    hook-recorded session and the environment terminal, never a caller claim."""
+    terminal = protocol.terminal_id()
+    if not session or not terminal or not pointers.user_continuation_authorized():
+        return None  # Not authorized: the manual restart prompt stays the only path.
+    root = os.path.realpath(handoff_identity.project_root(cwd))
+    if not os.path.isdir(pointers.pointer_dir(root)):
+        return None
+    found = pointers.scan(root, session)
+    owned = [c for c in found['candidates']
+             if c['terminal'] == terminal and c['session'] != session and c['mode'] == 'adopt']
+    diagnostics = [d for d in found['diagnostics'] if d.get('reason') not in QUIET_REASONS]
+    requested = os.environ.get('HANDOFF_RESTART_REQUEST_ID', '').strip()
+
+    def note(outcome, **extra):
+        return dict(outcome=outcome, root=root, session=session, terminal=terminal, **extra)
+    if diagnostics:
+        return note('blocked', reason='invalid-relevant-pointer', diagnostics=diagnostics,
+                    action='Automatic selection is off while a pointer is invalid. Report the diagnostics; '
+                           'the exact restart prompt remains the recovery.')
+    if requested:
+        # An exact host request selects before policy and never falls back.
+        owned = [c for c in owned if c['request_id'] == requested]
+        if not owned:
+            return note('blocked', reason='requested-intent-not-eligible', request_id=requested,
+                        action='The requested restart intent is not an eligible candidate here; '
+                               'do not pick another checkpoint.')
+        chosen, policy, source = owned[0], 'exact-request', 'host'
+    elif not owned:
+        return None
+    elif len(owned) == 1:
+        chosen, policy, source = owned[0], 'single', 'pointer'
+    else:
+        policy, source, error = resume_pointer_policy(root)
+        if error:
+            return note('blocked', reason=error, policy_source=source,
+                        action='Fix resume_pointer_policy (ask, latest-owned or manual); '
+                               'automatic selection stays off until then.')
+        if policy != 'latest-owned':
+            listed = [dict(request_id=c['request_id'], task_id=c.get('task_id'), created_at=c['created_at'],
+                           command=adopt_command(root, c['request_id']))
+                      for c in sorted(owned, key=lambda c: (c['created_at'], c['pointer']))]
+            return note('choose', policy=policy, policy_source=source, candidates=listed,
+                        action='Several restart checkpoints are pending for this terminal. Ask the user which '
+                               'to continue, then run exactly that command; adopt nothing on your own.'
+                               if policy == 'ask' else
+                               'Several restart checkpoints are pending (manual policy). Report them; '
+                               'run one command only on the user\'s instruction.')
+        chosen = max(owned, key=lambda c: (c['created_at'], c['pointer']))
+    marker = startup_delivery_path(root, chosen['request_id'], session)
+    try:
+        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return None  # Already delivered to this session: never twice.
+    except OSError as exc:
+        return note('blocked', reason='startup-marker-unwritable', detail=str(exc)[:200])
+    result = adopt(root, chosen['request_id'], _deliver_body=True)
+    if result.get('outcome') != 'resumed':
+        try:
+            os.unlink(marker)  # Nothing delivered: a later exact prompt may still adopt.
+        except OSError:
+            pass
+    result['startup'] = dict(policy=policy, policy_source=source, request_id=chosen['request_id'])
     return result
 
 
@@ -793,7 +908,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
 
 def cli():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['preflight', 'status', 'refusal', 'successor', 'adopt', 'restart', 'acceptance'])
+    parser.add_argument('operation', choices=['preflight', 'status', 'refusal', 'successor', 'adopt', 'restart', 'acceptance', 'startup'])
     parser.add_argument('binding', nargs='?', help='adopt: short restart handle (legacy binding JSON accepted for one release)')
     parser.add_argument('--input', help='JSON argument file or - for stdin; defaults to stdin')
     parser.add_argument('--root', help='adopt: project root')
@@ -802,8 +917,15 @@ def cli():
     parser.add_argument('--host-capable', action='store_true', help='restart: agents_restart with prompt is available')
     parser.add_argument('--hold', action='store_true', help='restart: a live human hold or needsInput is observed')
     parser.add_argument('--path', help='restart: exact checkpoint when this session has several open')
+    parser.add_argument('--cwd', help='startup: SessionStart working directory')
+    parser.add_argument('--session', help='startup: hook-recorded session id')
     args = parser.parse_args()
     try:
+        if args.operation == 'startup':
+            result = startup(args.cwd or os.getcwd(), args.session or '')
+            if result is not None:
+                emit_output(project_output(result) if result.get('outcome') == 'resumed' else result)
+            return 0
         if args.operation == 'adopt':
             if args.binding is not None and not args.binding.lstrip().startswith('{'):
                 result = adopt_handle(args.binding)

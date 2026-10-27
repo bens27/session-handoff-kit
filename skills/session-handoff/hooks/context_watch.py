@@ -930,6 +930,26 @@ def bounded_opening_note(evt):
         return ''
 
 
+def startup_adoption(cwd, sid):
+    """v3-3: adopt one eligible restart pointer, isolated so a broken store cannot block startup.
+
+    Empty when there is nothing to adopt or announce; the opening note then runs as before."""
+    if not sid:
+        return ''
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')
+    try:
+        root = handoff_identity.project_root(cwd)
+        if not os.path.isfile(script) or not os.path.isdir(os.path.join(root, '.handoffs', 'pointers')):
+            return ''  # Fast no-op: no pointer index, or no installed service to read it.
+        result = subprocess.run([sys.executable, script, 'startup', '--cwd', cwd, '--session', sid],
+                                capture_output=True, text=True, encoding='utf-8', timeout=20,
+                                env=dict(os.environ, PYTHONIOENCODING='utf-8'))
+    except Exception:
+        return ''
+    out = result.stdout.strip()
+    return 'startup-adoption: ' + out if result.returncode == 0 and out else ''
+
+
 def reserve_handoff_status(evt):
     """Share one neutral opening notice across hook events in this session."""
     sid = session_key(evt)
@@ -967,7 +987,11 @@ def handle_session_start(evt, agent):
     if source in ("resume", "fork"):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
-    write_session_note(cwd, evt, False)
+    write_session_note(cwd, evt, False)  # fresh native identity first, then the pointer index
+    adopted = startup_adoption(cwd, session_key(evt)) if _MISSING_INSTALL is None else ''
+    if adopted:
+        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': adopted}})
+        sys.exit(0)
     note = bounded_opening_note(evt)
     if note:
         emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}})
