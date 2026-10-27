@@ -128,6 +128,54 @@ class CheckpointMetadataTests(unittest.TestCase):
         self.assertEqual(third['outcome'], 'saved', third)
         self.assertFalse({'ticket', 'role'} & set(self.frontmatter(third['path'])))
 
+    def test_retry_finishes_after_base_commit_disappears(self):
+        self.init_repo()
+        (self.root / 'a.txt').write_text('b\n')
+        self.git('commit', '-qam', 'two')
+        second = self.git('rev-parse', 'HEAD')
+        draft = dict(ticket=TICKET, base=second[:8])
+        first = self.save(**draft)[1]
+        self.assertEqual(first['outcome'], 'saved', first)
+        os.remove(first['path'] + '.published')  # interrupted before the receipt
+        self.git('reset', '-q', '--hard', 'HEAD~1')
+        self.git('reflog', 'expire', '--expire=now', '--all')
+        self.git('gc', '-q', '--prune=now')
+        self.assertNotEqual(subprocess.run(['git', '-C', str(self.root), 'cat-file', '-e', second],
+                                           env=self.env).returncode, 0)
+        code, again = self.save(**draft)
+        self.assertEqual((code, again['outcome'], again.get('path')), (0, 'saved', first['path']), again)
+        self.assertTrue(os.path.exists(first['path'] + '.published'))
+
+    def test_base_naming_a_tag_or_ref_instead_of_a_commit_is_refused(self):
+        head = self.init_repo()
+        self.git('tag', '-a', '-m', 'v1', 'v1')
+        tag = self.git('rev-parse', 'v1')
+        self.assertNotEqual(tag, head)
+        self.git('branch', 'deadbeef')  # a hex-looking ref name that git resolves before short shas
+        for value in (tag, tag[:8], 'deadbeef'):
+            with self.subTest(base=value):
+                code, out = self.save(base=value)
+                self.assertEqual((code, out['outcome']), (1, 'invalid'), out)
+                self.assertIn('base', out['action'])
+                self.assertEqual(self.checkpoints(), [])
+
+    def test_inherited_values_pass_through_the_reader(self):
+        prior = dict(ticket=TICKET, role='Bad Role')
+        doc = handoff_contract.continuation_document(dict(topic='t'), prior)
+        self.assertEqual((doc['ticket'], doc['role']), (TICKET, ''))
+
+    def test_spec_reader_snippet_matches_parse_front_matter(self):
+        import re
+        import handoff_identity
+        spec = (REPO / 'SPEC.md').read_text()
+        snippet = re.search(r'\*\*Header format\.\*\*.*?```python\n(.*?)```', spec, re.S).group(1)
+        for text in ('---\ntopic: a\nBase: x: y\n  ---  \nbody', '---\ntopic: a\n', 'no header', '',
+                     ' --- \nrole: r\n---\n', '---\n---\n'):
+            with self.subTest(text=text):
+                scope = dict(text=text)
+                exec(snippet, scope)
+                self.assertEqual(scope['fm'], handoff_identity.parse_front_matter(text))
+
     def test_reader_keeps_only_well_formed_values(self):
         fm = dict(ticket=TICKET, base='a' * 40, role='backend')
         self.assertEqual(handoff_contract.checkpoint_metadata(fm), fm)

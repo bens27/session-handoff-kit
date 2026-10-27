@@ -133,7 +133,7 @@ class MemoryWorkspace:
     from a dict answers like a directory Git cannot read."""
 
     def __init__(self, heads=None, branches=None, status=None, changed=None, ancestry=(),
-                 counts=None, tracked=None, common=None, commits=None):
+                 counts=None, tracked=None, common=None, commits=None, refs=None):
         self.heads = dict(heads or {})        # root -> full sha
         self.branches = dict(branches or {})  # root -> branch name
         self.status = dict(status or {})      # root -> porcelain text
@@ -143,6 +143,7 @@ class MemoryWorkspace:
         self.tracked_paths = dict(tracked or {})  # realpath -> bool
         self.common = dict(common or {})      # worktree -> (gitdir, common) or OSError message
         self.commits = dict(commits or {})    # root -> [full shas]
+        self.refs = dict(refs or {})          # root -> {ref name or tag sha: commit it peels to}
 
     def snapshot(self, root):
         if root not in self.status:
@@ -158,6 +159,9 @@ class MemoryWorkspace:
         return (old, new) in self.ancestry
 
     def resolve_commit(self, root, sha):
+        # Like git rev-parse: a ref name (or a full tag sha) wins over a short commit sha.
+        if sha in self.refs.get(root, {}):
+            return self.refs[root][sha]
         found = [c for c in self.commits.get(root, ()) if c.startswith(sha)]
         return found[0] if len(found) == 1 else ''
 

@@ -6,8 +6,8 @@ sections below. Optional fields are `predecessor` (authoritative path; required 
 or `path#L10-L30` excerpts), `optional_references` (background, not loaded),
 `verify` (one relevant command), `continuity` (durable goals, constraints
 and follow-ups; see below), and the work metadata `ticket` (the backlog ticket's
-lowercase UUID or 8-hex short id), `base` (the commit sha the work started from;
-it must exist in the project) and `role` (kebab-case, e.g. `backend`).
+lowercase UUID or 8-hex short id), `base` (the commit sha the work started from, lowercase
+hex; a short sha must be unambiguous and name a commit itself, not a tag or ref) and `role` (kebab-case, e.g. `backend`).
 Arrays are accepted for skills/references. A malformed `ticket`/`role` or an
 unknown `base` is refused and nothing is saved.
 Only explicit user parking overrides `reason` with `user-parked`.

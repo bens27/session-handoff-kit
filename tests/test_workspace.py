@@ -175,8 +175,16 @@ class RealGitContract(unittest.TestCase):
             self.assertEqual(real.resolve_commit(root, 'f' * 40), '')
             tree = git('rev-parse', 'HEAD^{tree}')
             self.assertEqual(real.resolve_commit(root, tree), '')  # an object, but not a commit
-            memory = MemoryWorkspace(commits={root: [old, new]})
-            self.assertEqual(memory.resolve_commit(root, old[:7]), old)
+            git('tag', '-a', '-m', 't', 't1', old)
+            git('branch', 'cafe123', new)
+            tag = git('rev-parse', 't1')
+            # The real adapter peels tags and lets a hex-looking ref name win; the memory one models both.
+            self.assertEqual(real.resolve_commit(root, tag), old)
+            self.assertEqual(real.resolve_commit(root, 'cafe123'), new)
+            memory = MemoryWorkspace(commits={root: [old, new]}, refs={root: {tag: old, 'cafe123': new}})
+            for probe in (old[:7], 'f' * 40, tag, 'cafe123'):
+                with self.subTest(probe=probe):
+                    self.assertEqual(memory.resolve_commit(root, probe), real.resolve_commit(root, probe))
             self.assertEqual(memory.resolve_commit(root, ''), '')  # ambiguous: matches both
             self.assertEqual(memory.resolve_commit(outside, old[:7]), '')
             self.assertEqual(real.movement(root, old[:7]), ('1', 3))

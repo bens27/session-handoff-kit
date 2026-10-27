@@ -180,9 +180,14 @@ def continuation_document(document, previous=None):
     """
     previous = previous or {}
     effective = dict(document)
-    for key in ('skills', 'references', 'optional_references') + METADATA_INHERITED:
+    for key in ('skills', 'references', 'optional_references'):
         if key not in effective:
             effective[key] = previous.get(key, '')
+    # Inherited metadata passes through the reader: a malformed stored value is dropped, not copied.
+    inherited = checkpoint_metadata(previous)
+    for key in METADATA_INHERITED:
+        if key not in effective:
+            effective[key] = inherited.get(key, '')
     effective['continuity'] = merge_continuity(
         json.loads(previous.get('continuity', '[]')), document.get('continuity', []))
     return effective

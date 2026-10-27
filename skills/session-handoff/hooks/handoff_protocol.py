@@ -602,23 +602,32 @@ def _listed(value):
     return value if isinstance(value, str) else None
 
 
-def checkpoint_metadata_refusal(root, document):
-    """(refusal or None, full base sha or ''): validate a draft's ticket/base/role on write.
+def checkpoint_metadata_refusal(document):
+    """A refusal when a draft's ticket/base/role is malformed, else None (format only).
 
     The ticket's format is checked; its existence is not, since the backlog is
-    not stored locally. The base must name one existing commit of this project."""
+    not stored locally. The base is resolved later, by resolve_base, and only for
+    a new write: a retry of a saved checkpoint must finish even if the commit is gone."""
     for key in METADATA_FORMATS:
         problem = metadata_problem(key, document.get(key, ''))
         if problem:
-            return dict(outcome='invalid', action=problem + ' Nothing was saved.'), ''
-    base = document.get('base', '')
+            return dict(outcome='invalid', action=problem + ' Nothing was saved.')
+    return None
+
+
+def resolve_base(root, base):
+    """(refusal or None, full sha or ''): the submitted base must name exactly one commit itself.
+
+    A sha prefix that resolves to a different object (a tag sha, or a hex-looking
+    ref name git resolves before short shas) is refused."""
     if not base:
         return None, ''
     full = workspace.resolve_commit(root, base)
-    if not full:
+    if not full or not full.startswith(base):
         return dict(outcome='invalid', action=(
-            'Invalid base %s: no single commit with that sha exists in %s (or it is not a Git repository). '
-            'Supply an existing, unambiguous commit sha, or omit base. Nothing was saved.' % (base, root))), ''
+            'Invalid base %s: no single commit with that sha exists in %s (or it is not a Git repository, '
+            'or the value names a tag or ref rather than a commit). Supply an existing, unambiguous commit sha, '
+            'or omit base. Nothing was saved.' % (base, root))), ''
     return None, full
 
 
@@ -762,7 +771,7 @@ def save(root, session, request_id, document):
     problems = ledger._problems('---\nstatus: open\n---\n' + body, {'status':'open'})
     if not body.strip() or problems:
         return dict(outcome='invalid', problems=problems[:8], action='Keep the previous checkpoint and draft. Repair the named document problems and retry.')
-    refusal, base = checkpoint_metadata_refusal(root, document)
+    refusal = checkpoint_metadata_refusal(document)
     if refusal:
         return refusal
     identity = hashlib.sha256((os.path.realpath(root) + '\0' + session + '\0' + request_id).encode()).hexdigest()
@@ -797,6 +806,9 @@ def save(root, session, request_id, document):
                                    if not record['record'].open_strict else transition(root, guard, path=record['path']))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
                             transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
+        refusal, base = resolve_base(root, document.get('base', ''))
+        if refusal:
+            return refusal
         predecessor = document.get('predecessor')
         resolved = ledger.resolve(topic, root)
         current = resolved['authoritative']

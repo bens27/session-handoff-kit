@@ -425,9 +425,10 @@ A reader in a few lines of stdlib (`handoff_identity.parse_front_matter`):
 
 ```python
 lines = text.splitlines()
-end = lines.index('---', 1) if lines and lines[0] == '---' else 0
+fences = [i for i, line in enumerate(lines) if line.strip() == '---']
+end = fences[1] if len(fences) > 1 and fences[0] == 0 else 0  # no header -> {}
 fm = {k.strip().lower(): v.strip() for k, _, v in
-      (l.partition(':') for l in lines[1:end] if ':' in l)}
+      (line.partition(':') for line in lines[1:end] if ':' in line)}
 ```
 
 **Work metadata.** Three optional lines tie a checkpoint to the work it belongs
@@ -437,12 +438,14 @@ an invalid one.
 
 | Line | Value written | Draft accepts | Checked on save |
 |---|---|---|---|
-| `ticket:` | AgentsRoom backlog ticket id | lowercase UUID, or its first 8 hex digits | format only; the backlog is not stored locally, so existence is not checked |
-| `base:` | full commit sha (40 or 64 hex) | 7–64 hex digits | must resolve to exactly one existing commit in the project (`git rev-parse --verify <sha>^{commit}`); a missing, ambiguous or non-commit object, or a project that is not a Git repository, is refused |
+| `ticket:` | AgentsRoom backlog ticket id | lowercase UUID, or its first 8 lowercase hex digits | format only; the backlog is not stored locally, so existence is not checked |
+| `base:` | full commit sha (40 or 64 hex) | 7–64 lowercase hex digits | must be an unambiguous prefix of one existing commit's own sha in the project (`git rev-parse --verify <sha>^{commit}`, and the result must start with the value); a missing, ambiguous or non-commit object, a tag sha or a ref name that merely looks like hex, or a project that is not a Git repository, is refused |
 | `role:` | role slug, e.g. `backend` | kebab-case, at most 40 characters | format only |
 
 An invalid value fails the save with `outcome: invalid` and an `action` naming
-the field, before any lock or file is taken. An empty string means "not set".
+the field, before any file is written: formats are checked before the lock,
+and `base` is resolved only for a new write, so a retry of an already-saved
+checkpoint still finishes after its base commit is gone. An empty string means "not set".
 `ticket` and `role` inherit from a trusted predecessor when the draft omits
 them (an empty string clears them); `base` is a fact of one save and never
 inherits. `handoff_contract.checkpoint_metadata(fm)` returns only the
