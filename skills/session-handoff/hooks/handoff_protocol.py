@@ -645,6 +645,9 @@ def _front_matter_matches(root, document, record):
     submitted = document.get('base', '')
     if not (fm.get('base', '').startswith(submitted) if submitted else not fm.get('base')):
         return False
+    for key in ('task_id', 'suggested_skills'):
+        if fm.get(key, '') != (_listed(document.get(key)) or ''):
+            return False
     if json.loads(fm.get('continuity', '[]')) != effective['continuity']:
         return False
     allowed = {_listed(document.get('verify', '')) or None}
@@ -921,6 +924,11 @@ def save(root, session, request_id, document):
             fields[key] = value
         # Optional header metadata: written only when set, so legacy readers see no change.
         for key, value in (('ticket', document.get('ticket', '')), ('base', base), ('role', document.get('role', ''))):
+            if value:
+                fields[key] = value
+        # Opaque correlation label and advisory suggestions: written only when supplied, sealed with the content.
+        for key in ('task_id', 'suggested_skills'):
+            value = _listed(document.get(key)) or ''
             if value:
                 fields[key] = value
         if document['continuity']:

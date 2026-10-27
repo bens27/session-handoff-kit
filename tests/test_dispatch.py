@@ -1627,3 +1627,139 @@ class StaleNoticeTests(Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class OneCallSaveTests(Base):
+    """SPEC 7.3d slice 1: dispatch operation=save with a draft publishes and, on the
+    AgentsRoom profile, returns the single agents_restart call after every gate."""
+
+    AR = {'AGENTSROOM_AGENT_ID': 'term-a'}
+    HOST = {'restart_capable': True, 'workers': [], 'hold': False}
+
+    def draft(self, **extra):
+        doc = dict(topic='parser', description='Parser work', body=BODY, suggested_skills=[])
+        doc.update(extra)
+        return doc
+
+    def ar_save(self, session='sess-a', host=HOST, env=None, **draft):
+        self.record_hook_session(session, env=self.AR)
+        return self.dispatch(operation='save', draft=self.draft(**draft), host=host, env=dict(self.AR, **(env or {})))
+
+    def intents(self):
+        return sorted((Path(self.root) / '.handoffs' / 'restart').glob('*.json'))
+
+    def test_agentsroom_draft_save_returns_the_one_restart_call(self):
+        (self.home / 'skills' / 'tdd').mkdir(parents=True)
+        (self.home / 'skills' / 'tdd' / 'SKILL.md').write_text('---\nname: tdd\n---\n')
+        r = self.ar_save(suggested_skills=['tdd'], task_id='T-1')
+        self.assertEqual((r['outcome'], r['code'], r['call'], r['agent']), ('proceed', 'restart', 'agents_restart', 'term-a'), r)
+        self.assertIn(' adopt ', r['prompt'])
+        self.assertRegex(r['prompt'], r'\bh-[0-9a-f]{24}\b')
+        self.assertEqual(r['suggested_skills'], ['tdd'])
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertTrue(os.path.isfile(r['path']), r)
+        text = Path(r['path']).read_text()
+        self.assertIn('\ntask_id: T-1\n', text)
+        self.assertIn('\nsuggested_skills: tdd\n', text)
+        [location] = self.intents()
+        record = json.loads(location.read_text())
+        self.assertEqual(record['request_id'], r['request_id'])
+        self.assertIn('dispatch_started_at', record)
+        self.assertIs(record['host_confirmed'], False)
+
+    def test_identical_retry_never_reemits_the_call(self):
+        first = self.ar_save()
+        self.assertEqual(first['code'], 'restart', first)
+        again = self.ar_save()
+        self.assertEqual(again['outcome'], 'blocked', again)
+        self.assertNotIn('call', again)
+        self.assertNotIn('prompt', again)
+        self.assertEqual(len(self.intents()), 1)
+
+    def test_unknown_host_observations_block_after_publication(self):
+        for i, host in enumerate(({}, {'restart_capable': True}, {'workers': []},
+                                  {'restart_capable': 'yes', 'workers': []})):
+            r = self.ar_save(host=host, topic='topic-%d' % i)
+            self.assertEqual((r['outcome'], r['code']), ('blocked', 'restart_blocked'), (host, r))
+            self.assertEqual(r['stage'], 'host_observations', r)
+            self.assertNotIn('call', r)
+            self.assertTrue(os.path.isfile(r['path']), r)
+        self.assertEqual(self.intents(), [])
+
+    def test_invalid_draft_is_rejected_before_publication(self):
+        self.record_hook_session('sess-a', env=self.AR)
+        bad = [{k: v for k, v in self.draft().items() if k != key} for key in ('topic', 'description', 'body', 'suggested_skills')]
+        bad += [self.draft(extra='x'), self.draft(suggested_skills='tdd'), self.draft(suggested_skills=['a', 'a']),
+                self.draft(suggested_skills=[1]), self.draft(task_id=3), 'not-an-object']
+        for draft in bad:
+            r = self.dispatch(operation='save', draft=draft, host=self.HOST, env=self.AR)
+            self.assertEqual((r['outcome'], r['code']), ('blocked', 'invalid_request'), (draft, r))
+        r = self.dispatch(operation='retrieve', draft=self.draft(), env=self.AR)
+        self.assertEqual(r['code'], 'invalid_request', r)
+        self.assertEqual(list((Path(self.root) / '.handoffs').glob('*.md')), [])
+
+    def test_uninstalled_suggested_skill_only_warns(self):
+        r = self.ar_save(suggested_skills=['no-such-skill'])
+        self.assertEqual(r['code'], 'restart', r)
+        self.assertTrue(any('no-such-skill' in w for w in r['warnings']), r)
+
+    def test_non_agentsroom_draft_save_returns_the_saved_result(self):
+        self.record_hook_session('sess-a')
+        r = self.dispatch(operation='save', draft=self.draft())
+        self.assertEqual((r['outcome'], r['code']), ('proceed', 'saved'), r)
+        self.assertNotIn('call', r)
+        self.assertTrue(os.path.isfile(r['path']))
+        self.assertNotIn('suggested_skills:', Path(r['path']).read_text())
+        self.assertEqual(self.intents(), [])
+
+    def test_draftless_save_is_unchanged(self):
+        self.record_hook_session('sess-a')
+        r = self.dispatch(operation='save', topic='parser')
+        self.assertEqual((r['outcome'], r['code']), ('proceed', 'ok'), r)
+        self.assertIn(' save ', ' ' + r['next_action']['command'] + ' ')
+
+    def age_marker(self, seconds):
+        import time
+        [location] = self.intents()
+        record = json.loads(location.read_text())
+        record['dispatch_started_at'] = time.time() - seconds
+        location.write_text(json.dumps(record))
+        return location
+
+    def test_stale_marked_intent_is_announced_never_auto_adopted(self):
+        self.assertEqual(self.ar_save()['code'], 'restart')
+        location = self.age_marker(1801)
+        auto = dict(self.AR, CONTEXT_WATCH_AUTORESUME='1')
+        self.record_hook_session('sess-b', env=self.AR)
+        r = self.dispatch(operation='autoresume', env=auto)
+        self.assertNotEqual(r['code'], 'restart_successor', r)
+        self.assertFalse(r['authorized_to_execute'], r)
+        self.assertEqual((r['outcome'], r['code']), ('blocked', 'dispatch_stale'), r)
+        self.assertIn('adopt', r['next_action']['text'])
+        self.assertIn('new save', r['next_action']['text'])
+        self.assertEqual(json.loads(location.read_text())['state'], 'pending')
+        # the predecessor session may recover with a new save
+        r = self.ar_save(body=BODY + 'Second attempt.\n')
+        self.assertNotEqual(r['code'], 'dispatch_pending', r)
+        self.assertTrue(any('stale' in w.lower() for w in r.get('warnings', [])), r)
+
+    def test_recent_marked_intent_still_blocks_and_routes(self):
+        self.assertEqual(self.ar_save()['code'], 'restart')
+        self.age_marker(1700)
+        r = self.ar_save(body=BODY + 'Second attempt.\n')
+        self.assertEqual((r['outcome'], r['code']), ('blocked', 'dispatch_pending'), r)
+        self.record_hook_session('sess-b', env=self.AR)
+        r = self.dispatch(operation='autoresume', env=dict(self.AR, CONTEXT_WATCH_AUTORESUME='1'))
+        self.assertEqual(r['code'], 'restart_successor', r)
+
+    def test_host_confirmed_marked_intent_is_not_stale(self):
+        sys.path.insert(0, str(HOOKS))
+        try:
+            import handoff_dispatch
+        finally:
+            sys.path.remove(str(HOOKS))
+        record = dict(state='pending', dispatch_started_at=1.0, host_confirmed=False)
+        self.assertTrue(handoff_dispatch.stale_marked(record, now=2000.0))
+        self.assertFalse(handoff_dispatch.stale_marked(dict(record, host_confirmed=True), now=2000.0))
+        self.assertFalse(handoff_dispatch.stale_marked(dict(record, dispatch_started_at=500.0), now=2000.0))
+        self.assertFalse(handoff_dispatch.stale_marked({k: v for k, v in record.items() if k != 'dispatch_started_at'}, now=2000.0))

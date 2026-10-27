@@ -32,7 +32,12 @@
     "lookup_error": true,
     "publication_incomplete": false,
     "hold_state_unreadable": true,
-    "state_changed": true
+    "state_changed": true,
+    "saved": false,
+    "restart": false,
+    "restart_blocked": false,
+    "publication_failed": false,
+    "dispatch_stale": false
   },
   "cases": [
     {

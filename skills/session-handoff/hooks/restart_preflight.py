@@ -211,9 +211,10 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                 other = intents.canonical(root, entry)
                 same_checkpoint = (other['path'] == path or
                                    other['checkpoint_id'] == checkpoint.checkpoint_id)
-                # An expired intent is never adopted: it only still guards its own checkpoint
+                # An expired or stale-marked intent is never auto-adopted: it only still guards its own checkpoint
                 if ((other['state'] == 'pending' and (other['path'] == path or (
-                        other['terminal'] == terminal and not intent_expired(other))))
+                        other['terminal'] == terminal and not intent_expired(other)
+                        and not intents.stale_marked(other))))
                         or (other['state'] in ('retrieved', 'refused') and same_checkpoint)):
                     return blocked('conflicting-restart-intent')
         except (OSError, ValueError, TypeError, KeyError, AttributeError):

@@ -22,9 +22,14 @@ from handoff_contract import (
     dispatch_result as result, blocked_result as blocked, python_command, emit_output, exit_status)
 
 LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'handoff_ledger.py')
+PREFLIGHT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')
 OPERATIONS = ('save', 'pressure', 'retrieve', 'resume', 'autoresume')
 REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authorization', 'override', 'host',
-                          'request_id', 'reuse', 'expect', 'topic'))
+                          'request_id', 'reuse', 'expect', 'topic', 'draft'))
+DRAFT_REQUIRED = ('topic', 'description', 'body', 'suggested_skills')
+DRAFT_OPTIONAL = frozenset(('task_id', 'predecessor', 'references', 'optional_references', 'continuity', 'skills',
+                            'verify', 'verify_baseline', 'reason'))
+HOST_WINDOW = intents.HOST_WINDOW
 
 HOST_KEYS = frozenset(('restart_capable', 'workers', 'hold', 'restart_request_id'))
 
@@ -128,6 +133,10 @@ def dispatch(request, root='.'):
     if unknown:
         return blocked({}, 'invalid_request', 'Unknown request fields: %s.' % ', '.join(unknown))
     request = dict(request)
+    if 'draft' in request:
+        error = validate_draft(request)
+        if error:
+            return blocked({}, 'invalid_request', error)
     prompt = request.get('prompt')
     if prompt is not None and not isinstance(prompt, str):
         return blocked({}, 'invalid_request', 'prompt must be a string.')
@@ -187,6 +196,106 @@ def dispatch(request, root='.'):
                            'Automatic resume is not configured; ask the user to continue the handoff.')
         request['_authorization'] = 'config'
     return route(request, root)
+
+
+def validate_draft(request):
+    """Shape only; protocol.save owns content validation. Returns an error text or None."""
+    draft = request['draft']
+    if request.get('operation') != 'save':
+        return 'draft is accepted only with operation "save".'
+    if not isinstance(draft, dict):
+        return 'draft must be a JSON object.'
+    missing = [k for k in DRAFT_REQUIRED if k not in draft]
+    unknown = sorted(set(draft) - set(DRAFT_REQUIRED) - DRAFT_OPTIONAL)
+    if missing or unknown:
+        return 'draft needs %s; unknown draft fields: %s.' % (', '.join(DRAFT_REQUIRED), ', '.join(unknown) or 'none')
+    for key in ('topic', 'description', 'body'):
+        if not isinstance(draft[key], str) or not draft[key].strip():
+            return 'draft.%s must be a nonempty string.' % key
+    suggested = draft['suggested_skills']
+    if (not isinstance(suggested, list) or not all(isinstance(n, str) and n.strip() for n in suggested)
+            or len(set(suggested)) != len(suggested)):
+        return 'draft.suggested_skills must be a list of unique skill names ([] allowed).'
+    if 'task_id' in draft and not isinstance(draft['task_id'], str):
+        return 'draft.task_id must be a string.'
+    if request.get('topic') is not None and request['topic'] != draft['topic']:
+        return 'topic and draft.topic differ.'
+    request['topic'] = draft['topic']
+    return None
+
+
+stale_marked = intents.stale_marked
+
+
+def stale_text(record):
+    return ('Stale restart intent %s (session %s) was dispatched over %d minutes ago with no host evidence; it is '
+            'preserved but never auto-adopted. Recover with a new save from the requesting session, or an explicit '
+            'adopt: %s' % (record['request_id'], record['session'], HOST_WINDOW // 60,
+                          intents.adopt_command(record['root'], record['request_id'])))
+
+
+def run_restart(root, path, workers, capable, hold):
+    """restart_preflight's own `restart` command, out of process: dispatch and preflight never import each other."""
+    import subprocess
+    argv = [sys.executable, '-B', PREFLIGHT, 'restart', '--root', root, '--path', path, '--workers', json.dumps(workers)]
+    argv += ['--host-capable'] if capable else []
+    argv += ['--hold'] if hold else []
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+        out = json.loads(done.stdout)
+        if not isinstance(out, dict):
+            raise ValueError('not a JSON object')
+        return out
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return dict(outcome='blocked', reason='preflight-unavailable', stage='preflight', detail=str(exc)[:300],
+                    action='Do not call agents_restart; restart state is unknown. Reconcile before any retry.')
+
+
+def draft_save(root, request, session, target, common):
+    """Publish the draft, then on the AgentsRoom profile run the restart preflight once."""
+    draft = dict(request['draft'])
+    if not draft.get('predecessor') and target.get('predecessor'):
+        draft['predecessor'] = target['predecessor']
+    request_id = request.get('request_id') or save_request_id(root, session, target.get('topic'))
+    warnings = list(common.pop('warnings', []))
+    catalog = protocol.installed_catalog()['skills']
+    warnings += ['Suggested skill %r is not installed; it stays advisory.' % n
+                 for n in draft['suggested_skills'] if n not in catalog]
+    try:
+        saved = protocol.save(root, session, request_id, draft)
+    except (OSError, ValueError) as exc:
+        saved = dict(outcome='invalid', action=str(exc))
+    extra = dict(request_id=request_id, suggested_skills=list(draft['suggested_skills']), **common)
+    if saved.get('outcome') != 'saved':
+        return blocked(request, 'publication_failed', 'Publication %s: %s Keep the draft; never clear.'
+                       % (saved.get('outcome'), saved.get('action', '')), stage='publication',
+                       publication=saved, warnings=warnings, **extra)
+    warnings += saved.get('warnings') or []
+    extra.update(path=saved['path'], checkpoint_id=saved['checkpoint_id'], transition=saved['transition'],
+                 warnings=warnings)
+    if saved['transition'].get('kind') != 'agents_restart':
+        return result('proceed', 'saved', request, next_action=dict(
+            kind='continue', command='', text=saved['transition'].get('action', saved.get('action', ''))), **extra)
+    host = request.get('host') or {}
+    workers = host.get('workers')
+    if not isinstance(host.get('restart_capable'), bool) or not isinstance(workers, list) or not isinstance(host.get('hold', False), bool):
+        return blocked(request, 'restart_blocked', 'The checkpoint is published, but restart needs current host '
+                       'observations: restart_capable (bool), the complete workers list ([] when observed empty) and '
+                       'hold. Do not call agents_restart; continue manually in a fresh session.',
+                       stage='host_observations', **extra)
+    out = run_restart(root, saved['path'], workers, host['restart_capable'], host.get('hold', False))
+    warnings += out.get('warnings') or []
+    if out.get('outcome') != 'ready' or out.get('call') != 'agents_restart':
+        extra['request_id'] = out.get('request_id', request_id)
+        return blocked(request, 'restart_blocked', 'The checkpoint is published; restart did not pass (%s). %s'
+                       % (out.get('reason') or out.get('outcome'), out.get('action', '')),
+                       stage=out.get('stage') or out.get('reason') or out.get('outcome'), preflight=out, **extra)
+    extra.update(save_request_id=request_id, request_id=out['request_id'])
+    return result('proceed', 'restart', request, call='agents_restart', agent=out['agent'], prompt=out['restart_prompt'],
+                  next_action=dict(kind='call', command='agents_restart', text=(
+                      'Dispatch is marked started. Write the session status, then call agents_restart(agent=%s, '
+                      'prompt=<prompt>) exactly as the final tool action and end the turn. Suggested skills are '
+                      'advisory only.' % out['agent'])), **extra)
 
 
 def _identity_file(root, terminal):
@@ -424,7 +533,7 @@ def pending_dispatch(root, host, session, path=None, saving=False):
         if record is not None and intents.expired(record):
             expired(record)
             record = None
-        if record is not None and record['session'] == session:
+        if record is not None and record['session'] == session and not (saving and stale_marked(record)):
             return record, None, warnings
     try:
         locations = intents.entries(root)
@@ -464,6 +573,12 @@ def pending_dispatch(root, host, session, path=None, saving=False):
             if intents.expired(record):
                 expired(record)
                 continue
+            if stale_marked(record):
+                if record['request_id'] not in reported:
+                    reported.add(record['request_id'])
+                    warnings.append(stale_text(record))
+                if saving:
+                    continue  # recovery is a new save; the stale intent stays preserved
             matches.append(record)
     # This session's own intent first, then one for the target checkpoint
     matches.sort(key=lambda r: (r['session'] != session, r['path'] != target, -r['intent_at']))
@@ -649,6 +764,10 @@ def route(request, root):
     if saving and pending and pending['session'] == session:
         return blocked(request, 'dispatch_pending', 'A restart intent for this session is still pending. Reconcile with '
                        'the host before any retry; never re-dispatch or record host confirmation yourself.', **common)
+    if pending and not saving and stale_marked(pending):
+        return blocked(request, 'dispatch_stale', stale_text(pending), **common)
+    if saving and request.get('draft') is not None:
+        return draft_save(root, request, session, target, common)
     if decision:  # history_only
         return result('proceed', 'history_only', request, next_action=dict(
             kind='run', command=_command('history', root, '--topic', target['topic']), text=decision[2]), **common)

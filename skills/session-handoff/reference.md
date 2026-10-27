@@ -659,6 +659,23 @@ reconciliation. The dispatcher hands a pending successor the same command in its
 (`{root,request_id,session,terminal,delivery_receipt}` after a manual prepare)
 remains for manual recovery and audits.
 
+### One-call save (v3 slice 1)
+
+Write the session status first, then run:
+`python3 <hooks>/handoff_ledger.py dispatch --input -`, with
+`{"operation": "save", "draft": {topic, description, body, suggested_skills[, task_id, ...]},
+"host": {"restart_capable": <bool>, "workers": [...], "hold": <bool>}}`.
+It publishes the checkpoint and, inside AgentsRoom, runs the restart preflight.
+Only `outcome: proceed` with `code: restart` permits a host call. In that case,
+call `agents_restart` for `agent` with the exact `prompt` as the final tool
+action, then end the turn. `suggested_skills` are advisory: an uninstalled one
+only warns. Outside AgentsRoom, the result is `code: saved`. `restart_blocked`
+and `publication_failed` name a `stage` and authorize no restart. The checkpoint
+stays published after a restart block. A retry blocked with `dispatch_pending`
+means reconcile, never re-dispatch. A dispatched intent with no host evidence
+after 30 minutes is reported as stale (`dispatch_stale`), not auto-adopted.
+Recover with a new save or an explicit adopt.
+
 ### Handoff v3 outline (proposal; not available yet)
 
 The review contract is [SPEC §7.3d](../../SPEC.md#73d-handoff-v3-proposal--one-call-lifecycle-e3ef793a).

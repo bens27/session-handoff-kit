@@ -148,6 +148,20 @@ def handle_command(handle, script=ADOPT_SCRIPT):
 
 # -- TTL and states --------------------------------------------------------------
 
+# A dispatch-marked intent with no host evidence after this long is announced, never auto-adopted.
+HOST_WINDOW = 1800
+
+
+def stale_marked(record, now=None):
+    """Pending, dispatch marked over HOST_WINDOW ago, and no host evidence: recover by new save or explicit adopt."""
+    started = record.get('dispatch_started_at')
+    if record.get('state') != 'pending' or record.get('host_confirmed') is True:
+        return False
+    if not isinstance(started, (int, float)) or isinstance(started, bool):
+        return False
+    return (time.time() if now is None else now) - started > HOST_WINDOW
+
+
 def expired(record, now=None):
     """A pending intent older than TTL['pending'] is never adopted, by any path."""
     if not isinstance(record, dict) or record.get('state') != 'pending':

@@ -207,6 +207,7 @@ DISPATCH_CODES = {
     'target_superseded': False, 'target_closed': False, 'dispatch_pending': False,
     'dispatch_state_invalid': False, 'restart_successor': False, 'lookup_error': True, 'publication_incomplete': False,
     'hold_state_unreadable': True, 'state_changed': True,
+    'saved': False, 'restart': False, 'restart_blocked': False, 'publication_failed': False, 'dispatch_stale': False,
 }
 DISPATCH_RETRY = dict(max_attempts=3, backoff_seconds=[1, 4, 16], same_request=True)
 

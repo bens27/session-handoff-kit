@@ -1200,6 +1200,45 @@ ledger/preflight steps are required. A blocked result preserves the checkpoint
 and names the stage; it authorizes no restart. A future capability-probed bridge
 may invoke the host from the same script, preserving the same state contract.
 
+**Slice 1 implemented (8ae43aa3).** `handoff_ledger.py dispatch` accepts `draft`
+only with `operation: "save"`; a draft-less save keeps its routing-only result.
+Required draft keys are `topic`, `description`, `body` and `suggested_skills`;
+optional ones are `task_id`, `predecessor`, `references`, `optional_references`,
+`continuity`, `skills`, `verify`, `verify_baseline` and `reason`. Any other key
+is `invalid_request`. The draft topic becomes the request topic, and the target
+predecessor is injected when the draft omits one. After every existing gate
+(identity, holds, pending intents), dispatch calls `handoff_protocol.save`.
+`task_id` and `suggested_skills` are written to front matter only when
+supplied, so they are sealed with the content. An uninstalled suggestion only
+warns. A failed publication returns `publication_failed` (stage `publication`).
+Off AgentsRoom, the result is `proceed`/`saved` with path and transition. On
+AgentsRoom (`transition.kind == agents_restart`), host observations must
+include a boolean `restart_capable` and a `workers` list. Otherwise the
+checkpoint stays published and the result is `restart_blocked` with
+`stage: host_observations`. Next, `restart_preflight.py restart --path <saved>`
+(run out of process; dispatch and preflight never import each other) writes the pointer and intent, then `dispatch_started_at`, before the result
+returns:
+
+    {"operation": "save", "request_id": "r-1",
+     "host": {"restart_capable": true, "workers": [], "hold": false},
+     "draft": {"topic": "parser", "description": "Parser work", "body": "...",
+               "suggested_skills": ["tdd"], "task_id": "T-1"}}
+    -> {"outcome": "proceed", "code": "restart", "call": "agents_restart",
+        "agent": "<terminal>", "prompt": "<... adopt h-<24 hex> ...>",
+        "request_id": "agentsroom:<sha256>", "save_request_id": "r-1",
+        "path": "...", "checkpoint_id": "...", "suggested_skills": ["tdd"],
+        "warnings": [], ...}
+
+Any other preflight result is `restart_blocked` with the preflight reason as
+`stage`. An identical retry finds the session's own pending intent and blocks
+with `dispatch_pending`, so it never emits a second call. A marked intent
+(`dispatch_started_at` set, `host_confirmed` false) older than 30 minutes
+(`HOST_WINDOW`) is stale. Dispatch announces it as a warning, and a resume or
+autoresume returns `dispatch_stale` rather than `restart_successor`. That
+intent no longer blocks a new save or a new checkpoint's preflight on the
+terminal, but it still guards its own checkpoint. Recovery is a new save or an
+explicit adopt.
+
 #### Durable identity and project pointer
 
 Reuse checkpoint_id, the six-field restart binding (checkpoint_id, path,

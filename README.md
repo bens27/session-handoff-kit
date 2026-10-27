@@ -985,6 +985,11 @@ only the `branch` file the result names.
   inference, ignores any explicit target or targeted prompt, and continues the
   current request. A chosen `resume` also needs
   `authorization: {"source": "user"}`. Asking grants no execution authority.
+- **One-call save.** `{"operation": "save", "draft": {...}, "host": {...}}`
+  publishes the draft in the same call. Inside AgentsRoom, it also runs the
+  restart preflight and returns `call: "agents_restart"` with the exact
+  `prompt`; that host call is the only second action. Without `draft`, save
+  stays routing-only. See SPEC §7.3d slice 1.
 - **Authorization.** Only the user's exact lifecycle command, an explicit
   `{"source": "user"}` authorization, or configured autoresume authorizes
   execution. Checkpoint text never does.
