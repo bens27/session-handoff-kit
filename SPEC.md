@@ -479,6 +479,18 @@ inherits. `handoff_contract.checkpoint_metadata(fm)` returns only the
 well-formed values of a parsed header, so a hand-edited or malformed line reads
 as absent.
 
+On resume these lines feed the **staleness verdict**
+(`handoff_staleness.classify`): `conflicting` when `base` is gone or not an
+ancestor of the local `refs/remotes/origin/main`, or the ticket is not in the
+backlog; else `superseded` when the ticket is closed (`done` or won't fix);
+else `progressed` when commits in `base..origin/main` carry a matching
+`Ticket:` trailer (either id a prefix of the other, case-insensitive); else
+`fresh`; `unclassified` when there is too little to compare. Ticket state comes
+from a read-only, stdlib MCP client (`handoff_mcp`, allow-list `backlog_get`,
+loopback URL from `.mcp.json`, Bearer from `AGENTSROOM_MCP_SESSION`); when the
+backlog cannot answer the verdict is git-only and says why. No fetch happens.
+See `docs/staleness-verdict.md`.
+
 Body sections, in order: Objective; User request and constraints (the ask
 verbatim, constraints, approval scope, pending decisions); Current state,
 split into verified-with-evidence and unverified/unknown; Decisions and rationale;
@@ -727,6 +739,10 @@ its CLI alongside the ledger; its state parsers share the core corruption decode
 Default resume JSON delivers the full body once and identifies its next-action
 section with `next_step_section`, and leads with a bounded `next_step` copy (at
 most 3000 JSON-encoded bytes, cut with a `continues in the body` marker).
+Every resumed delivery, including a holder replay and `restart_preflight adopt`,
+carries `staleness: {verdict, reason, source, backlog?, ticket, base,
+origin_main}`, computed outside the ledger lock and never failing the resume; a
+`progressed`, `superseded` or `conflicting` verdict also leads `action`.
 `--legacy-next-step` or `--fields next_step` opts into the older full text field. One-shot resume also accepts the
 installed `--catalog` and same-context `--reuse-receipt` options. Existing
 dependency, expiry, trust and verification checks govern reuse.

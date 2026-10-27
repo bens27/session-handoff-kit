@@ -11,6 +11,7 @@ Each question keeps the failure contract its callers already had:
   changed_files(root)   raw `ls-files -z` bytes, or None
   is_ancestor(root,a,b) bool; unknown is False
   resolve_commit(root,s) full sha of an existing commit, or '' (missing, ambiguous, unknown)
+  commits_between(root,base,ref) [(sha, [Ticket trailer values])] newest first, or None
   position(root)        'branch@shortsha', or ''
   movement(root, sha)   (commits_since or None, dirty_count or None)
   tracked(path)         bool; RuntimeError('git-check-indeterminate') if unknown
@@ -62,6 +63,23 @@ class GitWorkspace:
         except (OSError, subprocess.SubprocessError):
             return ''
         return result.stdout.strip() if result.returncode == 0 else ''
+
+    def commits_between(self, root, base, ref):
+        fmt = '%H%x1e%(trailers:key=Ticket,valueonly,separator=%x1f)%x1d'
+        try:
+            result = self._git(root, ['log', '--format=' + fmt, '%s..%s' % (base, ref), '--'], 10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode:
+            return None
+        out = []
+        for record in result.stdout.split('\x1d'):
+            record = record.strip('\n')
+            if not record:
+                continue
+            sha, _, trailers = record.partition('\x1e')
+            out.append((sha, [t.strip() for t in trailers.strip().split('\x1f') if t.strip()]))
+        return out
 
     def position(self, root):
         try:
@@ -133,7 +151,8 @@ class MemoryWorkspace:
     from a dict answers like a directory Git cannot read."""
 
     def __init__(self, heads=None, branches=None, status=None, changed=None, ancestry=(),
-                 counts=None, tracked=None, common=None, commits=None, refs=None):
+                 counts=None, tracked=None, common=None, commits=None, refs=None,
+                 history=None):
         self.heads = dict(heads or {})        # root -> full sha
         self.branches = dict(branches or {})  # root -> branch name
         self.status = dict(status or {})      # root -> porcelain text
@@ -144,6 +163,7 @@ class MemoryWorkspace:
         self.common = dict(common or {})      # worktree -> (gitdir, common) or OSError message
         self.commits = dict(commits or {})    # root -> [full shas]
         self.refs = dict(refs or {})          # root -> {ref name or tag sha: commit it peels to}
+        self.history = dict(history or {})    # (root, base, ref) -> [(sha, [Ticket values])]
 
     def snapshot(self, root):
         if root not in self.status:
@@ -164,6 +184,10 @@ class MemoryWorkspace:
             return self.refs[root][sha]
         found = [c for c in self.commits.get(root, ()) if c.startswith(sha)]
         return found[0] if len(found) == 1 else ''
+
+    def commits_between(self, root, base, ref):
+        listed = self.history.get((root, base, ref))
+        return None if listed is None else [(sha, list(values)) for sha, values in listed]
 
     def position(self, root):
         sha = self.heads.get(root, '')[:7]
@@ -224,6 +248,10 @@ def is_ancestor(root, old, new):
 
 def resolve_commit(root, sha):
     return _active.resolve_commit(root, sha)
+
+
+def commits_between(root, base, ref):
+    return _active.commits_between(root, base, ref)
 
 
 def position(root):

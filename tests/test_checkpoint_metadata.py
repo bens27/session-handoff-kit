@@ -16,7 +16,7 @@ import handoff_contract  # noqa: E402
 BODY = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun the parser checks.\n'
 TICKET = '6cf33871-1ff9-4d27-a175-a869d775ee84'
 CLEARED = ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID', 'HANDOFF_AUTO',
-           'HANDOFF_RUN_ID', 'TMUX_PANE', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME')
+           'HANDOFF_RUN_ID', 'TMUX_PANE', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME', 'AGENTSROOM_MCP_SESSION')
 
 
 class CheckpointMetadataTests(unittest.TestCase):
@@ -180,6 +180,43 @@ class CheckpointMetadataTests(unittest.TestCase):
         fm = dict(ticket=TICKET, base='a' * 40, role='backend')
         self.assertEqual(handoff_contract.checkpoint_metadata(fm), fm)
         self.assertEqual(handoff_contract.checkpoint_metadata(dict(ticket='#95', base='HEAD', role='Back End')), {})
+
+
+    def test_resume_reports_git_only_staleness_when_backlog_is_offline(self):
+        head = self.init_repo()
+        out = self.save(ticket=TICKET, base=head)[1]
+        self.git('commit', '-q', '--allow-empty', '-m', 'landed\n\nTicket: ' + TICKET)
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        code, resumed = self.run_cli('resume', out['path'], '--session', 's2')
+        self.assertEqual((code, resumed['outcome']), (0, 'resumed'), resumed)
+        verdict = resumed['staleness']
+        self.assertEqual((verdict['verdict'], verdict['source']), ('progressed', 'git-only'), verdict)
+        self.assertIn('AGENTSROOM_MCP_SESSION', verdict['backlog'])
+        self.assertTrue(verdict['reason'])
+        self.assertTrue(resumed['action'].startswith('Staleness progressed (git-only): '), resumed['action'])
+
+    def test_resume_reports_backlog_staleness_and_never_prints_the_token(self):
+        from test_mcp_client import FakeServer
+        server = FakeServer(tasks={TICKET: {'status': 'done'}})
+        self.addCleanup(server.close)
+        token = 'tok-' + 'z' * 20
+        (self.root / '.mcp.json').write_text(json.dumps({'mcpServers': {'AgentsRoom-MCP': {'url': server.url}}}))
+        head = self.init_repo()
+        out = self.save(ticket=TICKET, base=head)[1]
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.env['AGENTSROOM_MCP_SESSION'] = token
+        p = subprocess.run([sys.executable, str(LEDGER), 'resume', out['path'], '--session', 's2'], cwd=self.root,
+                           env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertNotIn(token, p.stdout + p.stderr)
+        resumed = json.loads(p.stdout)
+        self.assertEqual(resumed['outcome'], 'resumed', resumed)
+        self.assertEqual((resumed['staleness']['verdict'], resumed['staleness']['source']),
+                         ('superseded', 'git+backlog'), resumed['staleness'])
+
+    def test_resume_without_metadata_is_unclassified(self):
+        out = self.save()[1]
+        resumed = self.run_cli('resume', out['path'], '--session', 's2')[1]
+        self.assertEqual(resumed['staleness']['verdict'], 'unclassified', resumed)
 
 
 if __name__ == '__main__':

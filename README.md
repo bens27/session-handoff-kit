@@ -614,6 +614,14 @@ python3 skills/session-handoff/hooks/handoff_ledger.py save --template
 python3 skills/session-handoff/hooks/handoff_ledger.py save --input draft.json
 ```
 
+A successful `resume` also returns a `staleness` verdict (`fresh`, `progressed`,
+`superseded`, `conflicting` or `unclassified`) with a one-line `reason`, built
+from the checkpoint's `ticket:`/`base:` lines, `Ticket:` trailers on the local
+`origin/main` and the ticket's AgentsRoom backlog state. Without
+`AGENTSROOM_MCP_SESSION` or a reachable app it is git-only (`source:
+"git-only"`) and the resume still succeeds; stale verdicts lead the `action`.
+Details: [docs/staleness-verdict.md](docs/staleness-verdict.md).
+
 `save --input -` reads the JSON draft from stdin, as does omitting `--input`
 unless `--topic` or `--body` supplies the draft.
 

@@ -217,5 +217,30 @@ class RealGitContract(unittest.TestCase):
             self.assertFalse(real.tracked(os.path.join(outside, 'x')))
 
 
+    def test_commits_between_reads_ticket_trailers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.realpath(tmp)
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+            def git(*args):
+                return subprocess.run(['git', '-C', root] + list(args), env=env, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            real = GitWorkspace()
+            git('init', '-q', '-b', 'main')
+            git('commit', '-q', '--allow-empty', '-m', 'base')
+            base = git('rev-parse', 'HEAD')
+            git('commit', '-q', '--allow-empty', '-m', 'plain')
+            plain = git('rev-parse', 'HEAD')
+            git('commit', '-q', '--allow-empty', '-m', 'two\n\nTicket: abc12345\nTicket: def67890')
+            two = git('rev-parse', 'HEAD')
+            listed = real.commits_between(root, base, 'HEAD')
+            self.assertEqual(listed, [(two, ['abc12345', 'def67890']), (plain, [])])
+            self.assertEqual(real.commits_between(root, two, 'HEAD'), [])
+            self.assertIsNone(real.commits_between(root, 'f' * 40, 'HEAD'))
+            memory = MemoryWorkspace(history={(root, base, 'HEAD'): listed})
+            self.assertEqual(memory.commits_between(root, base, 'HEAD'), listed)
+            self.assertIsNone(memory.commits_between(root, two, 'HEAD'))
+
+
 if __name__ == '__main__':
     unittest.main()

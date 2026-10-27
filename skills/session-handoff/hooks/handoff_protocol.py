@@ -1603,6 +1603,28 @@ def delivered(root, path, session):
                 write_receipt(root, fm['resumed_by'], path, receipt)
 
 
+def staleness_verdict(root, path):
+    """The checkpoint's staleness verdict; never raises, so it can never fail a resume."""
+    try:
+        import handoff_mcp
+        import handoff_staleness
+        return handoff_staleness.classify(root, Record.load(path).fm, handoff_mcp.backlog_lookup(root))
+    except Exception as exc:
+        return dict(verdict='unclassified', source='none', reason='staleness check failed (%s)' % type(exc).__name__)
+
+
+STALE_VERDICTS = ('progressed', 'superseded', 'conflicting')
+
+
+def attach_staleness(root, result):
+    """Add the verdict; a stale one also leads the action so a successor cannot miss it."""
+    verdict = result['staleness'] = staleness_verdict(root, result['path'])
+    if verdict.get('verdict') in STALE_VERDICTS:
+        result['action'] = 'Staleness %s (%s): %s; reconcile before continuing. %s' % (
+            verdict['verdict'], verdict.get('source', ''), verdict.get('reason', ''), result.get('action', ''))
+    return result
+
+
 def replay_transfer(root, session, target):
     resolved = ledger.resolve(target, root)
     path = resolved.get('authoritative')
@@ -1675,6 +1697,8 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         return dict(outcome='none', action='No handoff matches %r. Use lookup to inspect and explicitly select other saved work; native conversation recovery is independent.' % target[:200])
     replay = replay_transfer(root, session, target)
     if replay:
+        if replay.get('outcome') == 'resumed':
+            attach_staleness(root, replay)  # outside the ledger lock: may hit the network
         return replay
     if not confirm_verify:
         # Untrusted verify commands are refused before any claim, so nothing is left to release.
@@ -1726,6 +1750,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         result['withheld_references'] = prepared['withheld_references']
     if 'warnings' in prepared:
         result['warnings'] = prepared['warnings']
+    attach_staleness(root, result)
     output_bytes = len(json.dumps(result, ensure_ascii=False).encode())
     if output_bytes > budget:
         result.setdefault('warnings', []).append(
