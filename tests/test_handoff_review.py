@@ -92,6 +92,14 @@ class CheckpointReviewTests(unittest.TestCase):
         self.assertEqual(resumed['reviewed'], 'accept')
         self.assertEqual(review.read_review(self.path)['reviewed'], 'accept')
 
+    def test_raw_verdict_is_caller_evidence_through_record_read_and_resume(self):
+        recorded = self.record(native_review='accept')
+        self.assertEqual(recorded['source'], 'caller')
+        self.assertEqual(review.read_review(self.path)['source'], 'caller')
+        resumed = self.protocol.resume(str(self.root), 'successor', str(self.path))
+        self.assertEqual(resumed['reviewed'], 'accept')
+        self.assertEqual(resumed['review']['source'], 'caller')
+
     def test_reject_and_explicit_none_replace_earlier_observations(self):
         self.record(native_review='accept')
         self.record(native_review='reject', tags=['review:accept'])
@@ -128,16 +136,18 @@ class CheckpointReviewTests(unittest.TestCase):
         import json
         import subprocess
         command = [sys.executable, str(HOOKS / 'handoff_ledger.py'), 'review', str(self.path)]
-        observed = {'fingerprint': self.fingerprint, 'tags': ['review:reject'], 'ticket_id': 'ticket-1'}
+        observed = {'fingerprint': self.fingerprint, 'native_review': 'reject', 'ticket_id': 'ticket-1'}
         run = subprocess.run(command + ['--input', '-'], input=json.dumps(observed),
                              capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
         self.assertEqual(json.loads(run.stdout)['reviewed'], 'reject')
+        self.assertEqual(json.loads(run.stdout)['source'], 'caller')
         sidecar = Path(str(self.path) + '.review')
         before = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
         read = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(read.returncode, 0, read.stderr)
         self.assertEqual(json.loads(read.stdout)['reviewed'], 'reject')
+        self.assertEqual(json.loads(read.stdout)['source'], 'caller')
         self.assertEqual((sidecar.read_bytes(), sidecar.stat().st_mtime_ns), before)
         bad = subprocess.run(command + ['--input', '-'], input='{"native_review":"accept"}',
                              capture_output=True, text=True)
@@ -150,7 +160,7 @@ class CheckpointReviewTests(unittest.TestCase):
         self.record(tags=['review:accept'])
         sidecar = Path(str(self.path) + '.review')
         valid = json.loads(sidecar.read_text())
-        for changed in [dict(valid, source='none'), dict(valid, source='conflicting-tags'),
+        for changed in [dict(valid, source='native'), dict(valid, source='none'), dict(valid, source='conflicting-tags'),
                         dict(valid, version=True), dict(valid, recorded_at='not-a-date'),
                         dict(valid, ticket_id='x' * 201), dict(valid, checkpoint_id='another')]:
             with self.subTest(changed=changed):

@@ -553,6 +553,8 @@ records one against the exact fingerprint observed during review. The stdlib
 exact `review:accept|reject` tags second, and `none` otherwise. Isolated ticket
 status or reviewer/submitter IDs never prove a review; a native transition must
 be observed, with newly appended reviewer feedback required for rejection.
+Raw verdicts passed to recording are labelled `caller`, never `native`; read
+and resume preserve this provenance. Legacy `native` sidecars are invalid.
 Contradictory fallback tags yield `none`. Evidence lives in a versioned `.review`
 sidecar, bound to checkpoint ID and content fingerprint; no header changes or
 ticket writes occur. Changed content, malformed evidence and absent records

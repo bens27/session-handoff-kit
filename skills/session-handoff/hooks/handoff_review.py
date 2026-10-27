@@ -52,6 +52,7 @@ def record_review(path, *, fingerprint, native_review=None, tags=(), ticket_id=N
 
     The caller supplies the fingerprint observed during review. The sidecar is
     independent of publication/claim state and never changes the header.
+    Raw native_review values are caller assertions, not observed transitions.
     """
     import os
     from datetime import datetime, timezone
@@ -60,6 +61,8 @@ def record_review(path, *, fingerprint, native_review=None, tags=(), ticket_id=N
     from handoff_record import Record, content_fingerprint
 
     result = resolve_review(native_review=native_review, tags=tags)
+    if native_review is not None:
+        result['source'] = 'caller'
     if ticket_id is not None and (not isinstance(ticket_id, str) or not ticket_id or len(ticket_id) > 200):
         raise ValueError('ticket_id must be a nonempty string of at most 200 characters')
     path = os.fspath(path)
@@ -100,7 +103,7 @@ def read_review(path):
         stored = json.loads(raw)
         if (not isinstance(stored, dict) or type(stored.get('version')) is not int or stored['version'] != 1
                 or stored.get('reviewed') not in VERDICTS
-                or stored.get('source') not in ('native', 'tag', 'none', 'conflicting-tags')
+                or stored.get('source') not in ('caller', 'tag', 'none', 'conflicting-tags')
                 or not isinstance(stored.get('recorded_at'), str)
                 or (stored.get('ticket_id') is not None and (not isinstance(stored['ticket_id'], str)
                     or not 1 <= len(stored['ticket_id']) <= 200))

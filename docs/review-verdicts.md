@@ -71,11 +71,16 @@ python3 skills/session-handoff/hooks/handoff_ledger.py review PATH --input verdi
 ```
 
 `native_review` accepts `accept`, `reject`, `none`, or JSON `null`. Omit it to
-use tags. `ticket_id` is optional; recording does not mutate the ticket. To
-record a native adapter result, supply its `reviewed` value as `native_review`
-**only if its source is `native`**. Otherwise retain the fallback labels; do
-not relabel tag evidence as native. Re-record `native_review: "none"` to clear
-an earlier observation, or record a new rejection/acceptance.
+use tags. `ticket_id` is optional; recording does not mutate the ticket.
+Raw `native_review` values are saved with source `caller`, including values
+copied from `ticket_review`: the recording layer has no transition evidence
+with which to establish native provenance. Read, prepare, resume and replay
+preserve this distinction. The pure `ticket_review` adapter can report `native`
+for supplied transition snapshots; that does not authenticate a persisted
+caller assertion. Older sidecars labelled `native` are treated as invalid;
+re-record the observation to obtain explicit caller provenance.
+Re-record `native_review: "none"` to clear an earlier observation, even if older
+fallback tags remain, or record a new rejection/acceptance.
 
 The Python equivalents are `record_review(path, fingerprint=..., native_review=...,
 tags=..., ticket_id=...)` and read-only `read_review(path)`. Record returns the
