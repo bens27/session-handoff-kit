@@ -40,7 +40,8 @@ release, then inspect an isolated Claude settings file: PreToolUse and Stop
 must include `python3 -I -B .../hooks/mandatory_gate.py` at that exact release.
 Preserve foreign hooks and approve native trust normally. Project configuration
 then needs `handoff_v3: true` and a positive `mandatory_at_tokens`; timing can
-come from the user thresholds file, with project overrides. A reported window
+come from the user thresholds file, with project overrides; the mandatory point
+is file-only, with no environment override. A reported window
 must leave the configured reserve; an assumed Claude window is not verified.
 
 On denial, use builtin reads/user decisions or the exact printed save command

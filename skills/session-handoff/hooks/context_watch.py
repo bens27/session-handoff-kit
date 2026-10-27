@@ -194,7 +194,8 @@ def auto_mode_on():
     an explicit HANDOFF_AUTO=0 or "auto": false always wins."""
     if globals().get('_V3_INVALID', False):
         return False
-    cwd = (_EVT or {}).get('cwd') or os.getcwd()
+    import mandatory_gate
+    cwd = mandatory_gate.project_root((_EVT or {}).get('cwd') or os.getcwd())
     v3_enabled = False
     try:
         with open(os.path.join(cwd, '.context-watch.json'), encoding='utf-8') as stream:
@@ -1509,6 +1510,8 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
 def mandatory_status(evt, agent, cwd, model, window, window_source):
     """Diagnostics only; supported Claude enforcement lives in the sealed gate."""
     global _DIAG, _V3_INVALID
+    import mandatory_gate
+    cwd = mandatory_gate.project_root(cwd)
     try:
         with open(os.path.join(cwd, '.context-watch.json'), encoding='utf-8') as stream:
             project = json.load(stream)

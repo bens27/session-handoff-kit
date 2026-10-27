@@ -16,6 +16,24 @@ import sys
 RECOVERY_TOOLS = frozenset(('Read', 'Glob', 'Grep', 'TaskGet', 'TaskList', 'AskUserQuestion'))
 
 
+def project_root(cwd):
+    """Stdlib bootstrap discovery, without importing code from a project tree.
+
+    Established ledger/Git boundaries take precedence; a config identifies an
+    otherwise uninitialised project. Never cross HOME or a linked worktree.
+    """
+    start = Path(cwd).resolve()
+    home, configured = Path.home().resolve(), None
+    for folder in (start, *start.parents):
+        if (folder / '.handoffs').is_dir():
+            return str(folder)
+        if configured is None and (folder / '.context-watch.json').is_file():
+            configured = folder
+        if (folder / '.git').exists() or folder == home:
+            return str(configured or folder)
+    return str(configured or start)
+
+
 def timing(project, cwd, cw, model, window):
     """Timing only: no project setting grants continuation or skill activation."""
     global_path = Path.home() / '.context-watch/thresholds.json'
@@ -209,11 +227,72 @@ def enforce(evt, folder, cw, point, source, warning, lead_source, usage):
             print(json.dumps(result))
 
 
+def obligation_observed(evt, project, cwd):
+    """Error-path evidence only; never import a runtime that failed validation.
+
+    A healthy path uses the watcher's complete observation/timing validation.
+    Here only a persisted trigger or fresh, measured Claude usage may deny work.
+    """
+    try:
+        session = str(evt.get('session_id') or '').strip()
+        if not session and evt.get('transcript_path'):
+            session = 't-' + hashlib.sha1(str(evt['transcript_path']).encode()).hexdigest()[:16]
+        if session:
+            with gate_state(cwd, session) as stream:
+                state = json.loads(stream.read() or '{}')
+                if state.get('trigger'):
+                    return True
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        user = json.loads((Path.home() / '.context-watch/thresholds.json').read_text())
+    except (OSError, ValueError):
+        user = {}
+    point = project.get('mandatory_at_tokens', user.get('mandatory_at_tokens') if isinstance(user, dict) else None)
+    if type(point) is not int or point <= 0:
+        return False
+    try:
+        from datetime import datetime, timezone
+        with open(evt.get('transcript_path') or '', 'rb') as stream:
+            if os.fstat(stream.fileno()).st_size > 2_000_000:
+                stream.seek(-2_000_000, os.SEEK_END)
+                stream.readline()
+            usage, timestamp = None, None
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or row.get('isSidechain'):
+                    continue
+                if (row.get('type') == 'system' and row.get('subtype') == 'compact_boundary') or row.get('isCompactSummary'):
+                    usage, timestamp = None, None
+                    continue
+                message = row.get('message')
+                candidate = message.get('usage') if isinstance(message, dict) else None
+                if isinstance(candidate, dict) and 'input_tokens' in candidate:
+                    usage, timestamp = candidate, row.get('timestamp')
+        if not usage:
+            return False
+        if timestamp:
+            dt = datetime.fromisoformat(str(timestamp).replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - dt).total_seconds() > 600:
+                return False
+        tokens = [usage.get(key) or 0 for key in ('input_tokens', 'cache_creation_input_tokens',
+                  'cache_read_input_tokens', 'output_tokens')]
+        return all(type(n) is int and n >= 0 for n in tokens) and sum(tokens) >= point
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def main():
     if os.environ.get('CONTEXT_WATCH_DISABLE') == '1':
         return
     evt = json.load(sys.stdin)
-    cwd = evt.get('cwd') or os.getcwd()
+    cwd = project_root(evt.get('cwd') or os.getcwd())
+    evt = dict(evt, cwd=cwd)
     try:
         project = json.loads((Path(cwd) / '.context-watch.json').read_text())
     except (OSError, ValueError):
@@ -240,13 +319,14 @@ def main():
         try:
             point, source, warning, lead_source = timing(project, cwd, cw, model, evt.get('context_window'))
         except ValueError as exc:
-            print(json.dumps({'systemMessage': 'handoff-status: invalid mandatory configuration: %s; '
-                              'automatic v3 transitions disabled.' % exc}))
+            if cw.claim_once(evt, '.mandatory-config'):
+                print(json.dumps({'systemMessage': 'handoff-status: invalid mandatory configuration: %s; '
+                                  'automatic v3 transitions disabled.' % exc}))
             return
         if point is not None:
             enforce(evt, folder, cw, point, source, warning, lead_source, usage)
     except Exception as exc:
-        output('recovery' if recovery_save else event,
+        output(event if not recovery_save and obligation_observed(evt, project, cwd) else 'recovery',
                'mandatory-state-error: %s; report the blocker.' % type(exc).__name__)
 
 

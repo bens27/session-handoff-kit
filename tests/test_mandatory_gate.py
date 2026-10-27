@@ -101,11 +101,11 @@ class MandatoryGate(unittest.TestCase):
         for point in (True, 0, -1, '140000', 90000, 190000):
             with self.subTest(point=point):
                 self.config(mandatory_at_tokens=point)
-                result = self.gate(context_window=200000)
+                result = self.gate(context_window=200000, session_id='invalid-' + str(point))
                 self.assertIn('mandatory_at_tokens', result['systemMessage'])
                 self.assertNotIn('hookSpecificOutput', result)
         self.config(warning_window_tokens=-1)
-        self.assertIn('warning_window_tokens', self.gate()['systemMessage'])
+        self.assertIn('warning_window_tokens', self.gate(session_id='invalid-warning')['systemMessage'])
 
     def test_no_opt_in_or_null_point_is_quiet_without_telemetry(self):
         self.transcript.unlink()
@@ -153,6 +153,83 @@ class MandatoryGate(unittest.TestCase):
             self.assertTrue(any(' -I -B ' in c and 'mandatory_gate.py' in c for c in commands))
         self.cli('activate', release['release'], 'codex')
         self.assertNotIn('mandatory_gate.py', (self.base / 'codex/hooks.json').read_text())
+
+    def test_invalid_configuration_diagnostic_is_once_per_session(self):
+        self.config(mandatory_at_tokens=-1)
+        self.assertIn('invalid mandatory configuration', self.gate()['systemMessage'])
+        self.assertEqual(self.gate(), {})
+        self.assertEqual(self.gate(event='Stop'), {})
+
+    def test_subdirectory_uses_project_config_state_and_auto_authority(self):
+        self.config(auto=True)
+        (self.project / '.handoffs').mkdir()
+        child = self.project / 'pkg'
+        child.mkdir()
+        self.env.pop('HANDOFF_AUTO')
+        denied = self.gate(cwd=str(child))
+        self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.transcript.unlink()
+        self.assertEqual(self.gate()['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(self.gate(cwd=str(child))['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_runtime_failure_denies_only_observed_obligations(self):
+        self.config()
+        self.gate(tool='Read')  # Create a release without creating an obligation.
+        (self.snapshot / 'hooks/context_watch.py').chmod(0o600)
+        result = self.gate()
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        for rows in (
+            [{'message': {'usage': {'input_tokens': 10000}}}],
+            [{'timestamp': '2000-01-01T00:00:00Z', 'message': {'usage': {'input_tokens': 140000}}}],
+            [{'message': {'usage': {'input_tokens': 140000}}}, {'type': 'system', 'subtype': 'compact_boundary'}],
+            [{'isSidechain': True, 'message': {'usage': {'input_tokens': 140000}}}],
+        ):
+            with self.subTest(rows=rows):
+                self.transcript.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+                self.assertNotIn('hookSpecificOutput', self.gate())
+
+    def test_runtime_failure_preserves_latched_obligation_below_point(self):
+        self.config()
+        self.assertEqual(self.gate()['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.transcript.write_text(json.dumps({'message': {'usage': {'input_tokens': 10000}}}) + '\n')
+        (self.snapshot / 'hooks/context_watch.py').chmod(0o600)
+        self.assertEqual(self.gate()['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_runtime_failure_preserves_transcript_identity_latch(self):
+        self.config()
+        self.assertEqual(self.gate(session_id='')['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.transcript.write_text(json.dumps({'message': {'usage': {'input_tokens': 10000}}}) + '\n')
+        (self.snapshot / 'hooks/context_watch.py').chmod(0o600)
+        self.assertEqual(self.gate(session_id='')['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_watcher_subdirectory_obeys_project_auto_disable(self):
+        self.config(auto=False)
+        (self.project / '.handoffs').mkdir()
+        child = self.project / 'pkg'
+        child.mkdir()
+        self.env.pop('HANDOFF_AUTO')
+        user = Path(self.env['HOME']) / '.context-watch/thresholds.json'
+        user.parent.mkdir()
+        user.write_text('{"auto":true}')
+        rows = [{'message': {'model': 'claude-test', 'usage': {'input_tokens': n}}}
+                for n in (1000, 140000)]
+        self.transcript.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+        result = subprocess.run([sys.executable, str(self.source / 'hooks/context_watch.py')],
+            cwd=child, env=self.env, input=json.dumps(dict(hook_event_name='PostToolUse',
+                session_id='child-watcher', cwd=str(child), transcript_path=str(self.transcript))),
+            text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('Fully automatic mode is active', result.stdout)
+        self.assertIn('mandatory-unenforced', result.stdout)
+
+    def test_runtime_failure_before_obligation_is_diagnostic_only(self):
+        self.config()
+        self.transcript.write_text(json.dumps({'message': {'usage': {'input_tokens': 10000}}}) + '\n')
+        self.assertEqual(self.gate(), {})
+        (self.snapshot / 'hooks/context_watch.py').chmod(0o600)
+        result = self.gate()
+        self.assertNotIn('hookSpecificOutput', result)
+        self.assertIn('mandatory-state-error', result['systemMessage'])
 
     def test_unsealed_runtime_fails_closed_but_reads_remain_available(self):
         self.config()

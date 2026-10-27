@@ -464,8 +464,8 @@ malformed value turns automatic selection off and reports it. The body is
 delivered once: a later restart prompt for the same session answers
 `already-delivered`.
 
-`"mandatory_at_tokens"` (positive integer or `null`, default `null`) enables a
-save obligation for a project with `"handoff_v3": true`. Project values override
+`"mandatory_at_tokens"` is file-only (no environment override). A positive
+integer creates a save obligation for a project with `"handoff_v3": true`; `null` (default) disables it. Project values override
 `~/.context-watch/thresholds.json`; a project `null` disables the gate even when
 the user file sets a point. The point must be at or above the warning point and,
 when the host reports its window, at or below window minus reserve. Invalid
@@ -493,7 +493,8 @@ project-local auto setting cannot grant continuation through the save result.
 The obligation remains latched until a trusted publication matches its session
 and trigger. A normal Stop asks for publication; recursive Stop, lack of save
 progress, or two blocked Stop attempts permits reporting a human blocker and
-the checkpoint text. Reads and user decisions remain available on state errors;
+the checkpoint text. Runtime/state failures below the point without a latched obligation report a
+diagnostic and allow work. Reads and user decisions remain available on state errors;
 an exact save command remains available when gate state is damaged. Publication
 releases only the save gate, preserving restart holds. Missing/stale telemetry
 reports enforcement unavailable without inventing occupancy; a previously
