@@ -475,7 +475,7 @@ with patch('time.time', return_value=float(sys.argv[2])):
         self.assertIn('## Next steps', result['body'])
 
     def test_project_auto_setting_never_enables_restart(self):
-        # "auto" is user-scope only: a repository's .context-watch.json cannot
+        # "auto" is disable-only: a repository's .context-watch.json cannot
         # override the user's "auto": false into an AgentsRoom restart.
         self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
         os.makedirs(os.path.join(self.tmp.name, '.context-watch'))
@@ -486,6 +486,40 @@ with patch('time.time', return_value=float(sys.argv[2])):
         saved = json.loads(self.save().stdout)
         self.assertNotIn('agents_restart', json.dumps(saved['transition']))
         self.assertFalse(saved['transition'].get('requires_preflight'))
+
+    def write_auto_config(self, user=None, project=None):
+        if user is not None:
+            os.makedirs(os.path.join(self.tmp.name, '.context-watch'), exist_ok=True)
+            with open(os.path.join(self.tmp.name, '.context-watch', 'thresholds.json'), 'w') as f:
+                json.dump(user, f)
+        if project is not None:
+            with open(os.path.join(self.root, '.context-watch.json'), 'w') as f:
+                json.dump(project, f)
+
+    def test_project_auto_false_disables_user_auto_true(self):
+        # 'auto' is disable-only (#91 rule): a project may switch it off.
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        self.env.pop('HANDOFF_AUTO', None)
+        self.write_auto_config(user={'auto': True}, project={'auto': False})
+        saved = json.loads(self.save().stdout)
+        self.assertNotIn('agents_restart', json.dumps(saved['transition']))
+
+    def test_project_auto_true_never_grants_without_user(self):
+        self.env.pop('AGENTSROOM_AGENT_ID', None)
+        self.env.pop('HANDOFF_AUTO', None)
+        self.env['HANDOFF_RUN_ID'] = 'run-1'
+        self.write_auto_config(project={'auto': True})
+        saved = json.loads(self.save().stdout)
+        self.assertNotEqual(saved['transition'].get('kind'), 'runner', saved['transition'])
+
+    def test_invalid_v3_timing_turns_save_transition_auto_off(self):
+        # F2: like auto_mode_on, an invalid v3 timing config is auto-off.
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        self.env.pop('HANDOFF_AUTO', None)
+        self.write_auto_config(user={'auto': True},
+                               project={'handoff_v3': True, 'mandatory_at_tokens': -1})
+        saved = json.loads(self.save().stdout)
+        self.assertNotIn('agents_restart', json.dumps(saved['transition']))
 
     def test_restart_transition_requires_preflight_not_host_assertions(self):
         self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'

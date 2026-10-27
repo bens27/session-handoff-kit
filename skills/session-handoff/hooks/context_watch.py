@@ -196,29 +196,26 @@ def auto_mode_on():
         return False
     import mandatory_gate
     cwd = mandatory_gate.project_root((_EVT or {}).get('cwd') or os.getcwd())
-    v3_enabled = False
     try:
         with open(os.path.join(cwd, '.context-watch.json'), encoding='utf-8') as stream:
             project = json.load(stream)
-        if isinstance(project, dict) and project.get('handoff_v3') is True:
-            v3_enabled = True
-            import mandatory_gate
-            entries = load_transcript_tail((_EVT or {}).get('transcript_path') or '')
-            model = claude_usage(entries)[1]
-            mandatory_gate.timing(project, cwd, sys.modules[__name__], model,
-                                  (_EVT or {}).get('context_window'))
     except FileNotFoundError:
-        pass
+        project = {}
     except (OSError, ValueError):
-        if v3_enabled:
-            return False
-    if v3_enabled:
-        # Project data may disable continuation, never grant user authority.
-        return mandatory_gate.user_auto(project)
-    value = config_setting("HANDOFF_AUTO", "auto")
+        project = None
+    if not isinstance(project, dict):
+        project = {}
+    model = cw = None
+    if project.get('handoff_v3') is True:  # only v3 timing needs this module
+        model = claude_usage(load_transcript_tail((_EVT or {}).get('transcript_path') or ''))[1]
+        cw = sys.modules[__name__]
+    # One rule with the save transition: invalid v3 timing is off, HANDOFF_AUTO
+    # wins, a project may disable auto but never enable it.
+    value = mandatory_gate.auto_setting(project, cwd, cw, model,
+                                        (_EVT or {}).get('context_window'))
     if value is None:
         return bool(env("AGENTSROOM_AGENT_ID"))
-    return _truthy(value)
+    return value
 
 
 def auto_max(cwd=None):
@@ -776,7 +773,7 @@ def _parse_map(raw):
 
 
 SETTING_KEYS = {"auto": bool, "at": int, "auto_max": int}  # not model thresholds
-USER_ONLY_KEYS = ("auto",)  # never read from a project's .context-watch.json
+PROJECT_DISABLE_ONLY_KEYS = ("auto",)  # a project may disable, never enable (mandatory_gate.auto_setting)
 WARNING_WINDOW_KEY = "warning_window_tokens"  # advisory lead (23079574), never a model threshold
 
 
@@ -818,8 +815,8 @@ def _load_config_files(cwd, settings=False):
                              'resume_pointer_policy', 'activate_suggested_skills'}:
                         continue
                     if k in SETTING_KEYS:
-                        if k in USER_ONLY_KEYS and path != user_path:
-                            continue
+                        if k in PROJECT_DISABLE_ONLY_KEYS:
+                            continue  # decided by mandatory_gate.auto_setting only
                         if settings and type(v) is SETTING_KEYS[k]:
                             merged[k] = v
                     elif not settings and isinstance(v, int) and not isinstance(v, bool):
@@ -829,16 +826,19 @@ def _load_config_files(cwd, settings=False):
     return merged
 
 
-def project_sets_user_only_key(cwd):
-    """The user-only keys a project's .context-watch.json sets anyway (ignored)."""
+def project_enables_disable_only_key(cwd):
+    """Disable-only keys this project's .context-watch.json sets to true (ignored)."""
+    import mandatory_gate
     try:
-        with open(os.path.join(cwd or os.getcwd(), ".context-watch.json"), encoding="utf-8") as f:
+        with open(os.path.join(mandatory_gate.project_root(cwd or os.getcwd()), ".context-watch.json"),
+                  encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return []
     if not isinstance(data, dict):
         return []
-    return [k for k in USER_ONLY_KEYS if k in {str(key).strip().lower() for key in data}]
+    lowered = {str(key).strip().lower(): value for key, value in data.items()}
+    return [k for k in PROJECT_DISABLE_ONLY_KEYS if lowered.get(k) is True]
 
 
 def _best_model_match(table, model):
@@ -1613,10 +1613,11 @@ def main():
                  "warnings are off for this session until it is readable. Continue the current task." % TAIL_STATUS)
 
     if event_name in ("PostToolUse", "UserPromptSubmit") and not _DIAG:
-        ignored = project_sets_user_only_key(evt.get("cwd") or os.getcwd())
+        ignored = project_enables_disable_only_key(evt.get("cwd") or os.getcwd())
         if ignored and claim_once(evt, ".user-only-config"):
-            _DIAG = (event_name, "handoff-status: %s in this project's .context-watch.json is ignored: "
-                     "it is user-scope only (set it in ~/.context-watch/thresholds.json or HANDOFF_AUTO). "
+            _DIAG = (event_name, "handoff-status: %s: true in this project's .context-watch.json is ignored: "
+                     "a project may disable auto, never enable it (enable it in "
+                     "~/.context-watch/thresholds.json or HANDOFF_AUTO). "
                      "Continue the current task." % ", ".join('"%s"' % k for k in ignored))
 
     if event_name == "SessionStart":

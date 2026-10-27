@@ -105,7 +105,7 @@ class AutoSettingsFromConfig(Case):
             json.dump(data, f)
 
     def test_project_file_auto_is_ignored_and_reported_once(self):
-        # "auto" is user-scope only (Ben, 8ae43aa3): a repository cannot opt a
+        # "auto" is disable-only (Ben, #87 round 3): a repository cannot opt a
         # session into automatic restarts, and saying so once beats silence.
         self.project_config({"auto": True, "at": 70000})
         msg = self.pressure(75000)
@@ -113,12 +113,22 @@ class AutoSettingsFromConfig(Case):
         self.assertNotIn("Fully automatic", msg)
         self.assertNotIn("agents_restart", msg)
         self.assertIn("handoff-status:", msg)
-        self.assertIn("user-scope only", msg)
+        self.assertIn("never enable it", msg)
         evt = dict(hook_event_name="PostToolUse", session_id="cfg-%d" % self.n, cwd=self.project,
                    transcript_path=self.transcript)
         p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=self.env(),
                            cwd=self.project, capture_output=True, text=True, timeout=30)
-        self.assertNotIn("user-scope only", p.stdout)  # once per session
+        self.assertNotIn("never enable it", p.stdout)  # once per session
+
+    def test_project_file_auto_false_disables_user_auto(self):
+        os.makedirs(os.path.join(self.tmp, ".context-watch"))
+        with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
+            json.dump({"auto": True}, f)
+        self.project_config({"auto": False, "at": 70000})
+        msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
+        self.assertIn("70,000-token handoff threshold", msg)
+        self.assertNotIn("Fully automatic", msg)
+        self.assertNotIn("never enable it", msg)  # disabling is honoured, not reported
 
     def test_user_file_enables_auto_mode_at_the_project_threshold(self):
         os.makedirs(os.path.join(self.tmp, ".context-watch"))
@@ -128,7 +138,7 @@ class AutoSettingsFromConfig(Case):
         early = self.pressure(65000)  # at 70k: advisory point 40k, startup 1k
         self.assertIn("Early warning", early)
         self.assertNotIn("Publish with", early)
-        self.assertNotIn("user-scope only", early)
+        self.assertNotIn("never enable it", early)
         msg = self.pressure(75000, {"AGENTSROOM_AGENT_ID": "agent-x"})
         self.assertIn("70,000-token handoff threshold", msg)
         self.assertIn("Fully automatic mode is active", msg)

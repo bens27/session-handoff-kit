@@ -65,8 +65,20 @@ def timing(project, cwd, cw, model, window):
     return point, source, warning, lead_source
 
 
-def user_auto(project):
-    """Launch/user authority only. Project values can disable the user default."""
+def auto_setting(project, cwd=None, cw=None, model=None, window=None):
+    """The one 'auto' rule for the watcher and the save transition.
+
+    True/False when decided, None when nothing decides (the caller's default).
+    With handoff_v3 an invalid timing config is off (pass cw to check it) and
+    unset is off. HANDOFF_AUTO wins next; a project may disable auto, never
+    enable it; otherwise the user file decides.
+    """
+    v3 = project.get('handoff_v3') is True
+    if v3 and cw is not None:
+        try:
+            timing(project, cwd, cw, model, window)
+        except (OSError, ValueError):
+            return False
     explicit = os.environ.get('HANDOFF_AUTO', '').strip()
     if explicit:
         return explicit.lower() in ('1', 'true', 'yes', 'on')
@@ -74,9 +86,17 @@ def user_auto(project):
         return False
     try:
         user = json.loads((Path.home() / '.context-watch/thresholds.json').read_text())
-        return isinstance(user, dict) and user.get('auto') is True
     except (OSError, ValueError):
-        return False
+        user = {}
+    value = user.get('auto') if isinstance(user, dict) else None
+    if type(value) is bool:
+        return value
+    return False if v3 else None
+
+
+def user_auto(project):
+    """Launch/user authority only. Project values can disable the user default."""
+    return auto_setting(project) is True
 
 
 def save_command(folder, cwd, session):

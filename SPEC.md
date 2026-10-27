@@ -143,7 +143,7 @@ hook registration never installs it automatically.
 
 The public hook CLI is `python3 hooks/commit_ticket.py MESSAGE_FILE`. Existing
 valid final `Ticket:` trailer > `HANDOFF_TICKET_ID` > no attribution. The
-variable is the only automatic source; checkpoint `task_id`, latest handoffs,
+variable is the only automatic source; checkpoint `ticket`, latest handoffs,
 branch names and ledger scans are not attribution sources. Environment IDs use
 `handoff_contract.METADATA_FORMATS['ticket']` (full lowercase UUID or its 8-hex
 short ID). Existing trailer IDs retain `[A-Za-z0-9][A-Za-z0-9._/-]{0,127}` so
@@ -375,10 +375,13 @@ assumed 200k would clamp every 1M-context model to 180k.
 
 The config files also carry `"auto"`, `"at"` and `"auto_max"` (same meaning as
 `HANDOFF_AUTO`, `HANDOFF_AT`, `HANDOFF_AUTO_MAX`). Precedence: non-empty env,
-then project file, then user file, then default. `"auto"` is user-scope only:
-a project `.context-watch.json` never sets it (both the watcher and the save
-transition read only the user file), and the watcher reports a project file
-that sets it once per session with a `handoff-status:` diagnostic. Wrongly
+then project file, then user file, then default. `"auto"` is disable-only: a
+project `.context-watch.json` may set it to `false` to disable automatic
+continuation, never to `true` to enable it. The watcher and the save transition
+apply one rule (`mandatory_gate.auto_setting`): with `handoff_v3`, an invalid
+timing config is off; a non-empty `HANDOFF_AUTO` wins; project `false` disables;
+otherwise the user file decides. The watcher reports a project `"auto": true`
+once per session with a `handoff-status:` diagnostic. Wrongly
 typed values are ignored; these keys are never read as model thresholds.
 
 Config files are flat JSON; user-global loads first and project-local
@@ -1184,8 +1187,8 @@ CLI surface. The agent supplies reasoning and skill names; scripts own identity,
 metadata, publication, ledger, pointer and preflight. Telemetry is diagnostic.
 
 The request extends §7.3c with `draft`: required `topic`, `description`, `body`,
-`suggested_skills` (unique installed names; `[]` allowed); optional `task_id`,
-`predecessor`, `references`, `optional_references`, `continuity` and existing
+`suggested_skills` (unique installed names; `[]` allowed); optional `ticket`,
+`base`, `role`, `predecessor`, `references`, `optional_references`, `continuity` and existing
 required `skills`. Request ID remains in the dispatch envelope. Body retains
 Objective, Current state and Next steps, authorization, unresolved decisions,
 holds and completed effects. Existing validation, trusted inheritance and

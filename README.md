@@ -100,7 +100,7 @@ python3 ~/.agents/skills/session-handoff/install.py git-hook --project /path/to/
 The stdlib Python `hooks/commit_ticket.py MESSAGE_FILE` adds `Ticket: <id>`.
 Precedence is an existing valid trailer, then `HANDOFF_TICKET_ID`, then no
 attribution. Set the variable for the current commit or ticket-specific session;
-clear it when switching tasks. Checkpoint `task_id` is opaque and is **not**
+clear it when switching tasks. Checkpoint `ticket` metadata is **not**
 automatically read, and the hook never guesses from the newest handoff or branch.
 The environment ID uses `handoff_contract.METADATA_FORMATS['ticket']`: a full
 lowercase ticket UUID or its 8-hex short ID. Existing trailer IDs retain the
@@ -462,9 +462,10 @@ case-insensitive substring:
 The same config files also accept `"auto"` (bool, like `HANDOFF_AUTO`), `"at"`
 (int tokens, like `HANDOFF_AT`) and `"auto_max"` (int, like `HANDOFF_AUTO_MAX`).
 A non-empty environment variable wins, then the project file, then the user file.
-`"auto"` is user-scope only: it is read from `~/.context-watch/thresholds.json`
-alone, and a project file that sets it gets a one-time `handoff-status:` note
-saying it is ignored. Values of the wrong JSON type are ignored, and these keys
+`"auto"` is disable-only: a project file may set `"auto": false` to turn
+automatic continuation off, but never `true` to turn it on (enable it in
+`~/.context-watch/thresholds.json` or `HANDOFF_AUTO`). A project file that sets
+`"auto": true` gets a one-time `handoff-status:` note saying it is ignored. Values of the wrong JSON type are ignored, and these keys
 are never thresholds.
 
 `"warning_window_tokens"` (int, default `30000`, like `CONTEXT_WATCH_WARNING_WINDOW`)

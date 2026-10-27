@@ -480,6 +480,10 @@ with patch('time.time', return_value=stamp):
         self.assertEqual(out['outcome'], 'saved')
         self.assertEqual(out['transition']['kind'], 'paused', out['transition'])
         self.assertIn('invalid-timing', out['transition']['diagnostics']['pause_reasons'])
+        bad = out['transition']['diagnostics']['invalid_timing'][0]
+        self.assertTrue(bad['path'].endswith('.md'), bad)
+        self.assertIn(bad['path'], out['transition']['action'])
+        self.assertIn(bad['created'], out['transition']['action'])
         self.clock += 7200 + 3601  # timing valid again, outside the hour: restart allowed
         self.hook(140000, session='s3')
         self.assertEqual(self.save(session='s3')['transition']['kind'], 'agents_restart')

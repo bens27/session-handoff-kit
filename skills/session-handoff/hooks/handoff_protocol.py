@@ -494,13 +494,20 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
         reasons.append('rapid-resume')
     if pressure and len(same) >= 2:
         reasons.append('repeated-topic')
-    # Invalid-timing gate: a stamp this far in the future (clock moved back, or a
-    # malformed value) drops out of `recent`, so the budget and cooldown below
-    # would fail open. Distrust the timing and pause instead (#87 finding 1).
+    # Invalid-timing gate: a stamp more than `skew` in the future (clock moved
+    # back) drops out of `recent`, so the budget and cooldown below would fail
+    # open. Distrust the timing and pause instead (#87 finding 1). age() is inf
+    # for a malformed stamp, so only future stamps trip this; malformed ones
+    # never count as recent, as before.
     skew = 60
-    if os.environ.get('AGENTSROOM_AGENT_ID') and (
-            any(-age(r['fm'].get('created')) > skew for r in own)
-            or (elapsed is not None and elapsed < -skew)):
+    invalid_timing = []
+    if os.environ.get('AGENTSROOM_AGENT_ID'):
+        invalid_timing = [dict(path=r.get('path'), created=r['fm'].get('created'))
+                          for r in own if -age(r['fm'].get('created')) > skew]
+        if elapsed is not None and elapsed < -skew:
+            invalid_timing.append(dict(path=None, resumed_at=resumed_at if resumed_at is not None
+                                       else (last_transfer or {}).get('fm', {}).get('resumed')))
+    if invalid_timing:
         reasons.append('invalid-timing')
     if os.environ.get('AGENTSROOM_AGENT_ID') and len(intents) >= 5:
         reasons.append('restart-budget')
@@ -513,7 +520,7 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
     continuous = bool(topic) and topic in [t for t in topics if isinstance(t, str)]
     pause_reasons = [r for r in reasons if r in ('restart-budget', 'restart-cooldown', 'invalid-timing')
                      or (progress is not None and not progress['present'] and not continuous)]
-    return dict(reasons=reasons, pause_reasons=pause_reasons, continuous_topic=continuous, progress=progress, seconds_since_resume=round(elapsed) if elapsed is not None else None,
+    return dict(reasons=reasons, pause_reasons=pause_reasons, invalid_timing=invalid_timing, continuous_topic=continuous, progress=progress, seconds_since_resume=round(elapsed) if elapsed is not None else None,
                 topic_saves_30m=len(same), restart_intents_1h=len(intents),
                 startup_input_tokens=note.get('startup_input_tokens'),
                 observed_input_tokens=note.get('observed_input_tokens'),
@@ -522,22 +529,32 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
 
 def _transition(root, guard=None, path=None):
     """What ends this session after a save, deduced from the environment and config."""
-    if (os.environ.get('HANDOFF_AUTO') or '').strip():
-        auto = _truthy(os.environ.get('HANDOFF_AUTO'))
-    else:
-        # Unset means on inside AgentsRoom (its restart is safe and rate-limited by
-        # the app), off elsewhere; an explicit "auto": false always wins. User scope
-        # only: a repository's .context-watch.json cannot opt a session in or out.
-        setting = project_setting(root, 'auto', bool, user_only=True)
-        auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
+    # One rule with the watcher (mandatory_gate.auto_setting): an invalid v3
+    # timing config is off, HANDOFF_AUTO wins, a project may disable auto but
+    # never enable it. Unset means on inside AgentsRoom (its restart is safe and
+    # rate-limited by the app), off elsewhere.
+    import mandatory_gate
+    import context_watch
+    project_root = mandatory_gate.project_root(root)
+    try:
+        project = load_state_json(os.path.join(project_root, '.context-watch.json'))
+    except (OSError, ValueError):
+        project = {}
+    if not isinstance(project, dict):
+        project = {}
+    setting = mandatory_gate.auto_setting(project, project_root, context_watch)
+    auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
     if auto and guard and guard['pause_reasons']:
         return dict(kind='paused', diagnostics=guard, action=(
             'Automatic handoff paused: %s. The saved checkpoint remains open. '
             'Stop and report session thrashing with these diagnostics. After reducing re-entry context '
             'or waiting for the restart budget, start a fresh session and explicitly ask to '
             'continue the handoff. If a host restart is refused, keep this checkpoint open; '
-            'report the refusal and use the same manual continuation, without retrying the restart.'
-            % ', '.join(guard['pause_reasons'])))
+            'report the refusal and use the same manual continuation, without retrying the restart.%s'
+            % (', '.join(guard['pause_reasons']), ''.join(
+                ' Invalid timing: %s stamped %s (in the future).' % (
+                    t.get('path') or 'session note', t.get('created') or t.get('resumed_at'))
+                for t in guard.get('invalid_timing') or ()))))
     if auto and os.environ.get('AGENTSROOM_AGENT_ID'):
         return dict(kind='agents_restart', requires_preflight=True, action=(
             'Settle and inventory every worker you delegated (agents_spawned_list includeClosed:true, mailbox '
