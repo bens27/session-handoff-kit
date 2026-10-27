@@ -380,7 +380,10 @@ project `.context-watch.json` may set it to `false` to disable automatic
 continuation, never to `true` to enable it. The watcher and the save transition
 apply one rule (`mandatory_gate.auto_setting`): with `handoff_v3`, an invalid
 timing config is off; a non-empty `HANDOFF_AUTO` wins; project `false` disables;
-otherwise the user file decides. The watcher reports a project `"auto": true`
+otherwise the user file decides. Unset means on inside AgentsRoom and off
+elsewhere, except under `handoff_v3`, where an unset value is off, overriding
+the AgentsRoom default. Both judge v3 timing with the same inputs: the model
+and reported window the watcher recorded in the session note. The watcher reports a project `"auto": true`
 once per session with a `handoff-status:` diagnostic. Wrongly
 typed values are ignored; these keys are never read as model thresholds.
 

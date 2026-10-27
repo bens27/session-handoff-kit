@@ -465,7 +465,9 @@ A non-empty environment variable wins, then the project file, then the user file
 `"auto"` is disable-only: a project file may set `"auto": false` to turn
 automatic continuation off, but never `true` to turn it on (enable it in
 `~/.context-watch/thresholds.json` or `HANDOFF_AUTO`). A project file that sets
-`"auto": true` gets a one-time `handoff-status:` note saying it is ignored. Values of the wrong JSON type are ignored, and these keys
+`"auto": true` gets a one-time `handoff-status:` note saying it is ignored. Under
+`"handoff_v3": true`, an unset `"auto"` is off, even inside AgentsRoom, and an
+invalid mandatory timing configuration turns automatic continuation off. Values of the wrong JSON type are ignored, and these keys
 are never thresholds.
 
 `"warning_window_tokens"` (int, default `30000`, like `CONTEXT_WATCH_WARNING_WINDOW`)

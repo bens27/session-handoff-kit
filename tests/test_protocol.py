@@ -521,6 +521,38 @@ with patch('time.time', return_value=float(sys.argv[2])):
         saved = json.loads(self.save().stdout)
         self.assertNotIn('agents_restart', json.dumps(saved['transition']))
 
+    def write_session_note(self, session, **facts):
+        code = ('import json, sys, time; sys.path.insert(0, sys.argv[1]); import handoff_identity as i; '
+                'p = i.session_note_path(sys.argv[2], sys.argv[3]); '
+                'open(p, "w").write(json.dumps(dict(json.loads(sys.argv[4]), session_id=sys.argv[3], ts=time.time())))')
+        subprocess.run([sys.executable, '-c', code, str(LEDGER.parent), str(self.root), session, json.dumps(facts)],
+                       env=self.env, check=True)
+
+    def test_save_transition_uses_the_watchers_model_for_v3_timing(self):
+        # #87 r3 F1: the per-model threshold (160k) makes mandatory_at_tokens
+        # valid; the default (200k) would not. The watcher judged with the
+        # session's model, so the save transition must too.
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        self.env.pop('HANDOFF_AUTO', None)
+        self.write_auto_config(user={'auto': True}, project={
+            'handoff_v3': True, 'mandatory_at_tokens': 150000, 'default': 200000,
+            'claude-opus': 160000, 'warning_window_tokens': 20000})
+        self.write_session_note('one', model='claude-opus-5', window=None, window_source='assumed')
+        saved = json.loads(self.save().stdout)
+        self.assertEqual(saved['transition']['kind'], 'agents_restart', saved['transition'])
+
+    def test_invalid_v3_timing_off_text_names_the_cause(self):
+        # Without the watcher's model the default threshold applies: invalid.
+        self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
+        self.env.pop('HANDOFF_AUTO', None)
+        self.write_auto_config(user={'auto': True}, project={
+            'handoff_v3': True, 'mandatory_at_tokens': 150000, 'default': 200000,
+            'claude-opus': 160000, 'warning_window_tokens': 20000})
+        action = json.loads(self.save().stdout)['transition']['action']
+        self.assertIn('invalid mandatory configuration', action)
+        self.assertIn('below warning point', action)
+        self.assertNotIn('HANDOFF_AUTO=1', action)
+
     def test_restart_transition_requires_preflight_not_host_assertions(self):
         self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
         saved = json.loads(self.save().stdout)

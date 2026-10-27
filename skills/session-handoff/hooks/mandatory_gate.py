@@ -65,6 +65,22 @@ def timing(project, cwd, cw, model, window):
     return point, source, warning, lead_source
 
 
+def v3_inputs(model, window, window_source):
+    """The (model, window) every v3 timing verdict uses: a window counts only
+    when the host reported it. The watcher records these in the session note
+    so the save transition reaches the watcher's verdict (#87 r3 F1)."""
+    return model, window if window_source == 'reported' else None
+
+
+def timing_error(project, cwd, cw, model, window):
+    """timing()'s refusal as text, or None when the v3 timing config is valid."""
+    try:
+        timing(project, cwd, cw, model, window)
+    except (OSError, ValueError) as exc:
+        return str(exc) or exc.__class__.__name__
+    return None
+
+
 def auto_setting(project, cwd=None, cw=None, model=None, window=None):
     """The one 'auto' rule for the watcher and the save transition.
 
@@ -74,11 +90,8 @@ def auto_setting(project, cwd=None, cw=None, model=None, window=None):
     enable it; otherwise the user file decides.
     """
     v3 = project.get('handoff_v3') is True
-    if v3 and cw is not None:
-        try:
-            timing(project, cwd, cw, model, window)
-        except (OSError, ValueError):
-            return False
+    if v3 and cw is not None and timing_error(project, cwd, cw, model, window):
+        return False
     explicit = os.environ.get('HANDOFF_AUTO', '').strip()
     if explicit:
         return explicit.lower() in ('1', 'true', 'yes', 'on')

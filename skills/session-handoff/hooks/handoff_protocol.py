@@ -527,7 +527,7 @@ def restart_guard(root, session, topic=None, records=None, pressure=True, progre
                 resume_delivery_tokens=note.get('resume_delivery_tokens'))
 
 
-def _transition(root, guard=None, path=None):
+def _transition(root, guard=None, path=None, session=None):
     """What ends this session after a save, deduced from the environment and config."""
     # One rule with the watcher (mandatory_gate.auto_setting): an invalid v3
     # timing config is off, HANDOFF_AUTO wins, a project may disable auto but
@@ -542,7 +542,14 @@ def _transition(root, guard=None, path=None):
         project = {}
     if not isinstance(project, dict):
         project = {}
-    setting = mandatory_gate.auto_setting(project, project_root, context_watch)
+    # Same timing inputs as the watcher: the model/window it recorded for this
+    # session (mandatory_gate.v3_inputs); none recorded means none (#87 r3 F1).
+    note = ledger.read_session_note(root, session=session) if session else {}
+    model, window = mandatory_gate.v3_inputs(note.get('model'), note.get('window'),
+                                             note.get('window_source'))
+    timing_error = (mandatory_gate.timing_error(project, project_root, context_watch, model, window)
+                    if project.get('handoff_v3') is True else None)
+    setting = mandatory_gate.auto_setting(project, project_root, context_watch, model, window)
     auto = setting if setting is not None else bool(os.environ.get('AGENTSROOM_AGENT_ID'))
     if auto and guard and guard['pause_reasons']:
         return dict(kind='paused', diagnostics=guard, action=(
@@ -576,15 +583,22 @@ def _transition(root, guard=None, path=None):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
     if auto and os.environ.get('TMUX_PANE'):
         return dict(kind='tmux', action='Stop now; the Stop hook types /clear and resume into this pane.')
-    off = '' if auto else (' Automatic handoff is off: set "auto": true in ~/.context-watch/thresholds.json'
-                           ' (or HANDOFF_AUTO=1) to make the next save restart the session itself.')
+    if auto:
+        off = ''
+    elif timing_error:
+        off = (' Automatic handoff is off: invalid mandatory configuration in %s: %s. '
+               'Fix it to re-enable automatic continuation.'
+               % (os.path.join(project_root, '.context-watch.json'), timing_error))
+    else:
+        off = (' Automatic handoff is off: set "auto": true in ~/.context-watch/thresholds.json'
+               ' (or HANDOFF_AUTO=1) to make the next save restart the session itself.')
     if auto or _truthy(os.environ.get('AUTORESUME')) or _truthy(os.environ.get('CONTEXT_WATCH_AUTORESUME')):
         return dict(kind='clear', action='Tell the user to type /clear; the cleared session resumes this handoff.' + off)
     return dict(kind='new-session', action='Tell the user to start a new session in this project and ask it to resume.' + off)
 
 
-def transition(root, guard=None, path=None):
-    result = _transition(root, guard, path=path)
+def transition(root, guard=None, path=None, session=None):
+    result = _transition(root, guard, path=path, session=session)
     if guard and guard['reasons']:
         result['diagnostics'] = guard
         if not guard['pause_reasons']:
@@ -831,7 +845,7 @@ def save(root, session, request_id, document):
                     guard['pause_reasons'] = ledger._split_csv(record['record'].paused)
                     guard['reasons'] = list(dict.fromkeys(guard['reasons'] + guard['pause_reasons']))
                 next_transition = (dict(kind='none', action='Checkpoint is already transferred or closed; continue current work without restarting.')
-                                   if not record['record'].open_strict else transition(root, guard, path=record['path']))
+                                   if not record['record'].open_strict else transition(root, guard, path=record['path'], session=session))
                 return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
                             transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
         refusal, base = resolve_base(root, document.get('base', ''))
@@ -936,7 +950,7 @@ def save(root, session, request_id, document):
             if resumed:
                 progress = save_progress(root, fields, document['continuity'], resumed[-1]['fm'], baseline=True)
         guard = restart_guard(root, session, topic, records, pressure=fields['reason'] == 'context-pressure', progress=progress)
-        next_transition = transition(root, guard)
+        next_transition = transition(root, guard, session=session)
         fields['restart_intent'] = next_transition['kind']
         if next_transition['kind'] == 'paused':
             fields['automatic_paused'] = ', '.join(guard['pause_reasons'])
@@ -997,7 +1011,7 @@ def save(root, session, request_id, document):
                     excerpt = re.search(r'#L(\d+)-L(\d+)$', spec)
                     if excerpt and int(excerpt[2]) - int(excerpt[1]) + 1 > 80:
                         warnings.append('Required excerpt exceeds the recommended 80 lines: %s; keep necessary content and defer background to optional_references.' % spec)
-                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=transition(root, guard, path=path),
+                return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=transition(root, guard, path=path, session=session),
                             action='Checkpoint is published and discoverable; follow transition.action, then stop.')
             except OSError as exc:
                 if os.path.exists(path):

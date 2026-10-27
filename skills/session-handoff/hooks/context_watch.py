@@ -189,6 +189,9 @@ def config_setting(name, key, cwd=None):
     return None if value is None else str(value).lower()
 
 
+_V3_INPUTS = None  # (model, window) mandatory_status judged this event with
+
+
 def auto_mode_on():
     """Unset means on inside AgentsRoom (the tab restarts itself), off elsewhere;
     an explicit HANDOFF_AUTO=0 or "auto": false always wins."""
@@ -205,14 +208,17 @@ def auto_mode_on():
         project = None
     if not isinstance(project, dict):
         project = {}
-    model = cw = None
+    model = window = cw = None
     if project.get('handoff_v3') is True:  # only v3 timing needs this module
-        model = claude_usage(load_transcript_tail((_EVT or {}).get('transcript_path') or ''))[1]
         cw = sys.modules[__name__]
+        if _V3_INPUTS is not None:  # what mandatory_status judged, also in the session note
+            model, window = _V3_INPUTS
+        else:
+            model = claude_usage(load_transcript_tail((_EVT or {}).get('transcript_path') or ''))[1]
+            window = (_EVT or {}).get('context_window')
     # One rule with the save transition: invalid v3 timing is off, HANDOFF_AUTO
     # wins, a project may disable auto but never enable it.
-    value = mandatory_gate.auto_setting(project, cwd, cw, model,
-                                        (_EVT or {}).get('context_window'))
+    value = mandatory_gate.auto_setting(project, cwd, cw, model, window)
     if value is None:
         return bool(env("AGENTSROOM_AGENT_ID"))
     return value
@@ -816,7 +822,7 @@ def _load_config_files(cwd, settings=False):
                         continue
                     if k in SETTING_KEYS:
                         if k in PROJECT_DISABLE_ONLY_KEYS:
-                            continue  # decided by mandatory_gate.auto_setting only
+                            continue  # skipped in every file: mandatory_gate.auto_setting decides
                         if settings and type(v) is SETTING_KEYS[k]:
                             merged[k] = v
                     elif not settings and isinstance(v, int) and not isinstance(v, bool):
@@ -1525,7 +1531,7 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
 
 def mandatory_status(evt, agent, cwd, model, window, window_source):
     """Diagnostics only; supported Claude enforcement lives in the sealed gate."""
-    global _DIAG, _V3_INVALID
+    global _DIAG, _V3_INVALID, _V3_INPUTS
     import mandatory_gate
     cwd = mandatory_gate.project_root(cwd)
     try:
@@ -1535,10 +1541,9 @@ def mandatory_status(evt, agent, cwd, model, window, window_source):
         return
     if not isinstance(project, dict) or project.get('handoff_v3') is not True:
         return
-    import mandatory_gate
+    _V3_INPUTS = mandatory_gate.v3_inputs(model, window, window_source)
     try:
-        point, source, _, _ = mandatory_gate.timing(project, cwd, sys.modules[__name__], model,
-                                                   window if window_source == 'reported' else None)
+        point, source, _, _ = mandatory_gate.timing(project, cwd, sys.modules[__name__], *_V3_INPUTS)
     except ValueError as exc:
         _V3_INVALID = True
         message = 'invalid mandatory configuration: %s; automatic v3 transitions disabled.' % exc
