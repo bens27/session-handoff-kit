@@ -1,6 +1,7 @@
 """Ticket attribution through the commit-msg CLI and project installer."""
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -48,6 +49,23 @@ def test_invalid_or_missing_environment_id_never_blocks_or_changes_message(tmp_p
     for ticket in (None, '', 'bad ticket', 'a\nTicket: injected', 'é', 'x' * 129):
         result, message = run_hook(tmp_path, original, ticket=ticket)
         assert (result.returncode, message) == (0, original), result.stderr
+
+
+def test_invalid_environment_id_warns_once_without_echoing_untrusted_value(tmp_path):
+    original = 'Fix resume\n'
+    for ticket in ('PROJ-123', 'bad\nTicket: injected'):
+        result, message = run_hook(tmp_path, original, ticket=ticket)
+        assert (result.returncode, message) == (0, original)
+        assert len(result.stderr.splitlines()) == 1
+        assert 'HANDOFF_TICKET_ID' in result.stderr
+        assert 'lowercase ticket UUID' in result.stderr and '8-hex' in result.stderr
+        assert ticket not in result.stderr
+    for ticket in (None, ''):
+        result, message = run_hook(tmp_path, original, ticket=ticket)
+        assert (result.returncode, message, result.stderr) == (0, original, '')
+    existing = 'Fix\n\nTicket: PROJ-123\n'
+    result, message = run_hook(tmp_path, existing, ticket='invalid')
+    assert (result.returncode, message, result.stderr) == (0, existing, '')
 
 
 def test_only_final_trailers_count_and_new_ticket_precedes_git_comments(tmp_path):
@@ -198,8 +216,8 @@ def test_install_marker_allows_relocation_after_previous_release_is_removed(tmp_
     project = tmp_path / 'project'
     project.mkdir()
     assert git(project, 'init', '-q').returncode == 0
-    first = tmp_path / 'release-one'
-    second = tmp_path / 'release-two'
+    first = tmp_path / "release one's\nkit"
+    second = tmp_path / 'release two'
     for release in (first, second):
         release.mkdir()
         shutil.copy2(INSTALL, release / 'install.py')
@@ -212,7 +230,7 @@ def test_install_marker_allows_relocation_after_previous_release_is_removed(tmp_
                               capture_output=True, text=True, timeout=10)
     assert from_release(first).returncode == 0
     hook = project / '.git/hooks/commit-msg'
-    assert str(first).encode() in hook.read_bytes()
+    assert shlex.quote(str(first / 'hooks/commit_ticket.py')).encode() in hook.read_bytes()
     shutil.rmtree(first)
     result = from_release(second)
     assert result.returncode == 0, result.stderr
@@ -232,6 +250,28 @@ def test_install_marker_allows_relocation_after_previous_release_is_removed(tmp_
     assert from_release(first).returncode == 0
     result = from_release(second, '--uninstall')
     assert result.returncode == 0 and not hook.exists(), result.stderr
+
+
+def test_install_refuses_modified_wrappers_and_incidental_marker(tmp_path):
+    assert git(tmp_path, 'init', '-q').returncode == 0
+    assert install(tmp_path).returncode == 0
+    hook = tmp_path / '.git/hooks/commit-msg'
+    generated = hook.read_bytes()
+    foreign = (
+        b'#!/bin/sh\necho foreign\n# session-handoff Ticket hook\nexit 0\n',
+        generated.replace(b'#!/bin/sh', b'#!/bin/bash', 1),
+        generated.replace(b'# session-handoff Ticket hook\n', b'\n# session-handoff Ticket hook\n', 1),
+        generated.replace(b'    exec python3 ', b'    echo python3 ', 1),
+        generated + b'echo extra\n',
+        generated.replace(b' ]; then', b'; echo injected ]; then', 1),
+    )
+    for original in foreign:
+        hook.write_bytes(original)
+        for args in ((), ('--uninstall',)):
+            result = install(tmp_path, *args)
+            assert result.returncode != 0, result.stdout
+            assert 'left intact' in result.stderr
+            assert hook.read_bytes() == original
 
 
 def test_install_refuses_symlinked_parent_git_directory(tmp_path):
@@ -270,3 +310,16 @@ def test_environment_uses_shared_ticket_format_but_existing_trailers_remain_broa
     existing = 'Fix\n\nTicket: PROJ-123\n'
     result, message = run_hook(tmp_path, existing, ticket='invalid env')
     assert result.returncode == 0 and message == existing, result.stderr
+
+
+def test_auto_comment_candidates_allow_markdown_bullet_bodies(tmp_path):
+    assert git(tmp_path, 'init', '-q').returncode == 0
+    assert git(tmp_path, 'config', 'core.commentChar', 'auto').returncode == 0
+    path = tmp_path / 'COMMIT_EDITMSG'
+    original = 'Fix bullets\n\n- First item\n* Second item\n'
+    path.write_text(original)
+    result = subprocess.run([sys.executable, str(HOOK), str(path)], cwd=tmp_path,
+                            env=dict(os.environ, HANDOFF_TICKET_ID=TICKET),
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert path.read_text() == original + f'\nTicket: {TICKET}\n'

@@ -130,9 +130,13 @@ conversationally or by standing convention; file-ledger fallback checks run
 `install.py git-hook --project PATH [--uninstall]` explicitly installs/removes
 only a repository's default `commit-msg` wrapper. Linked worktrees share it.
 It changes no local/global Git configuration, refuses `core.hooksPath`, foreign
-hooks without the exact `# session-handoff Ticket hook` marker line, symlinked
+hooks that do not match the generated wrapper, symlinked
 hooks and parent `.git` directories. Regular linked-worktree `.git` files remain
-supported. Marker-owned wrappers can be reinstalled or removed from a different
+supported. Ownership requires `#!/bin/sh` on line one, the exact
+`# session-handoff Ticket hook` marker on line two, and the unchanged generated
+body with the same safely quoted absolute script path in both positions.
+An incidental marker or edited body does not confer ownership. Generated
+wrappers can be reinstalled or removed from a different
 kit path; rerun installation from the new path after moving the kit or before
 retiring an old runtime release. Runtime snapshots and standalone/plugin archives include `hooks/commit_ticket.py`, but ordinary host
 hook registration never installs it automatically.
@@ -149,13 +153,20 @@ multiple Ticket values return 1 with a diagnostic and no message mutation.
 Other trailer fields and body mentions are preserved. Git comments (single
 `core.commentChar`, default `#`) and scissors/diff content are excluded from
 validation and retained after an inserted trailer. With `core.commentChar=auto`,
-any ASCII punctuation-prefixed line triggers a quiet no-op (including validation):
-the actual editor-selected character is unknown, and real `#` body lines must
-remain intact. Unambiguous plain messages still receive attribution.
+a line starting with any Git auto candidate (`#;@!$%^&|:`) triggers a quiet no-op
+(including validation): the actual editor-selected character is unknown, and real `#` body lines must
+remain intact. Normal editor commits include Git's comment template, so they
+skip automatic attribution under `auto`. Messages from `-m` or `-F` with no
+candidate-prefixed lines still receive attribution, including Markdown `-` and
+`*` bullets. Use an explicit comment character or a manual trailer for editor
+commits.
 
 Missing/invalid environment IDs are nonblocking and do not change the message;
-empty messages remain empty. Existing valid attribution is never replaced by the
-environment. The stdlib-only hook reads no checkpoint/project code; the no-source,
+invalid nonempty IDs emit one diagnostic using the shared ticket format hint,
+without echoing the environment value. Missing IDs are quiet.
+Empty messages remain empty. Existing valid attribution is never replaced by the
+environment. The stdlib-only hook imports only shared format/hint tables from
+`handoff_contract`, not checkpoint or project executable code; the no-source,
 no-Ticket path only reads the commit message. A bounded Git config probe reads
 the comment character when needed. Missing Python/script makes the wrapper a
 no-op; I/O/encoding or missing contract-module failures warn and return 0.

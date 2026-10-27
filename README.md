@@ -111,20 +111,27 @@ The hook checks the final trailer paragraph, separated from the subject/body
 by a blank line, with case-insensitive `Ticket:` keys. Exactly one single-line
 ID is allowed when present. Empty, malformed, multiline or duplicate Ticket
 trailers reject the commit without editing its message. Missing or invalid
-environment IDs leave the message unchanged and never block a commit. Body
+environment IDs leave the message unchanged and never block a commit; invalid
+nonempty IDs emit one diagnostic with the expected format. Body
 mentions are not trailers. Other trailers, Git comments and scissors/diff content
 are preserved; `core.commentChar` is supported for a single configured character,
-with `#` as the default. With `auto`, any ASCII punctuation-prefixed line
-makes the comment character ambiguous, so the hook skips both insertion and
-validation without changing the message. Plain messages still get attribution.
+with `#` as the default. With `auto`, a line starting with any Git auto candidate
+(`#;@!$%^&|:`) makes the comment character ambiguous, so the hook skips insertion and
+validation without changing the message. Normal editor commits include Git's
+comment template and therefore skip automatic attribution under `auto`.
+Messages supplied with `-m` or `-F` can receive attribution when they have no
+candidate-prefixed lines; Markdown `-` and `*` bullets are supported. Configure
+an explicit comment character or add a trailer manually for editor commits.
 This preserves real `#` body lines when Git selected another comment character.
 Empty messages remain empty.
 
 Installation writes only the selected repository's default `commit-msg` hook;
 linked worktrees share this repository hook. No Git configuration is changed.
-Reinstall/uninstall is idempotent. The exact line `# session-handoff Ticket hook`
-marks a kit-owned wrapper, which may be replaced or removed from a new install
-path. Unmarked foreign hooks, symlinked hooks or parent `.git` directories, and
+Reinstall/uninstall is idempotent. Kit ownership requires the exact generated
+wrapper: `#!/bin/sh`, then `# session-handoff Ticket hook`, and the unchanged
+body with the same safely quoted absolute script path in both places. Such a
+wrapper may be replaced or removed from a new install path. Foreign or edited
+hooks (even with the marker), symlinked hooks or parent `.git` directories, and
 any configured `core.hooksPath` are refused without modification. Regular linked
 worktree `.git` indirection files remain supported. To compose with an
 existing hook, call `python3 /permanent/kit/hooks/commit_ticket.py "$1"` from that

@@ -509,6 +509,28 @@ def codex(uninstall):
     so the handoff fires before auto-compaction.""" % home)
 
 
+GIT_HOOK_TEMPLATE = ('#!/bin/sh\n# session-handoff Ticket hook\n'
+                     'if command -v python3 >/dev/null 2>&1 && [ -f {script} ]; then\n'
+                     '    exec python3 {script} "$@"\nfi\nexit 0\n')
+
+
+def is_generated_git_hook(content):
+    """Recognize our exact wrapper, allowing a safely quoted previous path."""
+    prefix, middle, suffix = GIT_HOOK_TEMPLATE.split('{script}')
+    pattern = (re.escape(prefix) + r'(?P<script>.+)' + re.escape(middle) +
+               r'(?P=script)' + re.escape(suffix))
+    try:
+        match = re.fullmatch(pattern, content.decode('utf-8'), re.DOTALL)
+        if not match:
+            return False
+        quoted = match.group('script')
+        words = shlex.split(quoted)
+        return (len(words) == 1 and Path(words[0]).is_absolute() and
+                shlex.quote(words[0]) == quoted)
+    except (UnicodeError, ValueError):
+        return False
+
+
 def git_hook_main(argv):
     """Install only in the explicitly selected repository's default hooks dir."""
     parser = argparse.ArgumentParser(description="Opt-in per-project Ticket commit-msg hook")
@@ -543,13 +565,10 @@ def git_hook_main(argv):
     hook = directory / 'commit-msg'
     script = str(Path(__file__).resolve().parent / 'hooks/commit_ticket.py')
     quoted = shlex.quote(script)
-    content = ('#!/bin/sh\n# session-handoff Ticket hook\n'
-               'if command -v python3 >/dev/null 2>&1 && [ -f ' + quoted + ' ]; then\n'
-               '    exec python3 ' + quoted + ' "$@"\nfi\nexit 0\n').encode()
+    content = GIT_HOOK_TEMPLATE.format(script=quoted).encode()
     if directory.is_symlink() or hook.is_symlink():
         raise ValueError('refusing a symlinked hooks directory or commit-msg hook')
-    marker = b'# session-handoff Ticket hook'
-    if hook.exists() and marker not in hook.read_bytes().splitlines():
+    if hook.exists() and not is_generated_git_hook(hook.read_bytes()):
         raise ValueError('existing commit-msg hook left intact; compose manually instead')
     if args.uninstall:
         if hook.exists():

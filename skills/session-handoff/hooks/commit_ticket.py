@@ -4,11 +4,12 @@ import os
 from pathlib import Path
 import re
 import sys
-import string
 import subprocess
 import tempfile
 
 TICKET_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z', re.ASCII)
+# Git builtin/commit.c adjust_comment_line_char (v2.50.1).
+AUTO_COMMENT_CANDIDATES = '#;@!$%^&|:'
 
 
 def comment_character():
@@ -36,8 +37,8 @@ def main(argv):
     comment = comment_character()
     if comment == 'auto':
         # The editor's chosen character is not exposed to commit-msg. Preserve
-        # ambiguous punctuation-prefixed lines, including real '#' body text.
-        if any(line and line[0] in string.punctuation for line in lines):
+        # ambiguous candidate-prefixed lines, including real '#' body text.
+        if any(line and line[0] in AUTO_COMMENT_CANDIDATES for line in lines):
             return 0
         comment = '#'
     visible = []
@@ -82,8 +83,10 @@ def main(argv):
         return 0
     if not ticket:
         return 0
-    from handoff_contract import METADATA_FORMATS
+    from handoff_contract import METADATA_FORMATS, METADATA_HINTS
     if not METADATA_FORMATS['ticket'].fullmatch(ticket):
+        print('session-handoff: ignoring HANDOFF_TICKET_ID (expected ' +
+              METADATA_HINTS['ticket'] + ')', file=sys.stderr)
         return 0
     newline = '\r\n' if '\r\n' in text else '\n'
     prefix = ''.join(lines[:end]).rstrip('\r\n')
