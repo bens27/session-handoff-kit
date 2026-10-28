@@ -681,6 +681,24 @@ prunes, under the registry lock, retrieved/refused intents older than 30 days
 whose checkpoint is no longer open and authoritative (compared by real path),
 without waiting on a busy record's lock and removing its lock sidecar; pending intents (expired
 or not) and invalid records are never pruned.
+Every persisted intent in the registry is validated, including settled records
+and other terminals' records. A copied worktree intent whose `root` differs from
+the registry root blocks with `reason: invalid-persisted-intent`; a successful
+save or adoption does not make that unrelated record valid. The verdict includes
+`invalid_intent: {path, field, detail, request_id?}`. `path` names the offending
+JSON file (distinct from the current checkpoint `path`), `field` identifies the
+failed check, `detail` is bounded to 200 characters, and `request_id` is present
+when readable. Decode or object-shape failures use `json`; I/O failures use
+`file`. The outer `request_id` still names the attempted restart.
+Preserve the checkpoint and intent, do not dispatch, and reconcile the named
+record with native host history. An operator may then restore a misplaced record
+to its original registry or quarantine confirmed foreign/corrupt evidence outside
+the scanned registry; never rewrite a binding or automatically discard a record
+to bypass the block. Retry the exact saved checkpoint only after reconciliation,
+or continue manually in a fresh session with the checkpoint open. Repeated saves
+alone cannot repair a foreign/invalid registry entry. See
+[`docs/restart-recovery.md`](docs/restart-recovery.md) for the recovery procedure
+and the October 28 incident evidence.
 New saves record the hook-observed workspace (or project root) and SHA256 of
 `.claude/settings.json` and `.claude/settings.local.json`, including absence.
 Preflight compares that save-time baseline before creating an intent. The

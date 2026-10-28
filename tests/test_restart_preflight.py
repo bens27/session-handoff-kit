@@ -361,6 +361,8 @@ class RestartTests(unittest.TestCase):
         location.write_text('{"state":"pending"}')
         result = self.preflight(path=saved['path'], request_id='next-id')
         self.assertEqual(result['reason'], 'invalid-persisted-intent')
+        self.assertEqual(result['invalid_intent']['path'], str(location))
+        self.assertEqual(result['invalid_intent']['field'], 'request_id')
         self.assertEqual(location.read_text(), '{"state":"pending"}')
 
     def test_retrieved_checkpoint_cannot_dispatch_under_new_id(self):
@@ -793,6 +795,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                 result = self.preflight()
                 self.assertEqual(result['outcome'], 'blocked')
                 self.assertFalse(result['dispatch'])
+                self.assertEqual(result['invalid_intent']['path'], str(location))
+                self.assertEqual(result['invalid_intent']['field'],
+                                 'root' if isinstance(invalid, dict) else 'json')
                 self.assertEqual(location.read_text(), raw)
                 with self.assertRaises(ValueError):
                     restart.status(self.root, 'restart-1')
@@ -814,6 +819,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                 data = json.loads(result.stdout)
                 self.assertEqual(data['outcome'], 'blocked')
                 self.assertFalse(data['dispatch'])
+                self.assertEqual(data['invalid_intent']['path'], str(location))
+                self.assertEqual(data['invalid_intent']['field'],
+                                 'root' if isinstance(invalid, dict) else 'json')
                 self.assertEqual(location.read_text(), raw)
 
     def test_nested_intent_uses_shared_recoverable_decoder(self):
@@ -822,7 +830,10 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         location = Path(self.root) / '.handoffs/restart' / (hashlib.sha256(b'restart-1').hexdigest() + '.json')
         raw = '[' * 100000 + ']' * 100000
         location.write_text(raw)
-        self.assertEqual(self.preflight()['reason'], 'invalid-persisted-intent')
+        result = self.preflight()
+        self.assertEqual(result['reason'], 'invalid-persisted-intent')
+        self.assertEqual(result['invalid_intent']['path'], str(location))
+        self.assertEqual(result['invalid_intent']['field'], 'json')
         self.assertEqual(location.read_text(), raw)
 
     def test_nested_successor_cache_raises_recoverable_value_error(self):
@@ -1066,6 +1077,65 @@ class AdoptTests(unittest.TestCase):
             request_id='req-1', predecessor_session='old', successor_session='new',
             terminal='term', state='retrieved', host_confirmed=False))
         self.assertEqual(restart.status(self.root, 'req-1')['successor_session'], 'new')
+
+    def test_adopted_session_can_reconcile_foreign_intent_and_restart_next_checkpoint(self):
+        import handoff_intents as intents
+        import shutil
+        import subprocess
+        self.pointer('new')
+        code, _, adopted = self.adopt(AGENTSROOM_AGENT_ID='term')
+        self.assertEqual((code, adopted['outcome']), (0, 'resumed'), adopted)
+        env = dict(self.env, AGENTSROOM_AGENT_ID='term')
+        saved_run = subprocess.run(
+            [sys.executable, str(HOOKS / 'handoff_ledger.py'), 'save', self.root,
+             '--session', 'new'],
+            input=json.dumps(dict(topic='work', description='Successor checkpoint',
+                                  body=self.BODY + '\nSuccessor progress\n')),
+            env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+        self.assertEqual(saved_run.returncode, 0, saved_run.stderr + saved_run.stdout)
+        saved = json.loads(saved_run.stdout)
+        self.assertEqual(saved['outcome'], 'saved', saved)
+        # Reproduce a settled worktree intent copied into the live checkout's
+        # registry. Its original binding remains valid only in its own root.
+        foreign = str(Path(self.root) / '.worktrees/other')
+        Path(foreign).mkdir(parents=True)
+        with patch.dict(os.environ, HANDOFF_TERMINAL_ID='other'):
+            checkpoint = protocol.save(foreign, 'foreign-old', 'foreign-save', {
+                'topic': 'other', 'description': 'Other work', 'body': self.BODY})['path']
+            ready = restart.preflight(foreign, checkpoint, 'foreign-old', 'other', 'foreign-req',
+                                      workers=[], host_capable=True)
+            self.assertEqual(ready['outcome'], 'ready', ready)
+            receipt = protocol.prepare(checkpoint, foreign, 'foreign-new')['delivery_receipt']
+            restart.confirm_successor(foreign, 'foreign-req', 'foreign-new', 'other', receipt)
+        copied = Path(intents.location(self.root, 'foreign-req'))
+        shutil.copyfile(intents.location(foreign, 'foreign-req'), copied)
+        original = copied.read_bytes()
+
+        def run_restart(workers):
+            run = subprocess.run(
+                [sys.executable, str(HOOKS / 'restart_preflight.py'), 'restart',
+                 '--root', self.root, '--path', saved['path'], '--workers', json.dumps(workers),
+                 '--host-capable'],
+                env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+            return run.returncode, json.loads(run.stdout)
+
+        code, blocked = run_restart([])
+        self.assertEqual((code, blocked['reason'], blocked['dispatch']),
+                         (1, 'invalid-persisted-intent', False), blocked)
+        self.assertEqual(blocked['invalid_intent']['path'], str(copied))
+        self.assertEqual(blocked['invalid_intent']['request_id'], 'foreign-req')
+        self.assertEqual(blocked['invalid_intent']['field'], 'root')
+        self.assertEqual(copied.read_bytes(), original)
+        self.assertIsNone(restart.status(self.root, blocked['request_id']))
+        # Simulate the operator's reconciliation, preserving the foreign record
+        # outside the scanned registry. Preflight itself must never move it.
+        copied.rename(Path(self.root) / 'reviewed-foreign-intent.json')
+        workers = [dict(id=name, state='in_flight', via='mailbox') for name in
+                   ('Opus review #99 r2', 'Opus review #159', '#155 rework', '#97 land relay')]
+        code, result = run_restart(workers)
+        self.assertEqual((code, result['outcome'], result['dispatch']),
+                         (0, 'ready', True), result)
+        self.assertEqual(restart.status(self.root, 'req-1')['state'], 'retrieved')
 
     def test_adopt_delivery_metric_survives_successor_pressure_save(self):
         import subprocess

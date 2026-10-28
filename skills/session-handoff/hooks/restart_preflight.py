@@ -116,6 +116,15 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     def blocked(reason):
         return dict(outcome='blocked', dispatch=False, reason=reason,
                     host_confirmed=False)
+
+    def invalid_intent(exc, entry):
+        diagnostic = (exc.diagnostic if isinstance(exc, intents.InvalidIntent) else
+                      dict(path=os.path.realpath(entry), field='file', detail=str(exc)[:200]))
+        return dict(blocked('invalid-persisted-intent'), invalid_intent=diagnostic,
+                    action='Do not call agents_restart. Keep the checkpoint and offending intent unchanged. '
+                           'Inspect invalid_intent.path and invalid_intent.field; reconcile that intent with '
+                           'host history before an operator restores or quarantines it. Retry this exact '
+                           'checkpoint after reconciliation, or continue manually in a fresh session.')
     # Native UUIDs, AgentsRoom terminal IDs and deterministic request IDs fit
     # this ASCII token format; arbitrary prose is not a first-message identifier.
     if any(not isinstance(value, str) or re.fullmatch(r'[A-Za-z0-9._:@-]{1,128}', value) is None
@@ -135,8 +144,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         try:
             pointers.prune(root, prune_settled(root, held=(location,)))
             previous = status(root, request_id)
-        except ValueError:
-            return blocked('invalid-persisted-intent')
+        except ValueError as exc:
+            return invalid_intent(exc, location)
         reentry = None
         if previous is not None:
             if any(previous.get(k) != v for k, v in binding.items()):
@@ -204,6 +213,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
             return blocked('stale-checkpoint')
         # Validate every persisted intent, including legacy request IDs. A
         # different request name must not turn uncertain dispatch into permission.
+        entry = intents.directory(root, create=False)
         try:
             for entry in intents.entries(root):
                 if reentry is not None and os.path.realpath(entry) == location:
@@ -217,8 +227,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                         and not intents.stale_marked(other))))
                         or (other['state'] in intents.SETTLED and same_checkpoint)):
                     return blocked('conflicting-restart-intent')
-        except (OSError, ValueError, TypeError, KeyError, AttributeError):
-            return blocked('invalid-persisted-intent')
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            return invalid_intent(exc, entry)
         if workers is None:
             return blocked('worker-inventory-unknown')
         if not isinstance(workers, list):
@@ -931,7 +941,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         if result.get('warnings'):
             out['warnings'] = result['warnings']
     else:
-        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy', 'warnings') if k in result})
+        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy', 'warnings', 'invalid_intent') if k in result})
         if result.get('action'):
             out['detail'] = result['action']
         out.update(
@@ -939,6 +949,8 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
                           'refused means the host declined this checkpoint\'s deterministic request, so a '
                           'retry needs a new save once the cause is resolved; blocked means keep the '
                           'checkpoint open and report.')
+        if result.get('invalid_intent'):
+            out['action'] = result['action']
     return out
 
 

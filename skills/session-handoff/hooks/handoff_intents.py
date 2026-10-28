@@ -291,64 +291,104 @@ def acceptance_valid(record):
         return False
 
 
+class InvalidIntent(ValueError):
+    """A preserved record that failed validation, with bounded recovery context."""
+    def __init__(self, path, field, detail, request_id=None):
+        self.diagnostic = dict(path=os.path.realpath(path), field=field, detail=detail[:200])
+        if isinstance(request_id, str) and request_id.strip():
+            self.diagnostic['request_id'] = request_id
+        super().__init__('Invalid persisted restart intent at %s (%s): %s '
+                         'Preserve it and reconcile with the host.' %
+                         (self.diagnostic['path'], field, self.diagnostic['detail']))
+
+
+def _read_record(path):
+    try:
+        record = protocol.load_state_json(str(path))
+    except FileNotFoundError:
+        raise
+    except (OSError, ValueError) as exc:
+        field = 'file' if isinstance(exc, OSError) else 'json'
+        raise InvalidIntent(path, field, 'Expected readable JSON with an object at the top level.') from exc
+    return record
+
+
 def status(root, request_id):
     """Read validated durable state; only FileNotFound means no intent.
 
     Existing invalid records raise ValueError and are preserved for recovery.
     """
+    path = location(root, request_id)
     try:
-        record = protocol.load_state_json(location(root, request_id))
+        record = _read_record(path)
     except FileNotFoundError:
         return None
+
+    def require(valid, field, detail):
+        if not valid:
+            raise InvalidIntent(path, field, detail, record.get('request_id'))
+
     required_strings = ('root', 'path', 'session', 'terminal', 'request_id',
                         'checkpoint_id', 'fingerprint')
-    valid = (isinstance(record, dict)
-             and all(isinstance(record.get(k), str) and record[k].strip()
-                     for k in required_strings)
-             and record.get('state') in STATES
-             and (record.get('host_confirmed') is False
-                  or (record.get('host_confirmed') is True and acceptance_valid(record)))
-             and isinstance(record.get('workers'), list)
-             and isinstance(record.get('intent_at'), (int, float))
-             and not isinstance(record.get('intent_at'), bool)
-             and math.isfinite(record['intent_at']) and record['intent_at'] > 0)
-    if valid:
-        valid = (record['root'] == os.path.realpath(root)
-                 and record['path'] == os.path.realpath(record['path'])
-                 and record['request_id'] == request_id)
-    if valid:
-        valid = all(len(record[k]) == 64 and all(c in '0123456789abcdef' for c in record[k])
-                    for k in ('checkpoint_id', 'fingerprint'))
-    if valid:
-        workers = record['workers']
-        valid = all(isinstance(w, dict) and isinstance(w.get('id'), str)
-                    and bool(w['id'].strip()) and worker_record_valid(w)
-                    for w in workers)
-        if valid:
-            valid = len({w['id'] for w in workers}) == len(workers)
-    if valid and 'restart_prompt' in record:
-        valid = (isinstance(record['restart_prompt'], str)
-                 and 0 < len(record['restart_prompt']) <= 20000)
-    if valid and record['state'] == 'refused':
-        valid = isinstance(record.get('refusal'), str)
-    if valid and record['state'] == 'retrieved':
-        valid = (isinstance(record.get('successor_session'), str)
-                 and bool(record['successor_session'].strip())
-                 and record['successor_session'] != record['session']
-                 and isinstance(record.get('retrieval_fingerprint'), str)
-                 and bool(record['retrieval_fingerprint']))
-    if not valid:
-        raise ValueError('Invalid persisted restart intent; preserve it and reconcile with the host.')
+    for key in required_strings:
+        require(isinstance(record.get(key), str) and bool(record[key].strip()), key,
+                'Expected a nonempty string.')
+    require(record.get('state') in STATES, 'state', 'Expected pending, refused or retrieved.')
+    require(record.get('host_confirmed') is False or record.get('host_confirmed') is True,
+            'host_confirmed', 'Expected a boolean.')
+    if record['host_confirmed']:
+        require(acceptance_valid(record), 'host_acceptance',
+                'Native host acceptance does not match this intent.')
+    require(isinstance(record.get('workers'), list), 'workers', 'Expected a list.')
+    stamp = record.get('intent_at')
+    require(isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+            and math.isfinite(stamp) and stamp > 0,
+            'intent_at', 'Expected a positive finite timestamp.')
+    require(record['root'] == os.path.realpath(root), 'root',
+            'Recorded root %r does not match registry root %r.' % (record['root'], os.path.realpath(root)))
+    require(record['path'] == os.path.realpath(record['path']), 'path',
+            'Expected a canonical absolute checkpoint path.')
+    require(record['request_id'] == request_id, 'request_id', 'Request ID does not match the lookup.')
+    for key in ('checkpoint_id', 'fingerprint'):
+        require(re.fullmatch(r'[0-9a-f]{64}', record[key]) is not None, key,
+                'Expected a lowercase SHA256 digest.')
+    seen = set()
+    for index, worker in enumerate(record['workers']):
+        field = 'workers[%d]' % index
+        require(isinstance(worker, dict), field, 'Expected a worker object.')
+        require(isinstance(worker.get('id'), str) and bool(worker['id'].strip()), field + '.id',
+                'Expected a nonempty worker ID.')
+        require(worker['id'] not in seen, field + '.id', 'Duplicate worker ID.')
+        seen.add(worker['id'])
+        require(worker_record_valid(worker), field,
+                'Expected a durable report, settled worker or in-flight mailbox delegation.')
+    if 'restart_prompt' in record:
+        require(isinstance(record['restart_prompt'], str) and 0 < len(record['restart_prompt']) <= 20000,
+                'restart_prompt', 'Expected a nonempty prompt of at most 20000 characters.')
+    if record['state'] == 'refused':
+        require(isinstance(record.get('refusal'), str), 'refusal', 'Expected a refusal string.')
+    if record['state'] == 'retrieved':
+        require(isinstance(record.get('successor_session'), str)
+                and bool(record['successor_session'].strip())
+                and record['successor_session'] != record['session'],
+                'successor_session', 'Expected a nonempty session different from the predecessor.')
+        require(isinstance(record.get('retrieval_fingerprint'), str)
+                and bool(record['retrieval_fingerprint']),
+                'retrieval_fingerprint', 'Expected a nonempty retrieval fingerprint.')
     return record
 
 
 def canonical(root, entry):
     """The validated record stored at `entry`, or ValueError when the file does not sit
     at its own request ID's location (a copied or renamed record)."""
-    request_id = protocol.load_state_json(str(entry)).get('request_id')
+    request_id = _read_record(entry).get('request_id')
+    if not isinstance(request_id, str) or not request_id.strip():
+        raise InvalidIntent(entry, 'request_id', 'Expected a nonempty request ID.')
+    if os.path.realpath(entry) != location(root, request_id):
+        raise InvalidIntent(entry, 'request_id', 'Filename does not match the recorded request ID.', request_id)
     record = status(root, request_id)
-    if record is None or os.path.realpath(entry) != location(root, record['request_id']):
-        raise ValueError('Noncanonical restart intent.')
+    if record is None:
+        raise InvalidIntent(entry, 'file', 'Intent disappeared during validation.', request_id)
     return record
 
 

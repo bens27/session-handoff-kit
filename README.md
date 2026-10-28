@@ -790,6 +790,12 @@ native cycle in one command with compact output:
   terminal yields `outcome: held` (stage `hold`) after the receipt is recorded and
   before any resume; rerun after an explicit release.
 
+`invalid-persisted-intent` blocks on any invalid registry record, including an
+unrelated settled intent. Its `invalid_intent` object names the offending JSON
+`path`, failed `field`, bounded `detail`, and readable `request_id`. Preserve the
+record and checkpoint, reconcile the named intent with host history, and follow
+the [restart recovery procedure](docs/restart-recovery.md) before retrying.
+
 `acceptance` accepts JSON `{root,request_id,transcript}` on stdin or `--input`.
 Successor confirmation automatically searches the predecessor's Codex sessions
 or Claude projects transcript and imports a matching native AgentsRoom restart
