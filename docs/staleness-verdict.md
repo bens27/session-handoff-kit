@@ -20,10 +20,14 @@ delivery) adds a `staleness` object so the successor knows before it acts:
 - The checkpoint header's `ticket:` and `base:` lines (SPEC §7.1, work
   metadata). Malformed values count as absent.
 - `Ticket:` trailers on the commits in `base..origin/main` (the opt-in commit
-  hook writes them). A trailer matches when either id is a prefix of the other,
-  ignoring case, so an 8-hex short id matches the full UUID.
+  hook writes them). Only a trailer that is itself a ticket id (8-hex short id
+  or full UUID, ignoring case) counts: two full UUIDs must be equal, otherwise
+  the short ids (first 8 hex) compare, so `6cf33871` matches its full UUID but
+  `f` or `6cf33871-other` matches nothing.
 - The ticket's backlog state, from AgentsRoom `backlog_get`: `done` or
-  `wontFix` is closed, an unknown ticket is missing, anything else is open.
+  `wontFix` is closed, the app's own "not in this project's backlog" answer is
+  missing, anything else is open. Any other tool error is "backlog
+  unavailable" (git-only), never missing.
 - `origin/main` means the local `refs/remotes/origin/main`. Resume never
   fetches; fetch first if the verdict must reflect the remote right now.
 
@@ -33,13 +37,19 @@ First match wins:
 
 | Verdict | When | What the successor does |
 |---|---|---|
-| `conflicting` | `base` is not a commit here, `base` is not an ancestor of origin/main, or the ticket is not in the backlog | Stop and reconcile: the plan was made against history that no longer exists, or for a ticket that does not |
+| `conflicting` | `base` is not a commit here, `base` has diverged from origin/main (neither contains the other), or the ticket is not in the backlog | Stop and reconcile: the plan was made against history that no longer exists, or for a ticket that does not |
 | `superseded` | the ticket is closed | Confirm with the user before doing more work on it |
 | `progressed` | commits for this ticket landed on origin/main since `base` | Read those commits; drop the steps they already did |
 | `fresh` | none of the above | Continue with Next steps |
-| `unclassified` | no ticket and no base, no local origin/main to compare, or no base while the backlog is unreachable | Nothing to say; continue |
+| `unclassified` | no ticket and no base, no local origin/main to compare, origin/main behind `base`, or no base while the backlog is unreachable | Nothing to say; continue (fetch first when origin/main is behind) |
 
 Without a `base`, an open ticket is `fresh` and a closed one `superseded`.
+When origin/main is an ancestor of `base` (not fetched yet, or the work landed
+locally) there is nothing to compare: the verdict is `unclassified` with
+"origin/main is behind base; fetch to compare", not `conflicting`. Work stacked
+on an unlanded branch has a `base` that origin/main does not contain and
+diverges from it, so it reads `conflicting` by design: the successor confirms
+the stack is still wanted before continuing.
 Without a `ticket`, only git is consulted. For the three stale verdicts the
 resume `action` starts with `Staleness <verdict> (<source>): <reason>;
 reconcile before continuing.`
@@ -63,7 +73,8 @@ exception type in `reason`.
   the token off the machine.
 - Sends `Authorization: Bearer $AGENTSROOM_MCP_SESSION` built from the
   environment; the header value in `.mcp.json` is ignored. No proxies, no
-  redirects, 3-second timeout.
+  redirects; each request waits at most 3 seconds and the whole lookup
+  (initialize, notification, call) shares one 4-second budget.
 - Calls only tools in `READ_TOOLS` (`backlog_get`); any other name raises
   `PermissionError` before a request is sent.
 - Error messages carry no headers, response bodies or token.

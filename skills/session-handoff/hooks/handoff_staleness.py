@@ -5,11 +5,11 @@ classify(root, fm, lookup) compares the checkpoint's `ticket:` / `base:` header
 with the `Ticket:` trailers on origin/main and the ticket's backlog state, and
 answers one verdict:
 
-  conflicting   base is gone or not on origin/main, or the ticket no longer exists
+  conflicting   base is gone or diverged from origin/main, or the ticket no longer exists
   superseded    the ticket is closed (done or won't fix)
   progressed    origin/main carries commits for this ticket since base
   fresh         nothing for this ticket landed since base
-  unclassified  not enough metadata (or no origin/main) to say
+  unclassified  not enough metadata, no origin/main, or origin/main behind base
 
 Precedence runs top to bottom. `lookup(ticket)` answers 'open' | 'closed' |
 'missing' or raises; any failure there turns the verdict git-only and is
@@ -35,9 +35,13 @@ def _plural(n, word):
 
 
 def ticket_matches(ticket, value):
-    """A trailer names the ticket when either id is a prefix of the other (8-hex short id vs UUID)."""
+    """A trailer names the ticket only when both are contract ticket ids (8-hex short id or
+    full UUID): two full UUIDs must be equal, otherwise the short ids (first 8 hex) compare."""
     a, b = ticket.strip().lower(), value.strip().lower()
-    return bool(a and b) and (a.startswith(b) or b.startswith(a))
+    shape = contract.METADATA_FORMATS['ticket']
+    if not (shape.fullmatch(a) and shape.fullmatch(b)):
+        return False
+    return a == b if len(a) > 8 and len(b) > 8 else a[:8] == b[:8]
 
 
 def _ask(lookup, ticket):
@@ -78,6 +82,9 @@ def classify(root, fm, lookup):
         if not base_sha:
             return done('conflicting', 'base %s is not a commit in this repository' % base[:12])
         if origin and not workspace.is_ancestor(root, base_sha, origin):
+            if workspace.is_ancestor(root, origin, base_sha):
+                # Unfetched, or landed locally: nothing to compare yet, not a conflict.
+                return done('unclassified', 'origin/main is behind base %s; fetch to compare' % base[:12])
             return done('conflicting', 'base %s is not on origin/main' % base[:12])
     if state == 'missing':
         return done('conflicting', 'ticket %s is not in the backlog' % ticket)

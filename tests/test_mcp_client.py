@@ -54,7 +54,10 @@ class FakeServer:
                     result = {'protocolVersion': '2025-06-18', 'capabilities': {}, 'serverInfo': {'name': 'fake'}}
                 else:
                     task = fake.tasks.get(body['params']['arguments']['taskId'])
-                    if task is None:
+                    if fake.fail == 'tool-error':  # a generic tool failure, not the app's not-found answer
+                        text = 'Error: tool backlog_get not found (no such task handler)'
+                        result = {'isError': True, 'content': [{'type': 'text', 'text': text}]}
+                    elif task is None:
                         text = "Task x is not in this project's backlog."
                         result = {'isError': True, 'content': [{'type': 'text', 'text': text}]}
                     else:
@@ -131,6 +134,22 @@ class ClientTests(unittest.TestCase):
         self.assertEqual({c['params']['name'] for c in calls}, {'backlog_get'})
         later = [h for h, body in server.requests[1:]]
         self.assertTrue(all(h.get('Mcp-Session-Id') == 'sess-1' for h in later), later)
+
+    def test_generic_tool_error_is_unavailable_not_missing(self):
+        # Opus r1 S2: only the app's own "not in this project's backlog" means missing.
+        self.serve(fail='tool-error')
+        self.assertUnavailable(contains='backlog_get returned an error')
+
+    def test_whole_lookup_shares_one_deadline(self):
+        # Opus r1 m1: initialize + notify + call share one budget, not 3 x TIMEOUT.
+        server = self.serve(tasks={TICKET: {'status': 'todo'}})
+        spent = mcp.Client(server.url, TOKEN, deadline=0)
+        with self.assertRaises(staleness.BacklogUnavailable) as raised:
+            spent.call('backlog_get', {'taskId': TICKET})
+        self.assertIn('took too long', str(raised.exception))
+        self.assertEqual(server.requests, [])  # nothing sent once the budget is gone
+        self.assertEqual(mcp.Client(server.url, TOKEN).call('backlog_get', {'taskId': TICKET})['content'][0]['type'], 'text')
+        self.assertLessEqual(mcp.DEADLINE, 2 * mcp.TIMEOUT)
 
     def test_ticket_state_over_sse(self):
         self.serve(sse=True, tasks={TICKET: {'status': 'done'}})

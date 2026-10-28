@@ -21,6 +21,7 @@ git-only. Stdlib only.
 import json
 import os
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,8 +35,11 @@ READ_TOOLS = frozenset({'backlog_get'})
 LOOPBACK = frozenset({'127.0.0.1', 'localhost', '::1'})
 PROTOCOL_VERSION = '2025-06-18'
 TIMEOUT = 3.0
+DEADLINE = 4.0  # one budget for the whole lookup (initialize, notify, call)
 CLOSED_STATUSES = frozenset({'done', 'wontfix', 'wont_fix', 'cancelled', 'canceled'})
-NOT_FOUND_MARKERS = ("not in this project's backlog", 'not found', 'no such task')
+# The app's own answer for an unknown ticket. Any other tool error (a missing tool,
+# a server fault) is Unavailable, never `missing`: that would read as conflicting.
+NOT_FOUND_MARKER = "not in this project's backlog"
 
 Unavailable = staleness.BacklogUnavailable
 
@@ -84,8 +88,9 @@ def check_loopback(url):
 
 
 class Client:
-    def __init__(self, url, token, timeout=TIMEOUT):
+    def __init__(self, url, token, timeout=TIMEOUT, deadline=DEADLINE):
         self._url, self._token, self._timeout = check_loopback(url), token, timeout
+        self._deadline = time.monotonic() + deadline
         self._session = None
         self._ready = False
         self._next_id = 0
@@ -98,8 +103,11 @@ class Client:
         if self._ready:
             headers['MCP-Protocol-Version'] = PROTOCOL_VERSION
         request = urllib.request.Request(self._url, data=json.dumps(message).encode(), headers=headers, method='POST')
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise Unavailable('AgentsRoom MCP took too long')
         try:
-            with _OPENER.open(request, timeout=self._timeout) as response:
+            with _OPENER.open(request, timeout=min(self._timeout, remaining)) as response:
                 self._session = response.headers.get('Mcp-Session-Id') or self._session
                 kind = response.headers.get('Content-Type', '')
                 body = response.read(4 * 1024 * 1024).decode('utf-8', 'replace')
@@ -175,7 +183,7 @@ def ticket_state(result):
     """'open' | 'closed' | 'missing' from a backlog_get tool result."""
     text = ''.join(c.get('text', '') for c in result.get('content') or () if isinstance(c, dict))
     if result.get('isError'):
-        if any(marker in text.lower() for marker in NOT_FOUND_MARKERS):
+        if NOT_FOUND_MARKER in text.lower():
             return 'missing'
         raise Unavailable('backlog_get returned an error')
     try:

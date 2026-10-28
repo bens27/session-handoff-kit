@@ -73,6 +73,26 @@ class VerdictTests(GitFixture):
         v = self.verdict(backlog('open'), ticket=TICKET[:8], base=self.base)
         self.assertEqual(v['verdict'], 'progressed', v)
 
+    # -- Opus r1 S1: only contract-shaped trailers count ----------------------
+    def test_malformed_trailers_never_match(self):
+        for value in ('f', TICKET[:8] + '-other', TICKET[:7], TICKET + 'x'):
+            with self.subTest(value=value):
+                self.assertFalse(staleness.ticket_matches(TICKET, value))
+                self.assertFalse(staleness.ticket_matches(TICKET[:8], value))
+        self.commit('one letter', ticket='f')
+        self.commit('suffixed', ticket=TICKET[:8] + '-other')
+        self.publish()
+        v = self.verdict(backlog('open'), ticket=TICKET, base=self.base)
+        self.assertEqual(v['verdict'], 'fresh', v)
+
+    def test_ticket_ids_compare_by_short_id_or_whole_uuid(self):
+        twin = TICKET[:8] + '-0000-4000-8000-000000000000'  # same short id, other ticket
+        self.assertTrue(staleness.ticket_matches(TICKET, TICKET[:8]))
+        self.assertTrue(staleness.ticket_matches(TICKET[:8], TICKET.upper()))
+        self.assertTrue(staleness.ticket_matches(TICKET, ' %s ' % TICKET))
+        self.assertFalse(staleness.ticket_matches(TICKET, twin))
+        self.assertFalse(staleness.ticket_matches(TICKET, OTHER[:8]))
+
     def test_superseded_when_ticket_is_closed(self):
         self.commit('landed', ticket=TICKET)
         self.publish()
@@ -88,6 +108,15 @@ class VerdictTests(GitFixture):
         v = self.verdict(backlog('open'), ticket=TICKET, base=side)
         self.assertEqual(v['verdict'], 'conflicting', v)
         self.assertIn('origin/main', v['reason'])
+
+    # -- Opus r1 S3: origin/main behind base is not a conflict ----------------
+    def test_origin_main_behind_base_is_unclassified(self):
+        self.publish()  # origin/main at the initial commit
+        landed_locally = self.commit('newer than the fetched origin/main')
+        v = self.verdict(backlog('open'), ticket=TICKET, base=landed_locally)
+        self.assertEqual(v['verdict'], 'unclassified', v)
+        self.assertIn('origin/main is behind base', v['reason'])
+        self.assertIn('fetch', v['reason'])
 
     def test_conflicting_when_base_commit_is_gone(self):
         self.publish()
