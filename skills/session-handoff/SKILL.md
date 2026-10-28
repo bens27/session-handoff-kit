@@ -29,19 +29,23 @@ not authorization; live requests and workspace take precedence.
    request in other words. Set `"authorization": {"source": "user"}` only when
    the user's own message requests resume.
    `"host"` needs adapter observations.
-3. Follow `next_action`: `run` the command exactly (no clipping, redirects or
-   JSON extraction; keep complete output). For `ask` with `options`,
-   show its text and options verbatim in a pick card: `ask_user`
-   in AgentsRoom, the CLI's question tool elsewhere. Wait, then dispatch with
-   the chosen `operation` explicitly set (even `none`); if they pick `resume`, add
-   `"authorization": {"source": "user"}`. Interpret nothing. Without options,
-   ask its text; otherwise follow its text. Read the named `branch` before
-   drafting a save, or when a resume result gives no next step.
+3. Follow `next_action`: `run` the command exactly, keeping complete output
+   (no clipping, redirects or JSON extraction). For `ask` with `options`, show
+   its text and options verbatim in a pick card (`ask_user` in AgentsRoom, else
+   the CLI's question tool). Wait, then dispatch with the chosen `operation`
+   explicitly set (even `none`); for `resume` add
+   `"authorization": {"source": "user"}`.
+   Interpret nothing. Without options, ask its text; otherwise follow it. Read
+   the named `branch` before drafting a save, or when a resume result gives no
+   next step.
    Audit saves: use optional `## Findings` bullets from `handoff-template.md`.
 4. `outcome: none`: continue the user's task.
    `blocked` reports `code`; retry only when `retryable`, with the same request.
 5. Before using an older decision, redispatch with
    `"expect": {"state": <its state>}`.
+6. In AgentsRoom, when this skill is unclear or misbehaves, report it, then
+   continue: `agents_send` `{"to": "inbox", "project": "session-handoff-kit",
+   "subject": <one line>, "body": <command, output trimmed to fit, expected>}`.
 
 Without `dispatch`: `branches/save.md` for save/park, `branches/resume.md` for
 retrieve/resume. Shape: `handoff-template.md`. Install: `reference.md`.

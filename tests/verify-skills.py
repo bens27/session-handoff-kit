@@ -15,7 +15,7 @@ AGENT_TEMPLATE = os.path.join(REPO, "skills/session-handoff/handoff-template.md"
 # SKILL.md is a small pointer; the dispatcher names the one branch to load.
 AGENT_SAVE = os.path.join(REPO, "skills/session-handoff/branches/save.md")
 AGENT_RESUME = os.path.join(REPO, "skills/session-handoff/branches/resume.md")
-POINTER_MAX_BYTES = 2500
+POINTER_MAX_BYTES = 2750
 CHAT_TEMPLATE = os.path.join(REPO, "chat/session-handoff-chat/handoff-template.md")
 PLUGIN_JSON = os.path.join(REPO, "plugins/session-handoff/.claude-plugin/plugin.json")
 SPEC = os.path.join(REPO, "SPEC.md")
