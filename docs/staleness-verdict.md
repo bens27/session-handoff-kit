@@ -41,12 +41,13 @@ First match wins:
 | `superseded` | the ticket is closed | Confirm with the user before doing more work on it |
 | `progressed` | commits for this ticket landed on origin/main since `base` | Read those commits; drop the steps they already did |
 | `fresh` | none of the above | Continue with Next steps |
-| `unclassified` | no ticket and no base, no local origin/main to compare, origin/main behind `base`, or no base while the backlog is unreachable | Nothing to say; continue (fetch first when origin/main is behind) |
+| `unclassified` | no ticket and no base, no local origin/main to compare, origin/main behind `base` with the ticket open or the backlog unreachable, or no base while the backlog is unreachable | Nothing to say; continue (fetch first when origin/main is behind) |
 
 Without a `base`, an open ticket is `fresh` and a closed one `superseded`.
 When origin/main is an ancestor of `base` (not fetched yet, or the work landed
 locally) there is nothing to compare: the verdict is `unclassified` with
-"origin/main is behind base; fetch to compare", not `conflicting`. Work stacked
+"origin/main is behind base; fetch to compare", not `conflicting`, unless the
+backlog says the ticket is closed (`superseded`) or gone (`conflicting`). Work stacked
 on an unlanded branch has a `base` that origin/main does not contain and
 diverges from it, so it reads `conflicting` by design: the successor confirms
 the stack is still wanted before continuing.

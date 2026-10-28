@@ -76,20 +76,23 @@ def classify(root, fm, lookup):
 
     origin = workspace.resolve_commit(root, ORIGIN_MAIN)
     out['origin_main'] = origin
-    base_sha = ''
+    base_sha, behind = '', False
     if base:
         base_sha = workspace.resolve_commit(root, base)
         if not base_sha:
             return done('conflicting', 'base %s is not a commit in this repository' % base[:12])
         if origin and not workspace.is_ancestor(root, base_sha, origin):
-            if workspace.is_ancestor(root, origin, base_sha):
-                # Unfetched, or landed locally: nothing to compare yet, not a conflict.
-                return done('unclassified', 'origin/main is behind base %s; fetch to compare' % base[:12])
-            return done('conflicting', 'base %s is not on origin/main' % base[:12])
+            # Unfetched, or landed locally: nothing to compare yet, not a conflict.
+            # The backlog still speaks first (a closed or deleted ticket stays stale).
+            behind = workspace.is_ancestor(root, origin, base_sha)
+            if not behind:
+                return done('conflicting', 'base %s is not on origin/main' % base[:12])
     if state == 'missing':
         return done('conflicting', 'ticket %s is not in the backlog' % ticket)
     if state == 'closed':
         return done('superseded', 'ticket %s is closed in the backlog' % ticket)
+    if behind:
+        return done('unclassified', 'origin/main is behind base %s; fetch to compare' % base[:12])
 
     if not base_sha:
         if state == 'open':

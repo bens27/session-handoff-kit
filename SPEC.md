@@ -486,7 +486,8 @@ backlog; else `superseded` when the ticket is closed (`done` or won't fix);
 else `progressed` when commits in `base..origin/main` carry a matching
 `Ticket:` trailer (a contract ticket id; equal full UUIDs, else equal 8-hex
 short ids, case-insensitive); else `fresh`; `unclassified` when there is too
-little to compare, including origin/main behind `base` (fetch to compare). Ticket state comes
+little to compare, including origin/main behind `base` (fetch to compare) once
+the backlog has not reported the ticket closed or missing. Ticket state comes
 from a read-only, stdlib MCP client (`handoff_mcp`, allow-list `backlog_get`,
 loopback URL from `.mcp.json`, Bearer from `AGENTSROOM_MCP_SESSION`); when the
 backlog cannot answer the verdict is git-only and says why. No fetch happens.

@@ -118,6 +118,18 @@ class VerdictTests(GitFixture):
         self.assertIn('origin/main is behind base', v['reason'])
         self.assertIn('fetch', v['reason'])
 
+    def test_origin_behind_base_still_reports_closed_or_missing_ticket(self):
+        # Opus r2 N1: "behind" must not hide what the backlog says.
+        self.publish()
+        landed_locally = self.commit('newer than the fetched origin/main')
+        closed = self.verdict(backlog('closed'), ticket=TICKET, base=landed_locally)
+        self.assertEqual(closed['verdict'], 'superseded', closed)
+        missing = self.verdict(backlog('missing'), ticket=TICKET, base=landed_locally)
+        self.assertEqual(missing['verdict'], 'conflicting', missing)
+        unknown = self.verdict(offline, ticket=TICKET, base=landed_locally)
+        self.assertEqual((unknown['verdict'], unknown['source']), ('unclassified', 'git-only'), unknown)
+        self.assertIn('origin/main is behind base', unknown['reason'])
+
     def test_conflicting_when_base_commit_is_gone(self):
         self.publish()
         v = self.verdict(backlog('open'), ticket=TICKET, base='a' * 40)
