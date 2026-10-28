@@ -160,6 +160,25 @@ class AutoCloseTests(unittest.TestCase):
         self.git('remote', 'set-url', 'origin', str(self.origin) + '-gone')
         self.assertStillOpen(path, self.lookup())
 
+    def test_backlog_is_asked_before_fetch(self):
+        # A ticket that is not done must not cost a network fetch (review m2).
+        from unittest import mock
+        sys.path.insert(0, str(LEDGER.parent))
+        import handoff_autoclose
+        self.save()
+        fetches = []
+        fetcher = lambda root: fetches.append(root) or True  # noqa: E731
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            for task in (None, {'status': 'in_progress', 'wont_fix': False}, {'status': 'done', 'wont_fix': True}):
+                with self.subTest(task=task):
+                    out = handoff_autoclose.sweep(str(self.root), status_lookup=lambda t: task, fetcher=fetcher)
+                    self.assertEqual(out, [])
+            self.assertEqual(fetches, [])
+            out = handoff_autoclose.sweep(str(self.root), fetcher=fetcher,
+                                          status_lookup=lambda t: {'status': 'done', 'wont_fix': False})
+        self.assertEqual(len(fetches), 1)
+        self.assertEqual(len(out), 1, out)
+
     def test_no_op_when_commit_not_on_origin_main(self):
         self.serve()
         self.commit('local work, not landed')
@@ -201,6 +220,17 @@ class AutoCloseTests(unittest.TestCase):
         code, out = self.cli('resume', 'parser', '--session', 'sess-b', terminal='term-b')
         self.assertEqual(out['outcome'], 'resumed', out)
         self.assertEqual(self.retired_lines(path), [])
+
+    def test_resume_refuses_a_retired_target_by_path_and_topic(self):
+        self.serve()
+        path = self.save()
+        self.lookup()
+        for session, target in (('sess-b', path), ('sess-c', 'parser')):
+            code, out = self.cli('resume', target, '--session', session, terminal='term-b')
+            self.assertEqual(out['outcome'], 'closed', out)
+            self.assertIn('Retired: ticket %s is done' % TICKET, out['action'], out)
+            self.assertIn('save a new checkpoint', out['action'], out)
+        self.assertEqual(len(self.retired_lines(path)), 1)
 
     # -- the sealed line ------------------------------------------------------
     def test_tampered_retired_line_is_a_problem_and_does_not_close(self):

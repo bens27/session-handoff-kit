@@ -955,18 +955,20 @@ retired only when all of these hold:
 
 - its header names a `ticket:` and its save recorded no uncommitted work
   (`workspace_changes_hash` equals the SHA-256 of the empty string);
+- `backlog_get` answers status `done` without `wontFix`. Won't-fix, cancelled
+  and every other status leave the checkpoint open;
 - `git fetch --quiet --no-tags origin` (10 s timeout, no prompt) succeeds and
   `refs/remotes/origin/main` resolves;
 - every named commit resolves and is an ancestor of `origin/main`. The named
   commits are the sha of `git:` and `workspace_git:` (`branch@shortsha`) plus
-  `base:` when present; a malformed present field and shas in the body don't count;
-- `backlog_get` answers status `done` without `wontFix`. Won't-fix, cancelled
-  and every other status leave the checkpoint open.
+  `base:` when present; a malformed present field and shas in the body don't count.
 
 If any of these fails (no checkpoint qualifies, fetch fails, the backlog is
 unreachable or does not know the ticket, a commit is unresolvable or not
 landed), nothing happens. The first `BacklogUnavailable` stops the sweep. The
-backlog is asked only after a fetch succeeded with at least one candidate.
+backlog is asked first, once per distinct ticket; the fetch runs only when at
+least one candidate's ticket reads done, so a listing with no finished ticket
+stays offline.
 
 Retiring appends one sealed line to the #159 sidecar under
 `ledger.locked(sidecar)`, with the same MAC as a note:
@@ -983,7 +985,9 @@ retired line is never appended). `read()` returns the first valid one as
 close anything. Ledger scans (`_records`, so `lookup`, `history`, `resolve`) report
 a checkpoint with a valid retired line as status `retired`, which is in
 `CLOSED_STATUSES`: it leaves the open listing and dispatch treats an explicit
-target as closed. `lookup` reports newly retired checkpoints in
+target, by path or topic, as closed with the action "Retired: ticket <id> is
+done and its commits are on origin/main (sidecar evidence). If work remains,
+save a new checkpoint." `lookup` reports newly retired checkpoints in
 `auto_closed: [{path, ticket}]`. A `note` is still accepted after a retire; only
 the successor `closed` line refuses notes. Retirement does not enter the notes
 delivery digest, because it changes no delivered content.

@@ -6,10 +6,11 @@ open checkpoint is retired when ALL of these hold:
 
   - its header names a ticket and its save recorded no uncommitted work
     (workspace_changes_hash is the hash of an empty change set);
-  - a `git fetch origin` succeeds and refs/remotes/origin/main resolves;
+  - backlog_get answers status `done` without the wontFix flag;
+  - a `git fetch origin` succeeds and refs/remotes/origin/main resolves
+    (asked only after some ticket reads done, so idle listings stay offline);
   - every commit the header names (the sha of `git:` and `workspace_git:`,
-    plus `base:` when present) resolves and is an ancestor of origin/main;
-  - backlog_get answers status `done` without the wontFix flag.
+    plus `base:` when present) resolves and is an ancestor of origin/main.
 
 Anything else (backlog unreachable, ticket unknown, won't-fix or cancelled,
 fetch failure, a commit that is unresolvable or not landed, dirty save) leaves
@@ -87,25 +88,36 @@ def _landed(root, commits, origin):
     return full
 
 
-def sweep(root, status_lookup=None, fetcher=fetch):
-    """Retire every eligible checkpoint; returns [{path, ticket}] newly retired."""
-    pending = candidates(root)
-    if not pending or not fetcher(root):
-        return []
-    origin = workspace.resolve_commit(root, ORIGIN_MAIN)
-    if not origin:
-        return []
-    lookup = status_lookup or mcp.status_lookup(root)
-    statuses, retired = {}, []
+def _done_candidates(pending, lookup):
+    """The candidates whose ticket reads done (not won't-fix), each with its status.
+    One BacklogUnavailable answer stops the asking: nothing is retired."""
+    statuses, done = {}, []
     for c in pending:
         if c['ticket'] not in statuses:
             try:
                 statuses[c['ticket']] = lookup(c['ticket'])
             except staleness.BacklogUnavailable:
-                return retired  # one outage answer is enough: ask nothing more
+                return []
         found = statuses[c['ticket']]
-        if not found or found['status'] != 'done' or found['wont_fix']:
-            continue
+        if found and found['status'] == 'done' and not found['wont_fix']:
+            done.append((c, found))
+    return done
+
+
+def sweep(root, status_lookup=None, fetcher=fetch):
+    """Retire every eligible checkpoint; returns [{path, ticket}] newly retired.
+    The backlog is asked first, so a fetch happens only when some ticket is done."""
+    pending = candidates(root)
+    if not pending:
+        return []
+    done = _done_candidates(pending, status_lookup or mcp.status_lookup(root))
+    if not done or not fetcher(root):
+        return []
+    origin = workspace.resolve_commit(root, ORIGIN_MAIN)
+    if not origin:
+        return []
+    retired = []
+    for c, found in done:
         full = _landed(root, c['commits'], origin)
         if not full:
             continue

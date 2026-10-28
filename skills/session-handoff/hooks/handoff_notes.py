@@ -70,8 +70,9 @@ def _valid(entry, checkpoint_id, key):
 
 def read(path, checkpoint_id):
     """Return dict(notes=[valid open notes oldest-first], closed=None|successor,
-    retired=None|first valid retired entry, problems=int, next_seq=int). next_seq follows the last valid seq, so an invalid line never
-    makes the next genuine note look out of order."""
+    retired=None|first valid retired entry, problems=int, next_seq=int).
+    next_seq follows the last valid seq, so an invalid line never makes the
+    next genuine note look out of order."""
     result = dict(notes=[], closed=None, retired=None, problems=0, next_seq=0)
     try:
         with open(sidecar_path(path), encoding='utf-8', errors='replace') as f:

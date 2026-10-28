@@ -1325,6 +1325,15 @@ def installed_catalog():
     return dict(skills=skills, loaded=[])
 
 
+def _retired_action(path):
+    """Refusal text for an auto-closed (#162) checkpoint, naming the sealed evidence."""
+    fm = Record.load(path).fm
+    retired = handoff_notes.read(path, fm.get('checkpoint_id', ''))['retired'] or {}
+    ticket = (retired.get('evidence') or {}).get('ticket') or 'unknown'
+    return ('Retired: ticket %s is done and its commits are on origin/main (sidecar evidence). '
+            'If work remains, save a new checkpoint.' % ticket)
+
+
 def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None):
     import time
     root = handoff_identity.project_root(root)
@@ -1340,6 +1349,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
     if resolved['chain'][-1]['status'] == 'unpublished':
         recovery = publication_recovery(root, path)
         return dict(outcome='incomplete', path=path, recovery=recovery, action=recovery['text'])
+    if resolved['chain'][-1]['status'] == 'retired':
+        return dict(outcome='closed', path=path, action=_retired_action(path))
     if resolved['chain'][-1]['status'] != 'open':
         return dict(outcome='closed', action='This topic is already transferred or closed. Use history for inspection; do not adopt it.')
     supplied = catalog is not None
