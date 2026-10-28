@@ -1160,10 +1160,10 @@ class AdoptTests(unittest.TestCase):
         self.pointer('new')
         fixture = json.loads((Path(__file__).parent / 'fixtures/contract/adopt.json').read_text())
         expected_keys = list(json.loads(fixture['stdout']))
-        # Preserve the historical order fixture; #97 adds review evidence to delivery,
-        # ahead of the #99 staleness verdict when the fixture carries one.
+        # Preserve historical order, including the staleness verdict added by #99.
         index = expected_keys.index('staleness' if 'staleness' in expected_keys else 'restart')
         expected_keys[index:index] = ['reviewed', 'review']
+        expected_keys.insert(expected_keys.index('restart'), 'report_back_draft')
         for attempt in ('first delivery', 'same-successor replay'):
             with self.subTest(attempt=attempt):
                 code, raw, out = self.adopt()
@@ -1179,6 +1179,19 @@ class AdoptTests(unittest.TestCase):
                 self.assertEqual(raw.count('UNIQUE-BODY-MARKER'), 1)
                 self.assertIn('café', out['body'])
                 self.assertTrue(raw.isascii(), 'Adopt must retain its original JSON escaping.')
+
+    def test_adopt_returns_local_unsent_report_draft(self):
+        self.pointer('new')
+        code, _, result = self.adopt()
+        self.assertEqual((code, result['outcome']), (0, 'resumed'))
+        draft_path = Path(result['report_back_draft']['path'])
+        draft = json.loads(draft_path.read_text())
+        self.assertFalse(draft['sent'])
+        self.assertEqual(draft['status'], 'draft')
+        self.assertEqual(draft['checkpoint'], self.path)
+        self.assertIn('Test it', draft['message'])
+        _, _, replay = self.adopt()
+        self.assertEqual(replay['report_back_draft'], result['report_back_draft'])
 
     def test_adopt_delivers_body_once_and_records_retrieval_without_prompt_echo(self):
         self.pointer('new')

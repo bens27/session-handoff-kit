@@ -16,7 +16,7 @@ DELIVERY_FIELDS = frozenset({
     'path', 'body', 'references', 'skills', 'next_step_section', 'verification',
     'verify_required', 'trusted', 'workspace', 'optional_references',
     'withheld_references', 'delivery_receipt', 'reused_from', 'predecessor',
-    'continuity', 'next_step', 'reviewed', 'review', 'notes', 'notes_omitted',
+    'continuity', 'next_step', 'reviewed', 'review', 'notes', 'notes_omitted', 'report_back_draft',
 })
 # Small orientation keys first; large content last so a clipped read keeps the next step
 LEADING = ('outcome', 'action', 'next_step', 'stage', 'path', 'next_step_section')
