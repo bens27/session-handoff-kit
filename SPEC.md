@@ -891,6 +891,55 @@ unpublished (interrupted) save returns `incomplete`, not `closed`. CLI `resolve`
 `history --topic TOPIC --offset N --limit N` is explicit paginated metadata.
 The importable `resolve` API retains full-chain compatibility.
 
+#### 7.2.1 Post-publication notes (#159)
+
+A published checkpoint is never edited; any edit breaks its sealed fingerprint.
+Facts learned after publishing go through `note <path|topic> (--text T | --input F)`,
+which appends one line to the sidecar `<checkpoint>.notes.jsonl` under
+`ledger.locked(sidecar)`:
+
+```json
+{"seq": 0, "created": "...", "session": "...", "terminal": "...", "text": "...",
+ "checkpoint_id": "...", "mac": "..."}
+```
+
+`mac = HMAC(receipt key, "handoff-note\0" + checkpoint_id, sha256(canonical entry
+without mac))`: the publication-receipt key, domain-separated so a note MAC never
+validates as a receipt MAC. `seq` counts valid lines from 0; the writer takes the
+next value from that validating read under the lock, so a hand-appended or corrupt
+line is one reported problem and never shifts later notes out of order. An edited,
+forged or removed middle line fails. The writer starts a new line if the file does
+not end in a newline. `session`, `terminal` and `created` are restricted to
+`[A-Za-z0-9._:@-]` (others become `_`, at most 200 bytes) at write and again at
+render. Notes attach only to trusted checkpoints whose status is open or resumed.
+Truncating the tail of the sidecar is not detected (no forgery is possible without
+the local key).
+
+Limits: a single note is refused above 16000 bytes at write time (`NOTE_TEXT_LIMIT`);
+delivery shortens each note to 2000 bytes (`NOTE_RENDER_BYTES`) and the whole
+section to 8000 bytes (`NOTES_RENDER_BYTES`), counting dropped notes in
+`notes_omitted`. Both delivery caps sit inside the 32000-byte package budget.
+
+Delivery rule: `prepare` (and so `resume` and restart adopt) appends
+`\n## Updates since checkpoint\n` after the body, oldest first. Each note renders
+as `- <created> <session[:8]>:` followed by its lines prefixed `  > `, so note text
+cannot inject a `## ` heading. Per-note cap 2000 bytes (` [... shortened]`), total
+cap 8000 bytes; omitted notes are counted in `notes_omitted`. Lines failing their
+seal are never delivered and are counted in `note_problems`. The delivery receipt
+binds a digest of the delivered notes, so `--reuse-receipt` reloads after a new note.
+
+Successor fold: a save whose predecessor has an open sidecar appends the same
+rendered section to the new body once, then appends a sealed
+`{"closed": true, "by": <successor path>}` line. The sidecar lock is held from read
+to close and is taken whether or not the sidecar exists yet, so a racing note is
+either read and carried or refused as `closed`/busy. A note on a closed sidecar
+returns `closed` (exit 1) naming the successor. A same-request retry of that save
+accepts the stored body only if it equals the body plus the rendered section of a
+prefix of the predecessor's valid notes; it then closes the sidecar if the save was
+interrupted before closing, or warns about notes added after the fold, which stay
+open. Every `saved` action ends with "Record later facts with `note`; never edit
+.handoffs/*.md."
+
 ### 7.3 Startup and opening requests
 
 Startup emits a compact next action, including when no handoff exists. Native

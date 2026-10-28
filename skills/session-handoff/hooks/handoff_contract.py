@@ -16,7 +16,7 @@ DELIVERY_FIELDS = frozenset({
     'path', 'body', 'references', 'skills', 'next_step_section', 'verification',
     'verify_required', 'trusted', 'workspace', 'optional_references',
     'withheld_references', 'delivery_receipt', 'reused_from', 'predecessor',
-    'continuity', 'next_step', 'reviewed', 'review',
+    'continuity', 'next_step', 'reviewed', 'review', 'notes', 'notes_omitted',
 })
 # Small orientation keys first; large content last so a clipped read keeps the next step
 LEADING = ('outcome', 'action', 'next_step', 'stage', 'path', 'next_step_section')
@@ -24,7 +24,7 @@ TRAILING = ('references', 'skills', 'body')
 DIAGNOSTIC_FIELDS = frozenset({
     'outcome', 'action', 'stage', 'warnings', 'errors', 'problems',
     'withheld_references', 'exit_code', 'log', 'excerpt', 'verify',
-    'baseline_failures', 'new_failures', 'fixed', 'candidates', 'holder',
+    'baseline_failures', 'new_failures', 'fixed', 'candidates', 'holder', 'note_problems',
 })
 
 
@@ -248,5 +248,7 @@ def exit_status(surface, outcome, operation=None):
         expected = {'adopt': 'resumed', 'restart': 'ready'}.get(operation)
         return int(expected is not None and outcome != expected)
     if surface == 'protocol' and operation == 'save' and outcome == 'incomplete':
+        return 1
+    if surface == 'protocol' and operation == 'note' and outcome == 'closed':
         return 1
     return int(outcome in _EXIT_FAILURES[surface])

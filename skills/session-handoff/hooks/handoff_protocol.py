@@ -19,6 +19,7 @@ from handoff_contract import METADATA_FORMATS, metadata_problem
 import handoff_identity
 import handoff_ledger as ledger
 from handoff_review import read_review
+import handoff_notes
 import handoff_workspace as workspace
 from handoff_record import Record
 from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
@@ -791,6 +792,22 @@ def inbox_document(root, document):
     return updated
 
 
+NOTE_RULE = ' Record later facts with `note`; never edit .handoffs/*.md.'
+
+
+def _retry_fold(locks, record):
+    """Folded sections a retried successor may legitimately carry: one per prefix
+    of the predecessor's valid notes (a crash may precede close()). Returns
+    (predecessor, checkpoint_id, notes, candidates) or None without a predecessor."""
+    predecessor = record['fm'].get('predecessor')
+    if not predecessor or not os.path.isfile(predecessor):
+        return None
+    locks.enter_context(ledger.locked(handoff_notes.sidecar_path(predecessor)))
+    pred_id = Record.load(predecessor).fm.get('checkpoint_id', '')
+    state = handoff_notes.read(predecessor, pred_id)
+    return predecessor, pred_id, state, [handoff_notes.render(state['notes'][:k])[0] for k in range(len(state['notes']) + 1)]
+
+
 def save(root, session, request_id, document):
     root = os.path.realpath(handoff_identity.project_root(root))
     prune_publication_intents(root)
@@ -833,12 +850,21 @@ def save(root, session, request_id, document):
                 if record['record'].has_receipt() and not record['record'].published():
                     return dict(outcome='conflict', action='Published checkpoint changed; reconcile it and use a new request ID.')
                 # Reconstruct expected content before repairing an interrupted receipt.
-                if record['text'].split('\n---\n', 1)[-1] != body:
+                stored = record['text'].split('\n---\n', 1)[-1]
+                fold = _retry_fold(locks, record)
+                carried = [body + c for c in fold[3]].index(stored) if fold and stored in [body + c for c in fold[3]] else (0 if stored == body else None)
+                if carried is None:
                     return dict(outcome='conflict', action='Saved body changed; preserve it and use a new request ID after reconciliation.')
                 # Sealing marks the file trusted: its metadata must match what was submitted, not just hash and body.
                 if not _front_matter_matches(root, document, record):
                     return dict(outcome='conflict', path=record['path'], action='Saved front matter differs from the submitted checkpoint; it was not sealed. Inspect it, then use a new request ID.')
                 write_json(record['path'] + '.published', ledger.seal(identity, snapshot(record['path'])))
+                retry_warnings = []
+                if fold and fold[2]['closed'] is None:
+                    if carried == len(fold[2]['notes']):
+                        handoff_notes.close(fold[0], fold[1], record['path'])  # lock held by _retry_fold
+                    else:
+                        retry_warnings.append('%d predecessor note(s) arrived after this checkpoint was written; they stay open on %s.' % (len(fold[2]['notes']) - carried, fold[0]))
                 guard = restart_guard(root, session, topic, [r for r in records if r['path'] != record['path']],
                                       pressure=record['fm'].get('reason') == 'context-pressure',
                                       progress=predecessor_progress(root, record['fm'], json.loads(record['fm'].get('continuity', '[]'))))
@@ -847,8 +873,8 @@ def save(root, session, request_id, document):
                     guard['reasons'] = list(dict.fromkeys(guard['reasons'] + guard['pause_reasons']))
                 next_transition = (dict(kind='none', action='Checkpoint is already transferred or closed; continue current work without restarting.')
                                    if not record['record'].open_strict else transition(root, guard, path=record['path'], session=session))
-                return dict(outcome='saved', path=record['path'], checkpoint_id=identity,
-                            transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.')
+                return dict(outcome='saved', path=record['path'], checkpoint_id=identity, warnings=retry_warnings,
+                            transition=next_transition, action='Checkpoint publication is confirmed; follow transition.action.' + NOTE_RULE)
         refusal, base = resolve_base(root, document.get('base', ''))
         if refusal:
             return refusal
@@ -976,7 +1002,16 @@ def save(root, session, request_id, document):
             fields['predecessor'] = predecessor
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
-        text = '---\n' + ''.join('%s: %s\n' % pair for pair in fields.items()) + '---\n' + body
+        carried = None
+        if predecessor:
+            # Always lock, even before a sidecar exists: a note racing this fold either
+            # lands before the read (and is carried) or sees the closed sidecar.
+            locks.enter_context(ledger.locked(handoff_notes.sidecar_path(predecessor)))
+            carried = handoff_notes.read(predecessor, prior.get('checkpoint_id') or Record.load(predecessor).fm.get('checkpoint_id', ''))
+            if carried['closed'] is not None:
+                carried = None
+        folded = handoff_notes.render(carried['notes'])[0] if carried else ''
+        text = '---\n' + ''.join('%s: %s\n' % pair for pair in fields.items()) + '---\n' + body + folded
         filename = now.strftime('%Y%m%d-%H%M%S-') + topic + '-' + identity[:12] + '.md'
         destinations = list(dict.fromkeys([ledger.save_path(root), ledger._fallback_dir(root)] + (
             [os.path.join(root, '.handoffs')] if ledger.handoffs_dir_usable(root) or not os.path.lexists(os.path.join(root, '.handoffs')) else [])))
@@ -1001,9 +1036,15 @@ def save(root, session, request_id, document):
                     handoff_identity.local_state_dir(os.path.realpath(root), '', create=True)
                 publish(path, text)
                 write_json(path + '.published', ledger.seal(identity, ledger.content_fingerprint(text)))
+                note_warning = []
+                if carried is not None:
+                    try:
+                        handoff_notes.close(predecessor, Record.load(predecessor).fm.get('checkpoint_id', ''), path)
+                    except (OSError, ledger.ConflictError):
+                        note_warning.append('Predecessor notes were carried but its notes sidecar could not be closed.')
                 # The successor's predecessor field is the committed lineage record.
                 # Old-file cleanup is optional and never makes a saved successor vanish.
-                warnings = intent_warning + lineage_warning + slug_warning
+                warnings = intent_warning + lineage_warning + slug_warning + note_warning
                 if len(body.split()) > ledger.RECOMMENDED_WORDS or len(text.encode()) > RECOMMENDED_DOCUMENT_BYTES:
                     warnings.append('Checkpoint exceeds the recommended 1500 words / 24000 bytes; keep essential context and consider optional background references.')
                 if re.search(r'\b(?:re[- ]?read|read\s+the\s+(?:whole|entire)|load\s+(?:the\s+)?skill)\b', body, re.I):
@@ -1013,7 +1054,7 @@ def save(root, session, request_id, document):
                     if excerpt and int(excerpt[2]) - int(excerpt[1]) + 1 > 80:
                         warnings.append('Required excerpt exceeds the recommended 80 lines: %s; keep necessary content and defer background to optional_references.' % spec)
                 return dict(outcome='saved', path=path, checkpoint_id=identity, warnings=warnings, transition=transition(root, guard, path=path, session=session),
-                            action='Checkpoint is published and discoverable; follow transition.action, then stop.')
+                            action='Checkpoint is published and discoverable; follow transition.action, then stop.' + NOTE_RULE)
             except OSError as exc:
                 if os.path.exists(path):
                     return dict(outcome='blocked', path=path, action='Publication was interrupted after writing the document. Keep the draft and retry the same request ID to finish its receipt; do not clear.')
@@ -1023,6 +1064,26 @@ def save(root, session, request_id, document):
                     pass
                 failures.append(dict(path=directory, error=type(exc).__name__))
         return dict(outcome='blocked', errors=failures, action='Keep this session and the draft. Both supported locations failed; report access/storage failure. Do not clear or claim the handoff was saved.')
+
+
+
+def note(path, root, session, text):
+    """Append a sealed fact to a published checkpoint's notes sidecar; never edits the checkpoint."""
+    root = handoff_identity.project_root(root)
+    target = os.path.realpath(os.path.expanduser(path)) if os.path.isfile(os.path.expanduser(path)) else ledger.resolve(path, root)['authoritative']
+    if not target or not os.path.isfile(target):
+        return dict(outcome='none', action='No saved handoff matches %r; note needs a published checkpoint path or topic.' % str(path)[:200])
+    checkpoint = Record.load(target)
+    if not checkpoint.trusted():
+        return dict(outcome='blocked', path=target, action='Checkpoint is not sealed by this machine (unpublished, edited or foreign); notes attach only to trusted checkpoints.')
+    if checkpoint.fm.get('status') in ('superseded', 'abandoned', 'unpublished'):
+        return dict(outcome='closed', path=target, action='Checkpoint is %s; record the fact in its successor or a new save.' % checkpoint.fm.get('status'))
+    added = handoff_notes.add(target, checkpoint.fm['checkpoint_id'], text, session, terminal_id(), ledger.locked)
+    if added['outcome'] == 'closed':
+        return dict(outcome='closed', path=target, successor=added['successor'],
+                    action='Notes on this checkpoint are closed; its successor %s carries them. Note that checkpoint instead.' % added['successor'])
+    return dict(outcome='noted', path=target, seq=added['seq'], notes=added['notes'],
+                action='Note sealed in the checkpoint sidecar; resume delivers it after the body. Never edit .handoffs/*.md.')
 
 
 PACKAGE_BYTES = 32_000
@@ -1262,6 +1323,9 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             raise ValueError('Repair the checkpoint before preparation: ' + '; '.join(problems))
         ledger._check_owner(path, session)
         body = text.split('\n---\n', 1)[-1]
+        notes_state = handoff_notes.read(path, fm.get('checkpoint_id', ''))
+        notes_section, notes_omitted = handoff_notes.render(notes_state['notes'])
+        body += notes_section
         refs, skills, all_skills, seen, dependencies = [], [], [], set(), {}
         required = ledger._split_csv(fm.get('references', ''))
         own = checkpoint.trusted()
@@ -1280,6 +1344,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         # A server-stored receipt plus possession of its opaque token binds reuse
         # to a previous delivery, this session, and unchanged content.
         reference_fingerprints = dict(dependencies)
+        notes_digest = handoff_notes.digest(notes_state)  # new notes defeat reuse
         delivery_file = handoff_identity.delivery_receipt_path(root, session)
         reused_bytes = 0
         if reuse_receipt:
@@ -1288,6 +1353,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                 if (delivered['token'] == reuse_receipt and delivered['path'] == path
                         and delivered['fingerprint'] == fingerprint
                         and delivered['references'] == reference_fingerprints
+                        and delivered.get('notes', handoff_notes.digest(dict(notes=[], closed=None))) == notes_digest
                         and 0 <= time.time() - delivered['created'] < 7200):
                     reused_bytes = len(body.encode()) + sum(len(r['text'].encode()) for r in refs)
             except (OSError, ValueError, KeyError, TypeError):
@@ -1332,6 +1398,13 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             result['continuity'] = continuity_items(json.loads(fm['continuity']))
         if fm.get('predecessor'):
             result['predecessor'] = fm['predecessor']
+        if notes_state['notes']:
+            result['notes'] = len(notes_state['notes'])
+        if notes_omitted:
+            result['notes_omitted'] = notes_omitted
+        if notes_state['problems']:
+            result['note_problems'] = notes_state['problems']
+            result['action'] += ' %d checkpoint note line(s) failed their seal and were not delivered.' % notes_state['problems']
         if withheld:
             result['withheld_references'] = withheld
             result['action'] += ' References outside the project root were not loaded (untrusted checkpoint): ' + ', '.join(withheld[:8])
@@ -1371,7 +1444,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         # Failure to cache cannot invalidate an otherwise successful preparation.
         try:
             write_json(delivery_file, dict(token=delivery_token, path=path, fingerprint=fingerprint,
-                       references=reference_fingerprints, created=time.time()))
+                       references=reference_fingerprints, notes=notes_digest, created=time.time()))
         except OSError:
             result.pop('delivery_receipt', None)
         return result
@@ -1734,9 +1807,11 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                   next_step_section='Next steps', verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
                   metrics=prepared['metrics'], action='Continue with ## Next steps in the delivered body.')
-    for key in ('continuity', 'predecessor', 'reviewed', 'review'):
+    for key in ('continuity', 'predecessor', 'reviewed', 'review', 'notes', 'notes_omitted', 'note_problems'):
         if key in prepared:
             result[key] = prepared[key]
+    if 'note_problems' in prepared:
+        result['action'] += ' %d checkpoint note line(s) failed their seal and were not delivered.' % prepared['note_problems']
     if 'body' in prepared:
         result['body'] = body
     else:
@@ -2099,6 +2174,13 @@ def cli(argv):
     wait_p.add_argument('--root', default='.')
     wait_p.add_argument('--timeout', type=float, default=600)
     wait_p.add_argument('--interval', type=float, default=2)
+    note_p = sub.add_parser('note', description='Record a fact learned after publishing; appends a sealed line to <checkpoint>.notes.jsonl. Never edit .handoffs/*.md.')
+    note_p.add_argument('path', help='Checkpoint path or topic')
+    note_p.add_argument('--root', default='.')
+    note_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
+    note_src = note_p.add_mutually_exclusive_group(required=True)
+    note_src.add_argument('--text')
+    note_src.add_argument('--input', help='File with the note text; - for stdin')
     history_p = sub.add_parser('history')
     history_p.add_argument('root', nargs='?', default='.')
     history_p.add_argument('--topic')
@@ -2195,6 +2277,9 @@ def cli(argv):
             result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
         elif a.command == 'acknowledge':
             result = acknowledge(a.path, a.root, a.session)
+        elif a.command == 'note':
+            text = a.text if a.text is not None else (sys.stdin.read() if a.input == '-' else read_text(a.input))
+            result = note(a.path, a.root, a.session, text)
         elif a.command == 'wait':
             result = wait(a.root, a.target, a.status, a.timeout, a.interval)
         elif a.command == 'resume':

@@ -46,3 +46,7 @@ its restart section as directed below.
    the checkpoint/session. Reconcile pending intent instead of redispatching.
    For other transition kinds follow the save result's permitted action.
 5. Stop. Remaining authorized work belongs to the receiving session.
+
+To record anything after publishing, use note; never edit `.handoffs/*.md`:
+`python3 <ledger> note <checkpoint-or-topic> --text "..."` appends a sealed line
+that resume delivers after the body and a successor save folds in once.

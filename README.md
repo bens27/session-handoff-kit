@@ -1096,6 +1096,23 @@ Two constraints when you rewrite it:
   agent/chat section contract in SPEC §7.4. Run `python3
   tests/verify-skills.py` after editing.
 
+## Adding facts after publishing
+
+A published checkpoint is sealed: its receipt fingerprints the content, so
+editing `.handoffs/*.md` makes it untrusted. To record anything learned after
+publishing (a review verdict, a landed sha), use `note`:
+
+```bash
+python3 skills/session-handoff/hooks/handoff_ledger.py note <checkpoint-or-topic> --text "Opus review passed for 3b19e7e"
+```
+
+Each note is one HMAC-sealed line in `<checkpoint>.notes.jsonl`. Resume delivers
+open notes after the body under `## Updates since checkpoint`; a successor save
+folds them into its body once and closes the old sidecar. A note is refused
+above 16000 bytes; delivery shortens each note to 2000 bytes and the section to
+8000. Every `saved` result repeats the rule: record later facts with `note`, never
+edit `.handoffs/*.md`. See SPEC §7.2.1.
+
 ## What "useful on any environment" means
 
 The deterministic token-threshold trigger requires two things: lifecycle hooks
