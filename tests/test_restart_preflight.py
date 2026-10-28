@@ -365,6 +365,44 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(result['invalid_intent']['field'], 'request_id')
         self.assertEqual(location.read_text(), '{"state":"pending"}')
 
+    def test_foreign_root_does_not_hide_related_or_uncertain_bindings(self):
+        import handoff_intents as intents
+        self.preflight(request_id='legacy')
+        location = Path(intents.location(self.root, 'legacy'))
+        original = json.loads(location.read_text())
+        base = dict(original, root=self.root + '/foreign', path=self.root + '/foreign/checkpoint.md',
+                    checkpoint_id='0' * 64)
+        cases = [('root', dict(base, path=self.path)),
+                 ('root', dict(base, checkpoint_id=original['checkpoint_id'])),
+                 ('request_id', dict(base, request_id=None)),
+                 ('request_id', dict(base, request_id='renamed-request')),
+                 ('root', dict(base, root='relative-root'))]
+        for field, invalid in cases:
+            with self.subTest(invalid=invalid):
+                raw = json.dumps(invalid)
+                location.write_text(raw)
+                result = self.preflight(request_id='next-request')
+                self.assertEqual((result['outcome'], result['reason'], result['dispatch']),
+                                 ('blocked', 'invalid-persisted-intent', False), result)
+                self.assertEqual(result['invalid_intent']['path'], str(location))
+                self.assertEqual(result['invalid_intent']['field'], field)
+                self.assertEqual(location.read_text(), raw)
+                self.assertIsNone(restart.status(self.root, 'next-request'))
+
+    def test_unreadable_own_intent_reports_io_error_and_keeps_dispatch_evidence(self):
+        import handoff_intents as intents
+        self.preflight()
+        location = Path(intents.location(self.root, 'restart-1'))
+        location.unlink()
+        location.mkdir()
+        result = self.preflight()
+        self.assertEqual((result['reason'], result['dispatch']), ('invalid-persisted-intent', False))
+        self.assertEqual(result['invalid_intent']['request_id'], 'restart-1')
+        self.assertEqual(result['invalid_intent']['field'], 'file')
+        self.assertIn('IsADirectoryError', result['invalid_intent']['detail'])
+        self.assertLessEqual(len(result['invalid_intent']['detail']), 200)
+        self.assertTrue(location.is_dir())
+
     def test_retrieved_checkpoint_cannot_dispatch_under_new_id(self):
         self.preflight(request_id='legacy-retrieved')
         delivery = protocol.prepare(self.path, self.root, 'new')['delivery_receipt']
@@ -1078,7 +1116,7 @@ class AdoptTests(unittest.TestCase):
             terminal='term', state='retrieved', host_confirmed=False))
         self.assertEqual(restart.status(self.root, 'req-1')['successor_session'], 'new')
 
-    def test_adopted_session_can_reconcile_foreign_intent_and_restart_next_checkpoint(self):
+    def test_adopted_session_can_save_and_restart_with_foreign_intents_preserved(self):
         import handoff_intents as intents
         import shutil
         import subprocess
@@ -1086,6 +1124,25 @@ class AdoptTests(unittest.TestCase):
         code, _, adopted = self.adopt(AGENTSROOM_AGENT_ID='term')
         self.assertEqual((code, adopted['outcome']), (0, 'resumed'), adopted)
         env = dict(self.env, AGENTSROOM_AGENT_ID='term')
+        # Settled records from other roots are present before the fresh save.
+        # A long root also exercises recovery diagnostics without truncating it.
+        copies = []
+        for index, relative in enumerate(('.worktrees/other', '.worktrees/' + 'r' * 120 + '/' + 's' * 120)):
+            foreign = str(Path(self.root) / relative)
+            Path(foreign).mkdir(parents=True)
+            foreign_id = 'foreign-req-%d' % index
+            with patch.dict(os.environ, HANDOFF_TERMINAL_ID='other'):
+                checkpoint = protocol.save(foreign, 'foreign-old', 'foreign-save', {
+                    'topic': 'other', 'description': 'Other work', 'body': self.BODY})['path']
+                ready = restart.preflight(foreign, checkpoint, 'foreign-old', 'other', foreign_id,
+                                          workers=[], host_capable=True)
+                self.assertEqual(ready['outcome'], 'ready', ready)
+                receipt = protocol.prepare(checkpoint, foreign, 'foreign-new')['delivery_receipt']
+                restart.confirm_successor(foreign, foreign_id, 'foreign-new', 'other', receipt)
+            copied = Path(intents.location(self.root, foreign_id))
+            shutil.copyfile(intents.location(foreign, foreign_id), copied)
+            copies.append((copied, copied.read_bytes(), foreign_id, foreign))
+
         saved_run = subprocess.run(
             [sys.executable, str(HOOKS / 'handoff_ledger.py'), 'save', self.root,
              '--session', 'new'],
@@ -1095,46 +1152,26 @@ class AdoptTests(unittest.TestCase):
         self.assertEqual(saved_run.returncode, 0, saved_run.stderr + saved_run.stdout)
         saved = json.loads(saved_run.stdout)
         self.assertEqual(saved['outcome'], 'saved', saved)
-        # Reproduce a settled worktree intent copied into the live checkout's
-        # registry. Its original binding remains valid only in its own root.
-        foreign = str(Path(self.root) / '.worktrees/other')
-        Path(foreign).mkdir(parents=True)
-        with patch.dict(os.environ, HANDOFF_TERMINAL_ID='other'):
-            checkpoint = protocol.save(foreign, 'foreign-old', 'foreign-save', {
-                'topic': 'other', 'description': 'Other work', 'body': self.BODY})['path']
-            ready = restart.preflight(foreign, checkpoint, 'foreign-old', 'other', 'foreign-req',
-                                      workers=[], host_capable=True)
-            self.assertEqual(ready['outcome'], 'ready', ready)
-            receipt = protocol.prepare(checkpoint, foreign, 'foreign-new')['delivery_receipt']
-            restart.confirm_successor(foreign, 'foreign-req', 'foreign-new', 'other', receipt)
-        copied = Path(intents.location(self.root, 'foreign-req'))
-        shutil.copyfile(intents.location(foreign, 'foreign-req'), copied)
-        original = copied.read_bytes()
-
-        def run_restart(workers):
-            run = subprocess.run(
-                [sys.executable, str(HOOKS / 'restart_preflight.py'), 'restart',
-                 '--root', self.root, '--path', saved['path'], '--workers', json.dumps(workers),
-                 '--host-capable'],
-                env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
-            return run.returncode, json.loads(run.stdout)
-
-        code, blocked = run_restart([])
-        self.assertEqual((code, blocked['reason'], blocked['dispatch']),
-                         (1, 'invalid-persisted-intent', False), blocked)
-        self.assertEqual(blocked['invalid_intent']['path'], str(copied))
-        self.assertEqual(blocked['invalid_intent']['request_id'], 'foreign-req')
-        self.assertEqual(blocked['invalid_intent']['field'], 'root')
-        self.assertEqual(copied.read_bytes(), original)
-        self.assertIsNone(restart.status(self.root, blocked['request_id']))
-        # Simulate the operator's reconciliation, preserving the foreign record
-        # outside the scanned registry. Preflight itself must never move it.
-        copied.rename(Path(self.root) / 'reviewed-foreign-intent.json')
         workers = [dict(id=name, state='in_flight', via='mailbox') for name in
                    ('Opus review #99 r2', 'Opus review #159', '#155 rework', '#97 land relay')]
-        code, result = run_restart(workers)
-        self.assertEqual((code, result['outcome'], result['dispatch']),
+        run = subprocess.run(
+            [sys.executable, str(HOOKS / 'restart_preflight.py'), 'restart',
+             '--root', self.root, '--path', saved['path'], '--workers', json.dumps(workers),
+             '--host-capable'],
+            env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+        result = json.loads(run.stdout)
+        self.assertEqual((run.returncode, result['outcome'], result['dispatch']),
                          (0, 'ready', True), result)
+        skipped = {entry['request_id']: entry for entry in result['skipped_intents']}
+        self.assertEqual(set(skipped), {entry[2] for entry in copies})
+        for copied, original, foreign_id, foreign in copies:
+            self.assertEqual(copied.read_bytes(), original)
+            self.assertEqual(skipped[foreign_id]['path'], str(copied))
+            self.assertEqual(skipped[foreign_id]['field'], 'root')
+            self.assertEqual(skipped[foreign_id]['recorded'], foreign)
+            self.assertEqual(skipped[foreign_id]['expected'], self.root)
+            self.assertLessEqual(len(skipped[foreign_id]['detail']), 200)
+        self.assertEqual(restart.status(self.root, result['request_id'])['state'], 'pending')
         self.assertEqual(restart.status(self.root, 'req-1')['state'], 'retrieved')
 
     def test_adopt_delivery_metric_survives_successor_pressure_save(self):
@@ -1447,6 +1484,29 @@ class RestartCommandTests(unittest.TestCase):
         code, again = self.restart_cli('--workers', '[]', '--host-capable')
         self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'pending', False), again)
         self.assertEqual(again['warnings'], out['warnings'])
+
+    def test_own_invalid_intent_preserves_request_id_and_refuses_quarantine_retry(self):
+        import handoff_intents as intents
+        code, ready = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, ready['outcome']), (0, 'ready'), ready)
+        location = Path(intents.location(self.root, ready['request_id']))
+        original = json.loads(location.read_text())
+        cases = [('root', json.dumps(dict(original, root=self.root + '/other'))),
+                 ('request_id', json.dumps(dict(original, request_id='different-request'))),
+                 ('json', '{broken')]
+        for field, raw in cases:
+            with self.subTest(field=field):
+                location.write_text(raw)
+                code, result = self.restart_cli('--workers', '[]', '--host-capable')
+                self.assertEqual((code, result['reason'], result['dispatch']),
+                                 (1, 'invalid-persisted-intent', False), result)
+                self.assertEqual(result['invalid_intent']['request_id'], result['request_id'])
+                self.assertEqual(result['invalid_intent']['path'], str(location))
+                self.assertEqual(result['invalid_intent']['field'], field)
+                self.assertIn('Do not quarantine', result['action'])
+                self.assertIn('new checkpoint', result['action'])
+                self.assertNotIn('detail', result)
+                self.assertEqual(location.read_text(), raw)
 
     def test_saved_restart_transition_binds_checkpoint_among_older_same_session_saves(self):
         import shlex

@@ -790,11 +790,17 @@ native cycle in one command with compact output:
   terminal yields `outcome: held` (stage `hold`) after the receipt is recorded and
   before any resume; rerun after an explicit release.
 
-`invalid-persisted-intent` blocks on any invalid registry record, including an
-unrelated settled intent. Its `invalid_intent` object names the offending JSON
-`path`, failed `field`, bounded `detail`, and readable `request_id`. Preserve the
-record and checkpoint, reconcile the named intent with host history, and follow
-the [restart recovery procedure](docs/restart-recovery.md) before retrying.
+Clearly unrelated foreign-root records are skipped without changing them.
+`skipped_intents` lists each file's `path`, `field: root`, `request_id`,
+`recorded` root and `expected` registry root. The current request and checkpoint
+must differ, and the filename and root/path bindings must be canonical;
+unreadable or uncertain scope still blocks with `invalid-persisted-intent`.
+Its `invalid_intent` object names the offending file and field. Preserve it and
+follow the [restart recovery procedure](docs/restart-recovery.md).
+An invalid intent for the attempted request itself must never be quarantined
+and retried for the same checkpoint: preserve its dispatch evidence and, if
+the host accepted it or its outcome is unknown, continue manually or save a new
+checkpoint for a new request ID.
 
 `acceptance` accepts JSON `{root,request_id,transcript}` on stdin or `--input`.
 Successor confirmation automatically searches the predecessor's Codex sessions

@@ -113,18 +113,23 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     must materialize retrieved reports locally before calling. A duplicate intent
     is uncertain after a crash: reconcile with the host, never blindly dispatch.
     """
+    skipped_intents = []
+
     def blocked(reason):
-        return dict(outcome='blocked', dispatch=False, reason=reason,
-                    host_confirmed=False)
+        result = dict(outcome='blocked', dispatch=False, reason=reason, host_confirmed=False)
+        if skipped_intents:
+            result['skipped_intents'] = list(skipped_intents)
+        return result
 
     def invalid_intent(exc, entry):
         diagnostic = (exc.diagnostic if isinstance(exc, intents.InvalidIntent) else
                       dict(path=os.path.realpath(entry), field='file', detail=str(exc)[:200]))
         return dict(blocked('invalid-persisted-intent'), invalid_intent=diagnostic,
                     action='Do not call agents_restart. Keep the checkpoint and offending intent unchanged. '
-                           'Inspect invalid_intent.path and invalid_intent.field; reconcile that intent with '
-                           'host history before an operator restores or quarantines it. Retry this exact '
-                           'checkpoint after reconciliation, or continue manually in a fresh session.')
+                           'Do not quarantine an intent and retry its checkpoint: that can erase dispatch '
+                           'evidence for the same deterministic request. Reconcile host history first. '
+                           'If the host accepted the request or its outcome is unknown, continue manually '
+                           'or save a new checkpoint for a new request ID.')
     # Native UUIDs, AgentsRoom terminal IDs and deterministic request IDs fit
     # this ASCII token format; arbitrary prose is not a first-message identifier.
     if any(not isinstance(value, str) or re.fullmatch(r'[A-Za-z0-9._:@-]{1,128}', value) is None
@@ -211,12 +216,17 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                                             'hook_drift to "block" to stop restarts on drift.' % names))
         if ledger.resolve(path, root).get('authoritative') != path:
             return blocked('stale-checkpoint')
-        # Validate every persisted intent, including legacy request IDs. A
-        # different request name must not turn uncertain dispatch into permission.
-        entry = intents.directory(root, create=False)
+        # Scope clearly foreign roots before strict validation. Local or uncertain
+        # bindings (including legacy request IDs) still guard against redispatch.
+        entry = str(Path(location).parent)
         try:
             for entry in intents.entries(root):
                 if reentry is not None and os.path.realpath(entry) == location:
+                    continue
+                foreign = intents.foreign_root_diagnostic(root, entry, request_id, path,
+                                                         checkpoint.checkpoint_id)
+                if foreign is not None:
+                    skipped_intents.append(foreign)
                     continue
                 other = intents.canonical(root, entry)
                 same_checkpoint = (other['path'] == path or
@@ -316,7 +326,10 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # Durable single-attempt reservation, written before any host call is returned.
         record['dispatch_started_at'] = time.time()
         intents.write(location, record)
-        return dict(record, outcome='ready', dispatch=True)
+        result = dict(record, outcome='ready', dispatch=True)
+        if skipped_intents:
+            result['skipped_intents'] = list(skipped_intents)
+        return result
 
 
 TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
@@ -942,7 +955,7 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
             out['warnings'] = result['warnings']
     else:
         out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy', 'warnings', 'invalid_intent') if k in result})
-        if result.get('action'):
+        if result.get('action') and not result.get('invalid_intent'):
             out['detail'] = result['action']
         out.update(
                    action='Do not call agents_restart. Pending means reconcile with host history; '
@@ -951,6 +964,8 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
                           'checkpoint open and report.')
         if result.get('invalid_intent'):
             out['action'] = result['action']
+    if result.get('skipped_intents'):
+        out['skipped_intents'] = result['skipped_intents']
     return out
 
 

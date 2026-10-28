@@ -681,24 +681,38 @@ prunes, under the registry lock, retrieved/refused intents older than 30 days
 whose checkpoint is no longer open and authoritative (compared by real path),
 without waiting on a busy record's lock and removing its lock sidecar; pending intents (expired
 or not) and invalid records are never pruned.
-Every persisted intent in the registry is validated, including settled records
-and other terminals' records. A copied worktree intent whose `root` differs from
-the registry root blocks with `reason: invalid-persisted-intent`; a successful
-save or adoption does not make that unrelated record valid. The verdict includes
+Preflight validates the attempted request's own intent first, before scanning
+the registry. The scan skips a clearly unrelated foreign-root entry without
+changing it: its readable root and checkpoint path must be canonical absolute
+paths, its nonempty request ID must match its filename, and its request ID,
+checkpoint path and checkpoint ID must all differ from the current attempt.
+The checkpoint ID must be a lowercase SHA256. The verdict lists every skipped
+entry in `skipped_intents`, with `path`, `field: root`, `request_id`, bounded
+`detail`, and separate full `recorded` and `expected` roots. Other restart gates
+still run; a skip alone never authorizes dispatch. The original foreign JSON
+and associated state are never moved, rewritten or deleted by this scoping step.
+Local, related and uncertain bindings still fail closed. An invalid record
+returns `reason: invalid-persisted-intent` with
 `invalid_intent: {path, field, detail, request_id?}`. `path` names the offending
-JSON file (distinct from the current checkpoint `path`), `field` identifies the
-failed check, `detail` is bounded to 200 characters, and `request_id` is present
-when readable. Decode or object-shape failures use `json`; I/O failures use
-`file`. The outer `request_id` still names the attempted restart.
+JSON file, distinct from the current checkpoint `path`; `field` names the
+failed check and `detail` is capped at 200 characters. Root failures keep full
+`recorded` and `expected` data separately. Decode or object-shape failures use
+`json`; I/O failures use `file` and retain the exception class and strerror.
+The outer `request_id` still names the attempted restart.
+When the nested request ID matches the outer one, the invalid record is the
+attempted request's own intent, including when its JSON or stored ID is damaged:
+the diagnostic retains the lookup request ID. Do not quarantine it and retry
+the same checkpoint; the deterministic request ID could be dispatched twice
+after its evidence is removed. Reconcile host history first. If the host
+accepted it or its outcome is unknown, continue manually or save a new checkpoint
+for a new request ID.
 Preserve the checkpoint and intent, do not dispatch, and reconcile the named
-record with native host history. An operator may then restore a misplaced record
-to its original registry or quarantine confirmed foreign/corrupt evidence outside
-the scanned registry; never rewrite a binding or automatically discard a record
-to bypass the block. Retry the exact saved checkpoint only after reconciliation,
-or continue manually in a fresh session with the checkpoint open. Repeated saves
-alone cannot repair a foreign/invalid registry entry. See
-[`docs/restart-recovery.md`](docs/restart-recovery.md) for the recovery procedure
-and the October 28 incident evidence.
+record with native host history. Transient file errors require restoring access,
+not discarding evidence. Do not rewrite a binding or automatically quarantine or
+remove any record to bypass a block. Foreign records need no repair for a fresh
+unrelated restart; any later live-state reconciliation is an operator decision.
+See [`docs/restart-recovery.md`](docs/restart-recovery.md) for recovery details;
+incident-specific evidence is recorded on ticket #166.
 New saves record the hook-observed workspace (or project root) and SHA256 of
 `.claude/settings.json` and `.claude/settings.local.json`, including absence.
 Preflight compares that save-time baseline before creating an intent. The

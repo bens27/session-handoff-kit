@@ -293,23 +293,28 @@ def acceptance_valid(record):
 
 class InvalidIntent(ValueError):
     """A preserved record that failed validation, with bounded recovery context."""
-    def __init__(self, path, field, detail, request_id=None):
+    def __init__(self, path, field, detail, request_id=None, *, recorded=None, expected=None):
         self.diagnostic = dict(path=os.path.realpath(path), field=field, detail=detail[:200])
         if isinstance(request_id, str) and request_id.strip():
             self.diagnostic['request_id'] = request_id
+        if recorded is not None:
+            self.diagnostic['recorded'] = recorded
+        if expected is not None:
+            self.diagnostic['expected'] = expected
         super().__init__('Invalid persisted restart intent at %s (%s): %s '
                          'Preserve it and reconcile with the host.' %
                          (self.diagnostic['path'], field, self.diagnostic['detail']))
 
 
-def _read_record(path):
+def _read_record(path, request_id=None):
     try:
         record = protocol.load_state_json(str(path))
     except FileNotFoundError:
         raise
     except (OSError, ValueError) as exc:
         field = 'file' if isinstance(exc, OSError) else 'json'
-        raise InvalidIntent(path, field, 'Expected readable JSON with an object at the top level.') from exc
+        message = (exc.strerror or 'Cannot read the intent file.') if isinstance(exc, OSError) else str(exc)
+        raise InvalidIntent(path, field, '%s: %s' % (type(exc).__name__, message), request_id) from exc
     return record
 
 
@@ -320,13 +325,13 @@ def status(root, request_id):
     """
     path = location(root, request_id)
     try:
-        record = _read_record(path)
+        record = _read_record(path, request_id)
     except FileNotFoundError:
         return None
 
     def require(valid, field, detail):
         if not valid:
-            raise InvalidIntent(path, field, detail, record.get('request_id'))
+            raise InvalidIntent(path, field, detail, request_id)
 
     required_strings = ('root', 'path', 'session', 'terminal', 'request_id',
                         'checkpoint_id', 'fingerprint')
@@ -344,8 +349,9 @@ def status(root, request_id):
     require(isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
             and math.isfinite(stamp) and stamp > 0,
             'intent_at', 'Expected a positive finite timestamp.')
-    require(record['root'] == os.path.realpath(root), 'root',
-            'Recorded root %r does not match registry root %r.' % (record['root'], os.path.realpath(root)))
+    if record['root'] != os.path.realpath(root):
+        raise InvalidIntent(path, 'root', 'Recorded root differs from the registry root.', request_id,
+                            recorded=record['root'], expected=os.path.realpath(root))
     require(record['path'] == os.path.realpath(record['path']), 'path',
             'Expected a canonical absolute checkpoint path.')
     require(record['request_id'] == request_id, 'request_id', 'Request ID does not match the lookup.')
@@ -390,6 +396,34 @@ def canonical(root, entry):
     if record is None:
         raise InvalidIntent(entry, 'file', 'Intent disappeared during validation.', request_id)
     return record
+
+
+def foreign_root_diagnostic(root, entry, request_id, path, checkpoint_id):
+    """Identify a foreign record without reading its original root or changing it.
+
+    Only a canonical filename and readable, distinct root/request/checkpoint
+    binding establish that it cannot hold this request's dispatch evidence.
+    Anything uncertain falls through to strict canonical validation.
+    """
+    record = _read_record(entry)
+    foreign_root = record.get('root')
+    foreign_request = record.get('request_id')
+    foreign_path = record.get('path')
+    foreign_checkpoint = record.get('checkpoint_id')
+    if (not isinstance(foreign_root, str) or not os.path.isabs(foreign_root)
+            or foreign_root != os.path.realpath(foreign_root)
+            or foreign_root == os.path.realpath(root)
+            or not isinstance(foreign_request, str) or not foreign_request.strip()
+            or foreign_request == request_id
+            or os.path.realpath(entry) != location(root, foreign_request)
+            or not isinstance(foreign_path, str) or not os.path.isabs(foreign_path)
+            or foreign_path != os.path.realpath(foreign_path) or foreign_path == path
+            or not isinstance(foreign_checkpoint, str)
+            or re.fullmatch(r'[0-9a-f]{64}', foreign_checkpoint) is None
+            or foreign_checkpoint == checkpoint_id):
+        return None
+    return InvalidIntent(entry, 'root', 'Foreign root; this record does not apply to this restart.',
+                         foreign_request, recorded=foreign_root, expected=os.path.realpath(root)).diagnostic
 
 
 # -- retention ---------------------------------------------------------------------
