@@ -215,7 +215,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                 if ((other['state'] == 'pending' and (other['path'] == path or (
                         other['terminal'] == terminal and not intent_expired(other)
                         and not intents.stale_marked(other))))
-                        or (other['state'] in ('retrieved', 'refused') and same_checkpoint)):
+                        or (other['state'] in intents.SETTLED and same_checkpoint)):
                     return blocked('conflicting-restart-intent')
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             return blocked('invalid-persisted-intent')
@@ -771,7 +771,7 @@ def startup(cwd, session):
     requested = os.environ.get('HANDOFF_RESTART_REQUEST_ID', '').strip()
     if requested:
         try:
-            settled = (status(root, requested) or {}).get('state') in ('retrieved', 'refused')
+            settled = (status(root, requested) or {}).get('state') in intents.SETTLED
         except (ValueError, handoff_identity.UntrustedStateDir):
             settled = False
         if settled:

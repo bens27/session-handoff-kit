@@ -383,7 +383,7 @@ timing config is off; a non-empty `HANDOFF_AUTO` wins; project `false` disables;
 otherwise the user file decides. Unset means on inside AgentsRoom and off
 elsewhere, except under `handoff_v3`, where an unset value is off, overriding
 the AgentsRoom default. Both judge v3 timing with the same inputs: the model
-and reported window the watcher recorded in the session note. The watcher reports a project `"auto": true`
+and reported window the watcher recorded in the session note. With no session note (a synthetic identity, or a note older than the 24 h `max_age`), the save transition has no recorded inputs and falls back to the default threshold. The watcher reports a project `"auto": true`
 once per session with a `handoff-status:` diagnostic. Wrongly
 typed values are ignored; these keys are never read as model thresholds.
 

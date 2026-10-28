@@ -172,6 +172,45 @@ class MandatoryGate(unittest.TestCase):
         self.assertEqual(self.gate()['hookSpecificOutput']['permissionDecision'], 'deny')
         self.assertEqual(self.gate(cwd=str(child))['hookSpecificOutput']['permissionDecision'], 'deny')
 
+    def test_subdirectory_session_note_keyed_like_the_watcher_before_first_checkpoint(self):
+        # #156 item 3: before .handoffs exists, the gate reads config at the Git root G
+        # but must key the session note where the watcher does: canonical_root(cwd).
+        self.config()
+        (self.project / '.git').mkdir()
+        child = self.project / 'pkg'
+        child.mkdir()
+        self.assertEqual(self.gate(cwd=str(child))['hookSpecificOutput']['permissionDecision'], 'deny')
+        sys.path.insert(0, str(runtime.SKILL / 'hooks'))
+        self.addCleanup(sys.path.remove, str(runtime.SKILL / 'hooks'))
+        import handoff_identity
+        state = self.env['HANDOFF_STATE_DIR']
+        watcher_key = handoff_identity.session_note_path(str(child), 'gate-test', state)
+        root_key = handoff_identity.session_note_path(str(self.project), 'gate-test', state)
+        self.assertNotEqual(watcher_key, root_key)
+        self.assertTrue(os.path.exists(watcher_key), 'gate note not where the watcher reads it')
+        # r1 B1: the save root G gets the same trigger so an accepted save can release.
+        self.assertTrue(os.path.exists(root_key), 'gate note not where save reads it')
+        self.assertEqual(json.loads(Path(watcher_key).read_text())['trigger_id'],
+                         json.loads(Path(root_key).read_text())['trigger_id'])
+
+    def test_subdirectory_session_clears_gate_after_accepted_save(self):
+        # #156 r1 B1: deny -> accepted save (root G) -> gate from G/pkg must release.
+        self.config()
+        (self.project / '.git').mkdir()
+        child = self.project / 'pkg'
+        child.mkdir()
+        denied = self.gate(cwd=str(child))['hookSpecificOutput']
+        self.assertEqual(denied['permissionDecision'], 'deny')
+        command = denied['permissionDecisionReason'].split('Save command: ', 1)[1].split('\n', 1)[0]
+        body = json.dumps({'topic': 'gate', 'description': 'Continue',
+            'body': '## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nReview.\n'})
+        saved = subprocess.run(command, shell=True, cwd=child, env=self.env,
+                               input=body, capture_output=True, text=True, timeout=30)
+        self.assertEqual(saved.returncode, 0, saved.stdout + saved.stderr)
+        self.assertEqual(json.loads(saved.stdout)['outcome'], 'saved', saved.stdout)
+        self.assertEqual(self.gate(cwd=str(child)), {})
+        self.assertEqual(self.gate(event='Stop', cwd=str(child)), {})
+
     def test_runtime_failure_denies_only_observed_obligations(self):
         self.config()
         self.gate(tool='Read')  # Create a release without creating an obligation.

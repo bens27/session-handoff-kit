@@ -213,9 +213,10 @@ def auto_mode_on():
         cw = sys.modules[__name__]
         if _V3_INPUTS is not None:  # what mandatory_status judged, also in the session note
             model, window = _V3_INPUTS
-        else:
+        else:  # same v3_inputs rule as mandatory_status; an event window is host-reported
             model = claude_usage(load_transcript_tail((_EVT or {}).get('transcript_path') or ''))[1]
             window = (_EVT or {}).get('context_window')
+            model, window = mandatory_gate.v3_inputs(model, window, 'reported' if window is not None else None)
     # One rule with the save transition: invalid v3 timing is off, HANDOFF_AUTO
     # wins, a project may disable auto but never enable it.
     value = mandatory_gate.auto_setting(project, cwd, cw, model, window)

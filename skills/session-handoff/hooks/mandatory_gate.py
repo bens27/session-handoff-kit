@@ -21,6 +21,13 @@ def project_root(cwd):
 
     Established ledger/Git boundaries take precedence; a config identifies an
     otherwise uninitialised project. Never cross HOME or a linked worktree.
+
+    Intentionally stops at ANY .git, unlike handoff_identity.project_root, which
+    continues past an ordinary repo (a folder of projects may itself be a repo).
+    This answers a different question: which .context-watch.json governs this
+    session. A config above the nearest repository must not opt a nested repo
+    into the mandatory gate. Do not unify the two; the session note and ledger
+    still use handoff_identity's root (see main()).
     """
     start = Path(cwd).resolve()
     home, configured = Path.home().resolve(), None
@@ -65,10 +72,17 @@ def timing(project, cwd, cw, model, window):
     return point, source, warning, lead_source
 
 
+V3_NOTE_KEYS = ('observed_occupancy_tokens', 'threshold', 'threshold_source', 'window', 'window_source', 'model')
+
+
 def v3_inputs(model, window, window_source):
     """The (model, window) every v3 timing verdict uses: a window counts only
     when the host reported it. The watcher records these in the session note
-    so the save transition reaches the watcher's verdict (#87 r3 F1)."""
+    so the save transition reaches the watcher's verdict (#87 r3 F1).
+
+    With no session note (a synthetic identity, or a note older than the 24 h
+    max_age) the save transition has no recorded inputs, and _transition falls
+    back to the default threshold."""
     return model, window if window_source == 'reported' else None
 
 
@@ -219,12 +233,24 @@ def enforce(evt, folder, cw, point, source, warning, lead_source, usage):
             else:
                 with os.fdopen(fd, 'w') as out:
                     out.write('%d/%d/%d\n' % (usage['occupancy'], point, usage['occupancy']))
-            cw.write_session_note(cwd, evt, True)
-            note = cw._ledger().read_session_note(cwd, session=session)
+            # The watcher reads the note at canonical_root(session cwd); save reads it
+            # at canonical_root(G), the root its command targets. When they differ,
+            # write both, carrying the watcher's v3 inputs, so either reader sees the
+            # same latch-derived trigger (#156 r1 B1).
+            note_cwd = evt.get('session_cwd') or cwd
+            cw.write_session_note(note_cwd, evt, True)
+            note = cw._ledger().read_session_note(note_cwd, session=session)
+            ident = cw.handoff_identity
+            if ident.canonical_root(note_cwd) != ident.canonical_root(cwd):
+                carried = {k: note[k] for k in V3_NOTE_KEYS if k in note}
+                cw.write_session_note(cwd, evt, True, carried)
+                if cw._ledger().read_session_note(cwd, session=session).get('trigger_id') != note.get('trigger_id'):
+                    raise ValueError('mandatory trigger could not be persisted at the save root')
             active = note.get('trigger_id')
             if not active:
                 raise ValueError('mandatory trigger could not be persisted')
             state = {'trigger': active, 'stops': 0, 'save_attempts': 0, 'last_stop_attempts': -1}
+        # Scan the root the save command writes to (G), not the session cwd.
         records = cw._ledger()._records(cw.handoff_identity.project_root(cwd))
         published = any(r['fm'].get('session_id') == session
             and r['fm'].get('trigger_id') == active and not r['problems']
@@ -324,8 +350,11 @@ def main():
     if os.environ.get('CONTEXT_WATCH_DISABLE') == '1':
         return
     evt = json.load(sys.stdin)
-    cwd = project_root(evt.get('cwd') or os.getcwd())
-    evt = dict(evt, cwd=cwd)
+    origin = evt.get('cwd') or os.getcwd()
+    cwd = project_root(origin)
+    # Config, gate state and the ledger scan live at G; the session note is
+    # written at the watcher's key and, when it differs, at G too (#156).
+    evt = dict(evt, cwd=cwd, session_cwd=origin)
     try:
         project = json.loads((Path(cwd) / '.context-watch.json').read_text())
     except (OSError, ValueError):
