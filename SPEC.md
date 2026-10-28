@@ -1279,13 +1279,13 @@ explicit adopt.
 Reuse checkpoint_id, the six-field restart binding (checkpoint_id, path,
 request_id, root, session, terminal), its full SHA256, deterministic restart ID
 and 884a1469 `h-<24 hex>` HOME locator. Agent identity is observed terminal/host
-agent ID plus native session. Bind task_id and suggestions to sealed checkpoint
+agent ID plus native session. Bind ticket and suggestions to sealed checkpoint
 content; do not change the six-field digest or create a parallel ledger.
 
 Proposed index: `<canonical-root>/.handoffs/pointers/<full-binding-sha256>.json`.
 Schema version 1 contains checkpoint_id, checkpoint path, root, recorded
-workspace, predecessor session, terminal, optional task_id, request_id, full
-binding hash, handle and created time. Task/workspace equal the sealed checkpoint;
+workspace, predecessor session, terminal, optional ticket, request_id, full
+binding hash, handle and created time. Ticket/workspace equal the sealed checkpoint;
 other binding fields equal the intent. No body or skill text belongs here.
 The checkpoint may live in the existing fallback location. The temporary
 `context_watch.write_terminal_pointer` remains solely a current-session record.
@@ -1310,10 +1310,15 @@ alongside the fields above. User-scope continuation authorization is
 `~/.context-watch/thresholds.json`. A missing or rotated receipt key, a foreign
 HOME, a binding mismatch, expiry, a Git-tracked or indeterminate path, or a
 symlink/FIFO/non-private pointer is ineligible with a diagnostic; explicit adopt
-is the recovery. No second key exists. Pointer workspace and task_id must equal
+is the recovery. No second key exists. Pointer workspace and ticket must equal
 the sealed checkpoint's (missing workspace: `workspace-missing`); a symlinked
 or foreign index directory, an other-writable `.handoffs/` or a non-private
 `.handoffs/pointers/` is `unsafe-pointer-dir` (group write follows the umask).
+The pointer writes `ticket` from the checkpoint's `ticket:` header (#155).
+Pointers written earlier carry the same value as `task_id`; the reader accepts
+it as a fallback so they still adopt, and refuses a pointer whose `ticket` and
+`task_id` disagree (`binding-mismatch`). A legacy checkpoint `task_id:` header
+counts as its ticket on both the write and the verify side.
 Both directories are opened without following symlinks and validated with fstat;
 pointer enumeration, reads, locks, atomic writes and pruning use the pinned
 directory descriptor so a subsequent rename cannot redirect pointer I/O.

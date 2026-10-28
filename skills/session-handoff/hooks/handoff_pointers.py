@@ -27,7 +27,9 @@ VERSION = 1
 MAX_BYTES = 16384
 FIELDS = ('version', 'checkpoint_id', 'checkpoint_path', 'root', 'workspace', 'session',
           'terminal', 'request_id', 'binding_sha256', 'handle', 'created_at')
-OPTIONAL = ('task_id',)
+# `ticket` binds the checkpoint's ticket header. `task_id` is read-only: pointers
+# written before #155 carry it, and they must still adopt.
+OPTIONAL = ('ticket', 'task_id')
 RECOVER = ('Do not resume automatically; continue explicitly with the restart handle '
            '(restart_preflight.py adopt) after confirming the checkpoint.')
 
@@ -131,7 +133,7 @@ def pointer_path(root, digest):
     return os.path.join(pointer_dir(root), digest + '.json')
 
 
-def build(record, workspace=None, task_id=None):
+def build(record, workspace=None, ticket=None):
     """Pointer content for a validated intent record (binding fields equal the intent)."""
     data = dict(version=VERSION, checkpoint_id=record['checkpoint_id'],
                 checkpoint_path=record['path'], root=record['root'],
@@ -139,9 +141,26 @@ def build(record, workspace=None, task_id=None):
                 session=record['session'], terminal=record['terminal'],
                 request_id=record['request_id'], binding_sha256=record['binding_sha256'],
                 handle='h-' + record['binding_sha256'][:24], created_at=time.time())
-    if isinstance(task_id, str) and task_id.strip():
-        data['task_id'] = task_id
+    if isinstance(ticket, str) and ticket.strip():
+        data['ticket'] = ticket
     return data
+
+
+_UNBOUND = object()
+
+
+def checkpoint_ticket(checkpoint):
+    """The ticket a checkpoint binds: `ticket:` since #95, else the legacy `task_id:` header."""
+    return checkpoint.get('ticket') or checkpoint.get('task_id') or None
+
+
+def bound_ticket(data):
+    """The pointer's ticket (legacy `task_id` as fallback), None when absent, or
+    _UNBOUND when both keys are present and disagree (a tampered pointer)."""
+    values = [data[k] for k in OPTIONAL if k in data]
+    if any(v != values[0] for v in values):
+        return _UNBOUND
+    return values[0] if values else None
 
 
 def _same(a, b):
@@ -262,7 +281,8 @@ def evaluate(root, location, session=None, *, dir_fd=None):
     if not checkpoint.trusted():
         return out('ineligible', 'publication-untrusted')
     workspace = os.path.realpath(checkpoint.get('workspace') or record['root'])
-    if data['workspace'] != workspace or data.get('task_id') != (checkpoint.get('task_id') or None):
+    ticket = bound_ticket(data)
+    if data['workspace'] != workspace or ticket is _UNBOUND or ticket != checkpoint_ticket(checkpoint):
         return out('ineligible', 'binding-mismatch')
     if not _workspace_exists(workspace):
         return out('ineligible', 'workspace-missing')
@@ -271,7 +291,7 @@ def evaluate(root, location, session=None, *, dir_fd=None):
     mode = 'replay' if record['state'] == 'retrieved' else 'adopt'
     return out('candidate', request_id=record['request_id'], handle=data['handle'],
                terminal=record['terminal'], session=record['session'], mode=mode,
-               created_at=data['created_at'], task_id=data.get('task_id'))
+               created_at=data['created_at'], ticket=ticket)
 
 
 def scan(root, session=None):

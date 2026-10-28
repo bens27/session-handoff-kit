@@ -377,12 +377,60 @@ class PointerTests(unittest.TestCase):
     def test_pointer_task_and_workspace_must_match_sealed_checkpoint(self):
         ready = self.preflight()
         self.authorize()
-        self.rewrite_pointer(ready, task_id='attacker-task')
+        self.rewrite_pointer(ready, ticket='deadbeef')
         self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
         data = json.loads(self.pointer_file(ready).read_text())
-        del data['task_id']
+        del data['ticket']
         self.pointer_file(ready).unlink()
         protocol.write_json(str(self.pointer_file(ready)), dict(data, workspace='/nonexistent/ws'))
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+
+    # -- #155: the pointer binds the checkpoint `ticket` -----------------------
+    TICKET = '8ae43aa3'
+
+    def ticketed_preflight(self):
+        saved = protocol.save(self.root, 'old', 'save-ticket', {
+            'topic': 'work', 'description': 'Continue work', 'ticket': self.TICKET,
+            'body': '## Objective\nFix it\n## Current state\nSaved\n## Next steps\nTest it\n'})
+        self.assertIn('\nticket: %s\n' % self.TICKET, Path(saved['path']).read_text())
+        return self.preflight(path=saved['path'])
+
+    def test_pointer_binds_checkpoint_ticket_not_task_id(self):
+        ready = self.ticketed_preflight()
+        data = json.loads(self.pointer_file(ready).read_text())
+        self.assertEqual(data.get('ticket'), self.TICKET)
+        self.assertNotIn('task_id', data)
+        self.authorize()
+        found = pointers.scan(self.root)
+        self.assertEqual(found['diagnostics'], [])
+        self.assertEqual([c['ticket'] for c in found['candidates']], [self.TICKET])
+        self.assertNotIn('task_id', found['candidates'][0])
+
+    def test_legacy_task_id_pointer_still_adopts(self):
+        ready = self.ticketed_preflight()
+        data = json.loads(self.pointer_file(ready).read_text())
+        data['task_id'] = data.pop('ticket')  # the shape written before #155
+        self.pointer_file(ready).unlink()
+        protocol.write_json(str(self.pointer_file(ready)), data)
+        self.pointer_file(ready).chmod(0o600)
+        self.authorize()
+        found = pointers.scan(self.root)
+        self.assertEqual(found['diagnostics'], [])
+        self.assertEqual([c['ticket'] for c in found['candidates']], [self.TICKET])
+
+    def test_pointer_ticket_mismatch_is_refused(self):
+        ready = self.ticketed_preflight()
+        self.authorize()
+        self.rewrite_pointer(ready, ticket='deadbeef')
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+        # A legacy key that disagrees with `ticket` is tampering, not a fallback.
+        self.rewrite_pointer(ready, ticket=self.TICKET, task_id='deadbeef')
+        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+        data = json.loads(self.pointer_file(ready).read_text())
+        del data['ticket'], data['task_id']  # dropping the binding is refused too
+        self.pointer_file(ready).unlink()
+        protocol.write_json(str(self.pointer_file(ready)), data)
+        self.pointer_file(ready).chmod(0o600)
         self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
 
     def test_missing_workspace_is_ineligible(self):

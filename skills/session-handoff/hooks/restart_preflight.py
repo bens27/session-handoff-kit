@@ -272,7 +272,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # Pointer before any pending intent: a failed write leaves nothing to block.
         try:
             pointers.write_pointer(root, pointers.build(
-                record, checkpoint.get('workspace') or root, checkpoint.get('task_id')))
+                record, checkpoint.get('workspace') or root, pointers.checkpoint_ticket(checkpoint)))
         except pointers.PointerConflict:
             return dict(blocked('pointer-conflict'), stage='pointer',
                         action='Preserve the checkpoint; a different pointer already holds this binding.')
@@ -802,7 +802,7 @@ def startup(cwd, session):
                         action='Fix resume_pointer_policy (ask, latest-owned or manual); '
                                'automatic selection stays off until then.')
         if policy != 'latest-owned':
-            listed = [dict(request_id=c['request_id'], task_id=c.get('task_id'), created_at=c['created_at'],
+            listed = [dict(request_id=c['request_id'], ticket=c.get('ticket'), created_at=c['created_at'],
                            command=adopt_command(root, c['request_id']))
                       for c in sorted(owned, key=lambda c: (c['created_at'], c['pointer']))]
             return note('choose', policy=policy, policy_source=source, candidates=listed,
