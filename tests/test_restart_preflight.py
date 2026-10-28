@@ -1035,8 +1035,9 @@ class AdoptTests(unittest.TestCase):
         self.pointer('new')
         fixture = json.loads((Path(__file__).parent / 'fixtures/contract/adopt.json').read_text())
         expected_keys = list(json.loads(fixture['stdout']))
-        # Preserve the historical order fixture; #97 adds review evidence to delivery.
-        index = expected_keys.index('restart')
+        # Preserve the historical order fixture; #97 adds review evidence to delivery,
+        # ahead of the #99 staleness verdict when the fixture carries one.
+        index = expected_keys.index('staleness' if 'staleness' in expected_keys else 'restart')
         expected_keys[index:index] = ['reviewed', 'review']
         for attempt in ('first delivery', 'same-successor replay'):
             with self.subTest(attempt=attempt):
