@@ -945,6 +945,49 @@ interrupted before closing, or warns about notes added after the fold, which sta
 open. Every `saved` action ends with "Record later facts with `note`; never edit
 .handoffs/*.md."
 
+#### 7.2.2 Auto-close of landed checkpoints (#162)
+
+An explicit listing (`lookup`, the choose step) first retires open checkpoints
+whose work has landed. `handoff_autoclose.sweep(root)` runs once per listing. It
+runs only from the `lookup` command: never from hooks, dispatch or `resume`, and
+an explicit target is never retired on the way to being resumed. A checkpoint is
+retired only when all of these hold:
+
+- its header names a `ticket:` and its save recorded no uncommitted work
+  (`workspace_changes_hash` equals the SHA-256 of the empty string);
+- `git fetch --quiet --no-tags origin` (10 s timeout, no prompt) succeeds and
+  `refs/remotes/origin/main` resolves;
+- every named commit resolves and is an ancestor of `origin/main`. The named
+  commits are the sha of `git:` and `workspace_git:` (`branch@shortsha`) plus
+  `base:` when present; a malformed present field and shas in the body don't count;
+- `backlog_get` answers status `done` without `wontFix`. Won't-fix, cancelled
+  and every other status leave the checkpoint open.
+
+If any of these fails (no checkpoint qualifies, fetch fails, the backlog is
+unreachable or does not know the ticket, a commit is unresolvable or not
+landed), nothing happens. The first `BacklogUnavailable` stops the sweep. The
+backlog is asked only after a fetch succeeded with at least one candidate.
+
+Retiring appends one sealed line to the #159 sidecar under
+`ledger.locked(sidecar)`, with the same MAC as a note:
+
+```json
+{"seq": 3, "retired": true, "reason": "ticket-done", "created": "...", "checkpoint_id": "...",
+ "evidence": {"ticket": "...", "status": "done", "commits": ["<full sha>", ...], "origin_main": "<sha>"},
+ "mac": "..."}
+```
+
+The checkpoint `.md` is never written. `retire` is idempotent (a second valid
+retired line is never appended). `read()` returns the first valid one as
+`retired`; a forged or edited retired line counts in `note_problems` and does not
+close anything. Ledger scans (`_records`, so `lookup`, `history`, `resolve`) report
+a checkpoint with a valid retired line as status `retired`, which is in
+`CLOSED_STATUSES`: it leaves the open listing and dispatch treats an explicit
+target as closed. `lookup` reports newly retired checkpoints in
+`auto_closed: [{path, ticket}]`. A `note` is still accepted after a retire; only
+the successor `closed` line refuses notes. Retirement does not enter the notes
+delivery digest, because it changes no delivered content.
+
 ### 7.3 Startup and opening requests
 
 Startup emits a compact next action, including when no handoff exists. Native

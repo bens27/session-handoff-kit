@@ -192,6 +192,13 @@ def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _retired(path, checkpoint_id):
+    """True when the notes sidecar carries a valid sealed `retired` line (auto-close, #162)."""
+    import handoff_notes
+    return (os.path.exists(handoff_notes.sidecar_path(path))
+            and handoff_notes.read(path, checkpoint_id)['retired'] is not None)
+
+
 def _records(root, errors=None):
     """Every handoff belonging to root: {path, fm, text, mtime, topic, ended}.
     Fallback-dir files that name a different `project:` belong to another
@@ -211,6 +218,8 @@ def _records(root, errors=None):
                 # Receipt damage cannot reopen closed work. Trust is checked separately
                 # before content can be executed or inherited.
                 fm['status'] = 'unpublished'
+            if fm.get('checkpoint_id') and _is_open(fm) and _retired(path, fm['checkpoint_id']):
+                fm['status'] = 'retired'  # sealed in the notes sidecar (#162); the file is never written
             name_ended, name_topic = _name_parts(path)
             topic = fm.get("topic") or name_topic
             if _is_legacy_single_file(path, legacy) and "topic" not in fm:

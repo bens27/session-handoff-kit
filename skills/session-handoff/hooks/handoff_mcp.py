@@ -179,28 +179,45 @@ def client_from_config(root, env=None):
     return Client(server_url(root), token)
 
 
-def ticket_state(result):
-    """'open' | 'closed' | 'missing' from a backlog_get tool result."""
+def ticket_status(result):
+    """dict(status=<lowercase raw status>, wont_fix=bool) from a backlog_get tool
+    result, or None when the app says the ticket does not exist."""
     text = ''.join(c.get('text', '') for c in result.get('content') or () if isinstance(c, dict))
     if result.get('isError'):
         if NOT_FOUND_MARKER in text.lower():
-            return 'missing'
+            return None
         raise Unavailable('backlog_get returned an error')
     try:
         task = json.loads(text).get('task') or {}
     except (ValueError, AttributeError):
         raise Unavailable('backlog_get answer is not a task') from None
-    status = str(task.get('status', '')).lower()
-    return 'closed' if task.get('wontFix') is True or status in CLOSED_STATUSES else 'open'
+    return dict(status=str(task.get('status', '')).lower(), wont_fix=task.get('wontFix') is True)
 
 
-def backlog_lookup(root, env=None):
-    """A staleness lookup over one lazily-built client; configuration errors surface on first use."""
+def ticket_state(result):
+    """'open' | 'closed' | 'missing' from a backlog_get tool result."""
+    found = ticket_status(result)
+    if found is None:
+        return 'missing'
+    return 'closed' if found['wont_fix'] or found['status'] in CLOSED_STATUSES else 'open'
+
+
+def _lazy(root, env, parse):
     state = {}
 
     def lookup(ticket):
         if 'client' not in state:
             state['client'] = client_from_config(root, env)
-        return ticket_state(state['client'].call('backlog_get', {'taskId': ticket}))
+        return parse(state['client'].call('backlog_get', {'taskId': ticket}))
 
     return lookup
+
+
+def backlog_lookup(root, env=None):
+    """A staleness lookup over one lazily-built client; configuration errors surface on first use."""
+    return _lazy(root, env, ticket_state)
+
+
+def status_lookup(root, env=None):
+    """Like backlog_lookup, answering ticket_status (raw status, wont_fix, None for missing)."""
+    return _lazy(root, env, ticket_status)

@@ -17,7 +17,7 @@ import os
 
 from handoff_identity import parse_front_matter
 
-CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished")
+CLOSED_STATUSES = ("resumed", "superseded", "abandoned", "unpublished", "retired")
 VOLATILE_KEYS = ('claimed:', 'claim_owner:', 'status:', 'resumed:', 'resumed_by:', 'transfer_receipt:',
                  'superseded:', 'superseded_by:', 'abandoned:')
 

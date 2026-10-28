@@ -16,6 +16,11 @@ Delivery (prepare/resume) appends the open notes after the body under
 NOTES_HEADING. A successor save folds the pending notes into its body once and
 then closes the sidecar with a sealed {"closed": true, "by": successor} line;
 a note on a closed sidecar is refused with a pointer to the successor.
+
+Auto-close (#162) appends a sealed {"retired": true, "reason": "ticket-done",
+"evidence": {...}} line when the checkpoint's ticket is done and its commits
+are on origin/main. The ledger then lists the checkpoint as `retired` (closed);
+the .md is still never written, and notes remain allowed after a retire.
 """
 
 import hashlib
@@ -64,10 +69,10 @@ def _valid(entry, checkpoint_id, key):
 
 
 def read(path, checkpoint_id):
-    """Return dict(notes=[valid open notes oldest-first], closed=None|successor, problems=int,
-    next_seq=int). next_seq follows the last valid seq, so an invalid line never
+    """Return dict(notes=[valid open notes oldest-first], closed=None|successor,
+    retired=None|first valid retired entry, problems=int, next_seq=int). next_seq follows the last valid seq, so an invalid line never
     makes the next genuine note look out of order."""
-    result = dict(notes=[], closed=None, problems=0, next_seq=0)
+    result = dict(notes=[], closed=None, retired=None, problems=0, next_seq=0)
     try:
         with open(sidecar_path(path), encoding='utf-8', errors='replace') as f:
             lines = f.read().splitlines()
@@ -90,6 +95,10 @@ def read(path, checkpoint_id):
         result['next_seq'] = expected
         if entry.get('closed'):
             result['closed'] = entry.get('by') or ''
+            continue
+        if entry.get('retired') is True:
+            if result['retired'] is None:
+                result['retired'] = entry
             continue
         if isinstance(entry.get('text'), str) and entry['text'].strip():
             result['notes'].append(entry)
@@ -144,6 +153,22 @@ def close(path, checkpoint_id, successor, locked=None):
                                    created=datetime.now().isoformat(timespec='seconds'),
                                    checkpoint_id=checkpoint_id), key))
     return True
+
+
+def retire(path, checkpoint_id, evidence, locked):
+    """Seal the checkpoint retired (ticket done, commits landed). Idempotent:
+    returns 'retired', 'already' or 'unsealed' (no local key: nothing written)."""
+    key = record._receipt_key(create=True)
+    if not key:
+        return 'unsealed'
+    with locked(sidecar_path(path)):
+        state = read(path, checkpoint_id)
+        if state['retired'] is not None:
+            return 'already'
+        _append(path, _sealed(dict(seq=state['next_seq'], retired=True, reason='ticket-done',
+                                   evidence=evidence, created=datetime.now().isoformat(timespec='seconds'),
+                                   checkpoint_id=checkpoint_id), key))
+    return 'retired'
 
 
 def _clip(text, limit):

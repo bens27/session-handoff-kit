@@ -622,6 +622,14 @@ from the checkpoint's `ticket:`/`base:` lines, `Ticket:` trailers on the local
 "git-only"`) and the resume still succeeds; stale verdicts lead the `action`.
 Details: [docs/staleness-verdict.md](docs/staleness-verdict.md).
 
+`lookup` also retires local checkpoints whose work has landed: the ticket is
+`done` (not won't-fix) and every commit named in the header is on `origin/main`
+after a `git fetch origin`. A save with uncommitted work, a failed fetch or an
+unreachable backlog leaves the checkpoint open. Retiring writes one sealed line to
+`<checkpoint>.notes.jsonl`; the checkpoint itself is never edited. Newly retired
+checkpoints are listed in `auto_closed`, and `history` shows them as `retired`.
+`resume` never retires. See SPEC §7.2.2.
+
 `save --input -` reads the JSON draft from stdin, as does omitting `--input`
 unless `--topic` or `--body` supplies the draft.
 

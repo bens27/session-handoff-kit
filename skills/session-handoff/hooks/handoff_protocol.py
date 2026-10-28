@@ -251,7 +251,13 @@ def owned_selection(root):
     return value if value in OWNED_SELECTIONS else 'ask'
 
 
-def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None):
+def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None, auto_close=False):
+    """Open handoffs for a choose/listing. auto_close (explicit listings only, never
+    hooks or resume) first retires checkpoints whose ticket is done and landed (#162)."""
+    closed = []
+    if auto_close:
+        import handoff_autoclose
+        closed = handoff_autoclose.sweep(handoff_identity.project_root(root))
     stats = {}
     items = ledger.scan(root, max_age, stats)
     hidden = 0
@@ -297,6 +303,8 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
         result['selection'] = 'newest_owned' if newest_owned else 'just_parked'
         result['alternatives'] = mine[1:6]
         result['alternatives_total'] = len(mine) - 1
+    if closed:
+        result['auto_closed'] = closed
     if hidden:
         result['other_sessions'] = hidden
         if outcome == 'none':
@@ -2319,7 +2327,7 @@ def cli(argv):
             if root_note:
                 result['warnings'] = list(result.get('warnings') or []) + [root_note]
         else:
-            result = lookup(a.root, a.max_age_days, a.offset, a.topic, session=a.session)
+            result = lookup(a.root, a.max_age_days, a.offset, a.topic, session=a.session, auto_close=True)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
     result.setdefault('project', handoff_identity.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
