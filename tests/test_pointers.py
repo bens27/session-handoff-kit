@@ -426,12 +426,30 @@ class PointerTests(unittest.TestCase):
         # A legacy key that disagrees with `ticket` is tampering, not a fallback.
         self.rewrite_pointer(ready, ticket=self.TICKET, task_id='deadbeef')
         self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+        self.rewrite_pointer(ready, ticket=self.TICKET, task_id=self.TICKET)
+        self.assertEqual([c['ticket'] for c in pointers.scan(self.root)['candidates']], [self.TICKET])
+
+    def test_keyless_pointer_from_before_155_adopts_with_checkpoint_ticket(self):
+        # Opus r1 B1: 5201875 passed checkpoint.get('task_id') (None for a `ticket:`
+        # checkpoint) to build(), so pointers on disk today carry neither key.
+        ready = self.ticketed_preflight()
         data = json.loads(self.pointer_file(ready).read_text())
-        del data['ticket'], data['task_id']  # dropping the binding is refused too
+        del data['ticket']
         self.pointer_file(ready).unlink()
         protocol.write_json(str(self.pointer_file(ready)), data)
         self.pointer_file(ready).chmod(0o600)
-        self.assertEqual(pointers.scan(self.root)['diagnostics'][0]['reason'], 'binding-mismatch')
+        self.authorize()
+        found = pointers.scan(self.root)
+        self.assertEqual(found['diagnostics'], [])
+        self.assertEqual([c['ticket'] for c in found['candidates']], [self.TICKET])
+
+    def test_checkpoint_ticket_reads_only_well_formed_tickets(self):
+        # Opus r1 m2: a malformed `ticket:` header counts as absent, as in checkpoint_metadata.
+        self.assertEqual(pointers.checkpoint_ticket({'ticket': self.TICKET}), self.TICKET)
+        self.assertIsNone(pointers.checkpoint_ticket({'ticket': 'T-1'}))
+        self.assertIsNone(pointers.checkpoint_ticket({}))
+        self.assertEqual(pointers.checkpoint_ticket({'task_id': 'legacy-7'}), 'legacy-7')
+        self.assertEqual(pointers.checkpoint_ticket({'ticket': 'T-1', 'task_id': 'legacy-7'}), 'legacy-7')
 
     def test_missing_workspace_is_ineligible(self):
         ready = self.preflight()

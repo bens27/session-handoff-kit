@@ -16,6 +16,7 @@ import re
 import stat
 import time
 
+import handoff_contract as contract
 import handoff_identity
 import handoff_intents as intents
 import handoff_ledger as ledger
@@ -150,13 +151,17 @@ _UNBOUND = object()
 
 
 def checkpoint_ticket(checkpoint):
-    """The ticket a checkpoint binds: `ticket:` since #95, else the legacy `task_id:` header."""
-    return checkpoint.get('ticket') or checkpoint.get('task_id') or None
+    """The ticket a checkpoint binds: a well-formed `ticket:` (#95), else the legacy
+    `task_id:` header. A malformed `ticket:` reads as absent, as in checkpoint_metadata."""
+    ticket = checkpoint.get('ticket')
+    if isinstance(ticket, str) and contract.METADATA_FORMATS['ticket'].fullmatch(ticket):
+        return ticket
+    return checkpoint.get('task_id') or None
 
 
 def bound_ticket(data):
-    """The pointer's ticket (legacy `task_id` as fallback), None when absent, or
-    _UNBOUND when both keys are present and disagree (a tampered pointer)."""
+    """The pointer's ticket (legacy `task_id` as fallback), None when the pointer
+    names none, or _UNBOUND when both keys are present and disagree (tampered)."""
     values = [data[k] for k in OPTIONAL if k in data]
     if any(v != values[0] for v in values):
         return _UNBOUND
@@ -281,8 +286,11 @@ def evaluate(root, location, session=None, *, dir_fd=None):
     if not checkpoint.trusted():
         return out('ineligible', 'publication-untrusted')
     workspace = os.path.realpath(checkpoint.get('workspace') or record['root'])
-    ticket = bound_ticket(data)
-    if data['workspace'] != workspace or ticket is _UNBOUND or ticket != checkpoint_ticket(checkpoint):
+    # A pointer that names a ticket must name the sealed checkpoint's. One that names
+    # none (written by 5201875 and earlier, which bound only a `task_id:` header) adopts
+    # with the checkpoint's ticket: the checkpoint is sealed, the pointer only indexes it.
+    named, ticket = bound_ticket(data), checkpoint_ticket(checkpoint)
+    if data['workspace'] != workspace or named is _UNBOUND or named not in (None, ticket):
         return out('ineligible', 'binding-mismatch')
     if not _workspace_exists(workspace):
         return out('ineligible', 'workspace-missing')

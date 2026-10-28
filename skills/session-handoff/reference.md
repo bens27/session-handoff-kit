@@ -695,9 +695,10 @@ The proposed reference follows these branches:
    pending intent, terminal ownership and user-scope continuation authority;
    several candidates use ask/latest-owned/manual. Settled pointers stay silent;
    retrieved delivery replays only to its recorded successor under receipt rules.
-   The pointer binds the checkpoint's `ticket`; a pre-#155 pointer that
-   carries it as `task_id` still adopts, and a `ticket`/`task_id` disagreement
-   is a binding mismatch.
+   The pointer binds the checkpoint's `ticket`. Pre-#155 pointers still adopt:
+   one that carries a legacy `task_id` uses it as the ticket, one with no ticket
+   key takes the sealed checkpoint's. A present key that disagrees with the
+   checkpoint, or a `ticket`/`task_id` disagreement, is a binding mismatch.
 4. **Skills:** AgentsRoom delivers suggested installed skills as adopt context
    with handoff source identity; native activation needs a capability probe.
 5. **Pressure:** warning lead and Claude user-scope PreToolUse/Stop mandatory gate;

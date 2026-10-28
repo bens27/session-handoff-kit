@@ -1314,11 +1314,14 @@ is the recovery. No second key exists. Pointer workspace and ticket must equal
 the sealed checkpoint's (missing workspace: `workspace-missing`); a symlinked
 or foreign index directory, an other-writable `.handoffs/` or a non-private
 `.handoffs/pointers/` is `unsafe-pointer-dir` (group write follows the umask).
-The pointer writes `ticket` from the checkpoint's `ticket:` header (#155).
-Pointers written earlier carry the same value as `task_id`; the reader accepts
-it as a fallback so they still adopt, and refuses a pointer whose `ticket` and
-`task_id` disagree (`binding-mismatch`). A legacy checkpoint `task_id:` header
-counts as its ticket on both the write and the verify side.
+The pointer writes `ticket` from the checkpoint's well-formed `ticket:` header
+(#155); a legacy `task_id:` header counts as the ticket on both the write and
+the verify side. Pointers written before #155 bound only that legacy header,
+as `task_id`: the reader accepts it as a fallback, and a pointer from a
+`ticket:` checkpoint carries no ticket key at all and adopts with the sealed
+checkpoint's ticket. A ticket key that is present must equal the checkpoint's,
+and a pointer whose `ticket` and `task_id` disagree is refused
+(`binding-mismatch`).
 Both directories are opened without following symlinks and validated with fstat;
 pointer enumeration, reads, locks, atomic writes and pruning use the pinned
 directory descriptor so a subsequent rename cannot redirect pointer I/O.
