@@ -21,7 +21,7 @@ import handoff_ledger as ledger
 from handoff_review import read_review
 import handoff_notes
 import handoff_workspace as workspace
-from handoff_record import Record
+from handoff_record import Record, _read_receipt
 from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
 
 # A native CLI can parse a bare "resume" positional as its own subcommand.
@@ -168,6 +168,18 @@ def publication_recovery(root, path):
     except (OSError, ValueError, TypeError):
         pass
     abandon = ledger_command(hooks_dir(), 'abandon', path)
+    if not repairable and _modified_after_publication(path, fm):
+        # e636738f: the save completed; only the content changed after its authenticated receipt.
+        note = command_template(os.path.join(hooks_dir(), 'handoff_ledger.py'), ('note', path),
+                                '--text <the added text>')
+        text = ('Published checkpoint %s: checkpoint modified after publication. Its authenticated receipt '
+                'matches this checkpoint_id but not the current content, so the save is complete and nothing '
+                'needs a draft or retry. Copy the text added after publication aside, restore the original '
+                'published content (editor, VCS or backup history) until resume accepts it, then record the '
+                'added text with: %s. Resume afterwards. Only if the original content cannot be restored, '
+                'ask the user before explicitly abandoning it with: %s. '
+                'Keep the session; do not clear.' % (json.dumps(path), note, abandon))
+        return dict(path=path, kind='modified', code='publication_modified', command=note, text=text)
     command = (ledger_command(hooks_dir(), 'repair', path, '--root', ledger.project_root(root))
                if repairable else abandon)
     text = ('Incomplete checkpoint %s. ' % json.dumps(path))
@@ -183,6 +195,21 @@ def publication_recovery(root, path):
                  'Abandonment closes the record without trusting or inheriting its content. ' % (original, abandon))
     text += 'Keep the session; do not clear. An unchanged resume retry cannot repair publication.'
     return dict(path=path, kind='repair' if repairable else 'abandon', command=command, text=text)
+
+
+def _modified_after_publication(path, fm):
+    """An authenticated receipt for this checkpoint_id whose fingerprint no longer matches (e636738f)."""
+    try:
+        receipt = _read_receipt(path)
+        with open(path, encoding='utf-8', errors='replace') as f:
+            current = ledger.content_fingerprint(f.read())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(receipt, dict) or not fm.get('checkpoint_id'):
+        return False
+    fingerprint = receipt.get('fingerprint')
+    return (receipt.get('checkpoint_id') == fm['checkpoint_id'] and isinstance(fingerprint, str)
+            and fingerprint != current and ledger.valid_seal(receipt, fm['checkpoint_id'], fingerprint))
 
 
 OWNED_SELECTIONS = ('ask', 'newest')

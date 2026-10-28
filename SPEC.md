@@ -540,7 +540,12 @@ save/resume operations prune intents older than 30 days. Missing intent on legac
 and offers the original save request or explicit `abandon PATH`; abandonment needs only the checkpoint file
 and closes it without trusting its content. Hooks, lookup and dispatch share concrete recovery guidance:
 use `repair PATH` only with authenticated intent matching the current bytes; otherwise ask before
-abandoning. `publication_incomplete` is not retryable by an unchanged resume request. That save retry
+abandoning. `publication_incomplete` is not retryable by an unchanged resume request. A checkpoint whose
+authenticated receipt matches its `checkpoint_id` but not its current content fingerprint was published and
+then edited: it reports `publication_modified` ("checkpoint modified after publication", not retryable) with
+`next_action` kind `ask`. The guidance is to set the added text aside, restore the published content, record
+the text with `note`, then resume; abandon is offered only if the original cannot be restored. A missing or
+unauthenticated receipt keeps the `publication_incomplete` path unchanged. That save retry
 keeps its original `--session` despite a newer hook
 pointer only when session and request ID name an unpublished checkpoint this same terminal wrote; otherwise
 hook identity still wins. A save whose topic or predecessor resolves to unpublished work returns

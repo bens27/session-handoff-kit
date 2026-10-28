@@ -31,6 +31,7 @@
     "restart_successor": false,
     "lookup_error": true,
     "publication_incomplete": false,
+    "publication_modified": false,
     "hold_state_unreadable": true,
     "state_changed": true,
     "saved": false,

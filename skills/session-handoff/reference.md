@@ -391,7 +391,11 @@ request. If no authenticated intent matches the current file and the original
 request is unavailable, ask before running the emitted `abandon PATH` command. It
 needs only that file, closes the record and inherits nothing from it. Hooks and
 dispatch emit the same recovery choice; `publication_incomplete` is non-retryable
-without a state change. A missing/deleted or truncated checkpoint is not silently rebuilt from
+without a state change. If an authenticated receipt matches the checkpoint ID
+but the content changed after publication, the code is `publication_modified`:
+set the added text aside, restore the published content, add the text with
+`note`, then resume. Ask before abandoning, and only if the original cannot be
+restored. A missing/deleted or truncated checkpoint is not silently rebuilt from
 an intent or transfer receipt. Restore verified original bytes/draft explicitly
 before repair; preserve evidence and native history meanwhile. Pending restart
 intent is not proof of saved context or permission to redispatch; keep host-side

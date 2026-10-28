@@ -206,6 +206,7 @@ DISPATCH_CODES = {
     'identity_conflict': False, 'identity_required': False, 'target_not_found': False,
     'target_superseded': False, 'target_closed': False, 'dispatch_pending': False,
     'dispatch_state_invalid': False, 'restart_successor': False, 'lookup_error': True, 'publication_incomplete': False,
+    'publication_modified': False,
     'hold_state_unreadable': True, 'state_changed': True,
     'saved': False, 'restart': False, 'restart_blocked': False, 'publication_failed': False, 'dispatch_stale': False,
 }

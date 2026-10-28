@@ -446,7 +446,7 @@ def select_target(root, request, session):
         if status == 'unpublished':
             recovery = protocol.publication_recovery(root, path)
             info['recovery'] = [recovery]
-            return info, ('blocked', 'publication_incomplete', recovery['text'])
+            return info, ('blocked', recovery.get('code', 'publication_incomplete'), recovery['text'])
         if status != 'open':
             if operation == 'retrieve':
                 return info, ('proceed', 'history_only', 'Closed checkpoint (%s): inspection only.' % status)
@@ -456,7 +456,7 @@ def select_target(root, request, session):
     if found['outcome'] == 'error':
         return None, ('blocked', 'lookup_error', found['action'], True)
     if found['outcome'] == 'incomplete':
-        return dict(recovery=found['recovery']), ('blocked', 'publication_incomplete', found['action'])
+        return dict(recovery=found['recovery']), ('blocked', found['recovery'][0].get('code', 'publication_incomplete'), found['action'])
     mine = [i for i in found['items'] if i.get('mine')]
     selected = found.get('selected')
     if selected:
@@ -742,10 +742,10 @@ def route(request, root):
         if target and target.get('path') and os.path.isfile(target['path']):
             target['fingerprint'] = protocol.snapshot(target['path'])
     if decision and decision[1] != 'history_only':
-        if decision[1] == 'publication_incomplete':
+        if decision[1] in ('publication_incomplete', 'publication_modified'):
             recovery = target['recovery'][0]
-            return result('blocked', 'publication_incomplete', request, target=target, next_action=dict(
-                              kind='ask' if recovery['kind'] == 'abandon' else 'run',
+            return result('blocked', decision[1], request, target=target, next_action=dict(
+                              kind='ask' if recovery['kind'] in ('abandon', 'modified') else 'run',
                               command=recovery['command'], text=recovery['text']))
         return _stop(request, decision, target=target)
     try:

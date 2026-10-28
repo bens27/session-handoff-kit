@@ -1246,9 +1246,10 @@ class ClosedPublicationTests(Base):
         self.assertEqual(self.dispatch(operation='resume')['outcome'], 'proceed')
 
     def test_explicit_incomplete_target_offers_abandon_when_intent_cannot_repair(self):
+        # e636738f: without a receipt this is an interrupted save, not a post-publication edit.
         self.record_hook_session('saving-session')
         path = self.save(session='saving-session')
-        published_before = Path(path + '.published').read_bytes()
+        Path(path + '.published').unlink()
         Path(path).write_text(Path(path).read_text() + '\nChanged after publication.\n')
         for intent in (self.home / '.local/state/session-handoff/publications').glob('*.json'):
             intent.unlink()
@@ -1273,7 +1274,66 @@ class ClosedPublicationTests(Base):
                                    capture_output=True, text=True)
         self.assertEqual(abandoned.returncode, 0, abandoned.stderr)
         self.assertEqual(self.dispatch(operation='resume')['outcome'], 'none')
+
+    def test_edited_published_checkpoint_reports_modified_not_incomplete(self):
+        # e636738f: authenticated receipt, same checkpoint_id, changed content.
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session')
+        original = Path(path).read_bytes()
+        Path(path).write_text(Path(path).read_text() + '\nAdded after publication.\n')
+        self.record_hook_session('fresh-session')
+        for request in (dict(target=path), {}):
+            with self.subTest(explicit=bool(request)):
+                decision = self.dispatch(operation='resume', authorization={'source': 'user'}, **request)
+                self.assertEqual(decision['code'], 'publication_modified', decision)
+                self.assertFalse(decision['retryable'], decision)
+                self.assertFalse(decision['authorized_to_execute'])
+                action = decision['next_action']
+                self.assertEqual(action['kind'], 'ask', action)
+                self.assertIn('checkpoint modified after publication', action['text'])
+                self.assertNotIn('abandon', shlex.split(action['command']), action)
+                self.assertIn('note', shlex.split(action['command']), action)
+                text = action['text']
+                self.assertLess(text.index('restore'), text.index(' note '), text)
+                self.assertLess(text.index(' note '), text.index('abandon'), text)
+                self.assertNotIn('Incomplete checkpoint', text)
+                self.assertNotIn('retry the original save request', text)
+        hook = subprocess.run([sys.executable, str(WATCH), 'opening-note'], cwd=self.root,
+                              env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
+                              input=json.dumps(dict(hook_event_name='UserPromptSubmit', cwd=str(self.root),
+                                                    session_id='fresh-session')),
+                              capture_output=True, text=True, check=True).stdout
+        self.assertIn('checkpoint modified after publication', hook)
+        found = self.cli('lookup')
+        self.assertEqual(found['outcome'], 'incomplete', found)
+        self.assertEqual(found['recovery'][0]['code'], 'publication_modified', found)
+        # Restoring the published bytes reopens it; the added text then goes in a sealed note.
+        Path(path).write_bytes(original)
+        self.assertEqual(self.dispatch(operation='resume', target=path,
+                                       authorization={'source': 'user'})['outcome'], 'proceed')
+        self.assertEqual(self.cli('note', path, '--text', 'Added after publication.')['outcome'], 'noted')
+
+    def test_edited_checkpoint_with_forged_receipt_stays_incomplete(self):
+        self.record_hook_session('saving-session')
+        path = self.save(session='saving-session')
+        receipt = json.loads(Path(path + '.published').read_text())
+        receipt['mac'] = '0' * 64
+        Path(path + '.published').write_text(json.dumps(receipt))
+        Path(path).write_text(Path(path).read_text() + '\nAdded after publication.\n')
+        for intent in (self.home / '.local/state/session-handoff/publications').glob('*.json'):
+            intent.unlink()
+        self.record_hook_session('fresh-session')
+        decision = self.dispatch(operation='resume', target=path, authorization={'source': 'user'})
+        self.assertEqual(decision['code'], 'publication_incomplete', decision)
+        command = shlex.split(decision['next_action']['command'])
+        self.assertEqual(command[-2:], ['abandon', path])
+        # Abandon closes the record but leaves the existing receipt untouched as evidence.
+        published_before = Path(path + '.published').read_bytes()
+        abandoned = subprocess.run(command, cwd=self.root, env=dict(self.env, HANDOFF_TERMINAL_ID='term-a'),
+                                   capture_output=True, text=True)
+        self.assertEqual(abandoned.returncode, 0, abandoned.stderr)
         self.assertEqual(Path(path + '.published').read_bytes(), published_before)
+        self.assertEqual(self.dispatch(operation='resume')['outcome'], 'none')
 
 
     def test_save_incomplete_uses_the_same_recovery_as_lookup(self):
