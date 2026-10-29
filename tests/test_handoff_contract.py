@@ -195,3 +195,123 @@ class ReportToContractTests(unittest.TestCase):
                     p = subprocess.run([sys.executable, str(HOOKS / case['script']), *case['args']],
                                        text=True, capture_output=True, cwd=temp, env=env, timeout=30)
                     self.assertEqual((p.stdout, p.stderr, p.returncode), (expected, '', 1))
+
+
+class LedgerFailureContractTests(unittest.TestCase):
+    """#173: ledger save/resume failures gain `retryable` (+ report_to) and change by nothing else."""
+    FIXTURE = json.loads((ROOT / 'tests/fixtures/contract/ledger_failures.json').read_text())
+    REPORT_TO = json.loads((ROOT / 'tests/fixtures/contract/report_to.json').read_text())['report_to']
+    env = ReportToContractTests.env
+
+    def test_cli_failure_bytes(self):
+        for case in self.FIXTURE['cases']:
+            with self.subTest(case=case['name'], agent_id=case['agent_id']), tempfile.TemporaryDirectory() as temp:
+                temp = os.path.realpath(temp)
+                os.makedirs(temp + '/proj')
+                os.makedirs(temp + '/state')
+                for name, doc in self.FIXTURE['files'].items():
+                    Path(temp, 'proj', name).write_text(json.dumps(doc))
+                env = dict(self.env(case['agent_id']), HOME=temp, HANDOFF_STATE_DIR=temp + '/state', HANDOFF_TELEMETRY='0')
+                for argv in case['steps']:
+                    p = subprocess.run([sys.executable, '-B', str(HOOKS / 'handoff_ledger.py'), *argv],
+                                       text=True, capture_output=True, cwd=temp + '/proj', env=env, timeout=60)
+                self.assertEqual((p.stdout.replace(temp, '<ROOT>'), p.stderr, p.returncode), (case['stdout'], '', case['rc']))
+
+    def test_fixture_differs_from_baseline_only_by_added_keys(self):
+        for case in self.FIXTURE['cases']:
+            with self.subTest(case=case['name'], agent_id=case['agent_id']):
+                expected = json.loads(case['stdout'])
+                self.assertIs(expected['retryable'], False)
+                self.assertEqual('report_to' in expected, case['agent_id'] is not None)
+                for key in self.FIXTURE['added_keys']:
+                    expected.pop(key, None)
+                self.assertEqual(json.dumps(expected, ensure_ascii=False) + '\n', case['baseline_stdout'])
+
+    def test_protocol_failure_unit_cases(self):
+        cases = [
+            # (operation, result, agent_id, expected added keys)
+            ('save', dict(outcome='blocked', _code='publication_interrupted', action='a'), 'agent-x', dict(retryable=True)),
+            ('save', dict(outcome='needs-context', action='a'), 'agent-x', dict(retryable=False)),
+            ('resume', dict(outcome='conflict', action='a'), 'agent-x', dict(retryable=False, report_to=self.REPORT_TO)),
+            ('resume', dict(outcome='invalid', action='a'), None, dict(retryable=False)),
+            ('resume', dict(outcome='none', action='a'), 'agent-x', {}),
+            ('note', dict(outcome='blocked', action='a'), 'agent-x', {}),
+            ('acknowledge', dict(outcome='conflict', action='a'), 'agent-x', {}),
+        ]
+        for operation, result, agent_id, added in cases:
+            with self.subTest(operation=operation, outcome=result['outcome'], agent_id=agent_id):
+                public = {k: v for k, v in result.items() if k != '_code'}
+                with unittest.mock.patch.dict(os.environ, self.env(agent_id), clear=True):
+                    out = contract.protocol_failure(operation, dict(result))
+                self.assertEqual(out, dict(public, **added))
+                self.assertEqual(list(out)[:len(public)], list(public))
+
+    def test_one_retryability_table_for_both_surfaces(self):
+        self.assertFalse(set(contract.PROTOCOL_CODES) & set(contract.DISPATCH_CODES))
+        for outcome in contract._EXIT_FAILURES['protocol']:
+            self.assertIn(outcome, contract.PROTOCOL_CODES)
+        self.assertEqual([c for c, r in contract.PROTOCOL_CODES.items() if r], ['publication_interrupted'])
+
+    def interrupted_save(self, temp):
+        root = Path(temp, 'proj')
+        root.mkdir()
+        Path(temp, 'state').mkdir()
+        draft = dict(topic='ok-topic', description='d', body=self.FIXTURE['files']['a.json']['body'])
+        real = handoff_protocol.write_json
+
+        def fail_receipt(path, value):
+            if str(path).endswith('.published'):
+                raise OSError('disk full')
+            return real(path, value)
+        env = dict(self.env('agent-x'), HOME=temp, HANDOFF_STATE_DIR=temp + '/state', HANDOFF_TELEMETRY='0')
+        return root, draft, env, fail_receipt
+
+    def test_save_marks_publication_interrupted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = os.path.realpath(temp)
+            root, draft, env, fail_receipt = self.interrupted_save(temp)
+            with unittest.mock.patch.dict(os.environ, env, clear=True), \
+                    unittest.mock.patch.object(handoff_protocol, 'write_json', fail_receipt):
+                result = handoff_protocol.save(str(root), 's1', 'r1', draft)
+        self.assertEqual((result['outcome'], result['_code']), ('blocked', 'publication_interrupted'))
+        self.assertIn('Publication was interrupted', result['action'])
+
+    def test_cli_publication_interrupted_is_retryable_without_report_to(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = os.path.realpath(temp)
+            root, draft, env, fail_receipt = self.interrupted_save(temp)
+            Path(root, 'a.json').write_text(json.dumps(draft))
+            out = io.StringIO()
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with unittest.mock.patch.dict(os.environ, env, clear=True), \
+                        unittest.mock.patch.object(handoff_protocol, 'write_json', fail_receipt), \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                    code = handoff_protocol.cli(['save', '.', '--session', 's1', '--request-id', 'r1', '--input', 'a.json'])
+            finally:
+                os.chdir(cwd)
+        result = json.loads(out.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual((result['outcome'], result['retryable']), ('blocked', True))
+        self.assertNotIn('report_to', result)
+        self.assertNotIn('_code', result)
+        self.assertEqual(list(result)[-1], 'retryable')
+
+    def test_fields_projection_keeps_new_keys(self):
+        with unittest.mock.patch.dict(os.environ, self.env('agent-x'), clear=True):
+            result = contract.protocol_failure('resume', dict(outcome='blocked', action='a', path='p'))
+        projected = contract.project_output(result, 'path')
+        self.assertIn('retryable', projected)
+        self.assertIn('report_to', projected)
+
+    def test_dispatch_publication_does_not_leak_private_code(self):
+        import handoff_dispatch
+        saved = dict(outcome='blocked', _code='publication_interrupted', path='p', action='Publication was interrupted.')
+        request = dict(operation='save', draft=dict(topic='ok-topic', suggested_skills=[]))
+        with tempfile.TemporaryDirectory() as temp, \
+                unittest.mock.patch.dict(os.environ, self.env(None), clear=True), \
+                unittest.mock.patch.object(handoff_dispatch.protocol, 'save', return_value=dict(saved)):
+            result = handoff_dispatch.draft_save(temp, request, 's1', {}, {})
+        self.assertEqual((result['outcome'], result['stage']), ('blocked', 'publication'))
+        self.assertEqual(result['publication'], {k: v for k, v in saved.items() if k != '_code'})

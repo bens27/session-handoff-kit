@@ -15,7 +15,7 @@ from datetime import datetime
 from handoff_contract import (command_template, continuation_command, ledger_command,
                               exit_status, emit_output, render_output, project_output,
                               continuity_items, continuation_document)
-from handoff_contract import METADATA_FORMATS, metadata_problem
+from handoff_contract import METADATA_FORMATS, metadata_problem, protocol_failure
 import handoff_identity
 import handoff_ledger as ledger
 from handoff_review import read_review
@@ -1092,7 +1092,8 @@ def save(root, session, request_id, document):
                             action='Checkpoint is published and discoverable; follow transition.action, then stop.' + NOTE_RULE)
             except OSError as exc:
                 if os.path.exists(path):
-                    return dict(outcome='blocked', path=path, action='Publication was interrupted after writing the document. Keep the draft and retry the same request ID to finish its receipt; do not clear.')
+                    return dict(outcome='blocked', path=path, action='Publication was interrupted after writing the document. Keep the draft and retry the same request ID to finish its receipt; do not clear.',
+                                _code='publication_interrupted')
                 try:
                     os.unlink(recovery_path(root, path))
                 except OSError:
@@ -2310,10 +2311,10 @@ def cli(argv):
         try:
             draft = save_draft(a)
         except (OSError, ValueError) as exc:
-            emit_output(dict(outcome='invalid', action=str(exc)[:500] + '; correct the input and retry.'))
+            emit_output(protocol_failure('save', dict(outcome='invalid', action=str(exc)[:500] + '; correct the input and retry.')))
             return 1
         if isinstance(draft, dict) and draft.get('outcome'):
-            emit_output(draft)
+            emit_output(protocol_failure('save', draft))
             return 1
     if hasattr(a, 'session'):
         recorded = terminal_session(getattr(a, 'root', '.'))
@@ -2333,12 +2334,12 @@ def cli(argv):
             print('Using current host session %s instead of differing --session %s.' % (host, a.session), file=sys.stderr)
         a.session = chosen
         if not a.session and a.command != 'lookup':
-            emit_output(NO_SESSION)
+            emit_output(protocol_failure(a.command, dict(NO_SESSION)))
             return 1
     if a.command == 'save':
         refused, root_note = redirect_save_root(a, explicit_root)
         if refused:
-            emit_output(refused)
+            emit_output(protocol_failure('save', refused))
             return 1
         if root_note:
             print(root_note, file=sys.stderr)
@@ -2375,6 +2376,7 @@ def cli(argv):
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
     result.setdefault('project', handoff_identity.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
+    protocol_failure(a.command, result)  # #173: retryable [+ report_to] on save/resume failures; drops the private cause
     if a.command == 'resume' and result['outcome'] == 'resumed':
         delivery_metrics(result, a.root, a.session, a.fields)
     telemetry(a.command, a.root, getattr(a, 'session', None), result)

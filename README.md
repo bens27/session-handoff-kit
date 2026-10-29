@@ -1027,6 +1027,14 @@ non-retryable `code` also carries `report_to: {"to": "inbox", "project":
 than retrying. The key is absent on retryable, successful and non-AgentsRoom
 results.
 
+Ledger `save` and `resume` failures (exit 1) follow the same rule: they carry
+`retryable`, `true` only when publication was interrupted after the document
+was written (retry the same request ID), and a non-retryable `blocked`,
+`conflict` or `invalid` result adds `report_to` under AgentsRoom. Outcomes
+that ask the caller to act (`needs-confirmation`, `needs-context`,
+`needs-original-draft`, `verification-failed`, `verification-timeout`,
+`timeout`) are `retryable: false` with no `report_to`; follow their `action`.
+
 - **Vocabulary.** Save requests include `session handoff`, optionally followed
   by `to yourself`, `to your successor`, `to successor` or `to self`;
   `hand off [this|the|my] work|session|handoff`; and bare `handoff` or `hand off`

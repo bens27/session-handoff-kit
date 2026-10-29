@@ -148,7 +148,7 @@
       "resume"
     ],
     "input": null,
-    "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\"}\n",
+    "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\", \"retryable\": false}\n",
     "stderr": "",
     "code": 1
   },

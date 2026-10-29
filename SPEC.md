@@ -1294,7 +1294,17 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    command reports the failure to the kit's AgentsRoom project inbox.
    Retryability comes only from the closed code set. The key is absent (never
    `null`) on retryable, non-blocked and non-AgentsRoom results, so those bytes
-   are unchanged. Ledger save/resume failure outcomes do not carry it yet.
+   are unchanged.
+   Ledger `save` and `resume` results that exit 1 carry `retryable` from the
+   same table (`PROTOCOL_CODES` beside the dispatch codes in
+   `handoff_contract.py`); only an interrupted publication (document written,
+   receipt missing) is `true`. Non-retryable `blocked`, `conflict` and
+   `invalid` results add the same `report_to` under AgentsRoom. Caller-action
+   outcomes (`needs-confirmation`, `needs-context`, `needs-original-draft`,
+   `verification-failed`, `verification-timeout`, `timeout`) are `retryable:
+   false` without `report_to`: the caller acts on `action`, the kit is not at
+   fault. Other ledger commands and exit-0 results are unchanged; no ledger
+   `code` is emitted.
 7. Restart eligibility is `true`, `false` or `"unknown"` and lists its
    blockers. Absent host evidence is never assumed. Delegated continuity
    items are reconciled against the supplied worker inventory, and any gap
