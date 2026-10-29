@@ -1288,6 +1288,13 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    `user_confirmed: true`. Neither bypasses an identity conflict.
 6. Every result has a `code` from a closed set and `retryable`. Only transient
    read or state failures retry, at most 3 times with the same request.
+   A `blocked` result whose code is not retryable also carries
+   `report_to: {"to": "inbox", "project": "session-handoff-kit"}` when
+   `AGENTSROOM_AGENT_ID` is set and non-empty, so an agent running a bare hook
+   command reports the failure to the kit's AgentsRoom project inbox.
+   Retryability comes only from the closed code set. The key is absent (never
+   `null`) on retryable, non-blocked and non-AgentsRoom results, so those bytes
+   are unchanged. Ledger save/resume failure outcomes do not carry it yet.
 7. Restart eligibility is `true`, `false` or `"unknown"` and lists its
    blockers. Absent host evidence is never assumed. Delegated continuity
    items are reconciled against the supplied worker inventory, and any gap

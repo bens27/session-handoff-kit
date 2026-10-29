@@ -226,7 +226,21 @@ def dispatch_result(outcome, code, request, **extra):
     base['retryable'] = DISPATCH_CODES[code]
     if base['retryable']:
         base['retry'] = dict(DISPATCH_RETRY)
+    base.update(report_fields(outcome, code))
     return base
+
+
+# Where a blocked AgentsRoom agent reports a non-retryable failure (#165; Ben, 2026-10-29).
+REPORT_TO = dict(to='inbox', project='session-handoff-kit')
+
+
+def report_fields(outcome, code):
+    """{'report_to': ...} for a non-retryable blocked result under AgentsRoom, else {}.
+
+    Retryability comes only from DISPATCH_CODES; absent means no key, never null."""
+    if outcome != 'blocked' or DISPATCH_CODES[code] or not os.environ.get('AGENTSROOM_AGENT_ID'):
+        return {}
+    return dict(report_to=dict(REPORT_TO))
 
 
 def blocked_result(request, code, text, retryable=False, **extra):

@@ -1,0 +1,120 @@
+{
+  "note": "report_to (#165): present only on outcome=blocked, non-retryable code, AGENTSROOM_AGENT_ID non-empty. Expected bytes = pre-change 553dbcd output plus the trailing key.",
+  "report_to": {
+    "to": "inbox",
+    "project": "session-handoff-kit"
+  },
+  "cases": [
+    {
+      "name": "set_nonretryable_blocked",
+      "agent_id": "agent-x",
+      "call": "blocked_result",
+      "args": [
+        {
+          "_operation": "resume"
+        },
+        "target_closed",
+        "Target is closed."
+      ],
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"target_closed\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"Target is closed.\"}, \"recheck\": [], \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n"
+    },
+    {
+      "name": "set_nonretryable_blocked_no_request",
+      "agent_id": "agent-x",
+      "call": "blocked_result",
+      "args": [
+        {},
+        "invalid_request",
+        "Unreadable request."
+      ],
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"invalid_request\", \"retryable\": false, \"operation\": null, \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"Unreadable request.\"}, \"recheck\": [], \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n"
+    },
+    {
+      "name": "set_retryable_blocked",
+      "agent_id": "agent-x",
+      "call": "blocked_result",
+      "args": [
+        {
+          "_operation": "resume"
+        },
+        "state_changed",
+        "State changed; retry."
+      ],
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"state_changed\", \"retryable\": true, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"State changed; retry.\"}, \"recheck\": [], \"retry\": {\"max_attempts\": 3, \"backoff_seconds\": [1, 4, 16], \"same_request\": true}}\n"
+    },
+    {
+      "name": "set_retryable_lookup_error",
+      "agent_id": "agent-x",
+      "call": "blocked_result",
+      "args": [
+        {},
+        "lookup_error",
+        "Lookup failed."
+      ],
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"lookup_error\", \"retryable\": true, \"operation\": null, \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": null, \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"Lookup failed.\"}, \"recheck\": [], \"retry\": {\"max_attempts\": 3, \"backoff_seconds\": [1, 4, 16], \"same_request\": true}}\n"
+    },
+    {
+      "name": "unset_nonretryable_blocked",
+      "agent_id": null,
+      "call": "blocked_result",
+      "args": [
+        {
+          "_operation": "resume"
+        },
+        "target_closed",
+        "Target is closed."
+      ],
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"target_closed\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"Target is closed.\"}, \"recheck\": []}\n"
+    },
+    {
+      "name": "empty_nonretryable_blocked",
+      "agent_id": "",
+      "call": "blocked_result",
+      "args": [
+        {
+          "_operation": "resume"
+        },
+        "target_closed",
+        "Target is closed."
+      ],
+      "stdout": "{\"outcome\": \"blocked\", \"code\": \"target_closed\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"report\", \"command\": \"\", \"text\": \"Target is closed.\"}, \"recheck\": []}\n"
+    },
+    {
+      "name": "set_success_proceed",
+      "agent_id": "agent-x",
+      "call": "dispatch_result",
+      "args": [
+        "proceed",
+        "ok",
+        {
+          "_operation": "resume",
+          "_authorization": "user"
+        }
+      ],
+      "stdout": "{\"outcome\": \"proceed\", \"code\": \"ok\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": \"user\", \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": []}\n"
+    },
+    {
+      "name": "set_none_not_failure",
+      "agent_id": "agent-x",
+      "call": "dispatch_result",
+      "args": [
+        "none",
+        "no_open_handoff",
+        {
+          "_operation": "resume"
+        }
+      ],
+      "stdout": "{\"outcome\": \"none\", \"code\": \"no_open_handoff\", \"retryable\": false, \"operation\": \"resume\", \"operation_source\": null, \"classification\": null, \"authorized_to_execute\": false, \"authorization_source\": null, \"identity\": {\"session\": \"\", \"source\": \"none\", \"provenance\": \"\", \"conflict\": null}, \"branch\": \"branches/resume.md\", \"restart\": {\"eligible\": \"unknown\", \"blockers\": []}, \"next_action\": {\"kind\": \"continue\", \"command\": \"\", \"text\": \"Continue the current request.\"}, \"recheck\": []}\n"
+    }
+  ],
+  "hold_cli": {
+    "script": "handoff_ledger.py",
+    "args": [
+      "release",
+      "--scope",
+      "bad"
+    ],
+    "unset_stdout": "{\"outcome\": \"blocked\", \"code\": \"invalid_request\", \"retryable\": false, \"action\": \"Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.\"}\n",
+    "set_stdout": "{\"outcome\": \"blocked\", \"code\": \"invalid_request\", \"retryable\": false, \"action\": \"Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.\", \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n"
+  }
+}

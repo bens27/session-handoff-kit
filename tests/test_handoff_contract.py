@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOKS = ROOT / 'skills/session-handoff/hooks'
@@ -133,8 +134,10 @@ class CommandContractTests(unittest.TestCase):
 class DispatchContractTests(unittest.TestCase):
     def test_dispatch_schema_and_authorization_match_landed_fix(self):
         fixture = json.loads((ROOT / 'tests/fixtures/contract/dispatch.json').read_text())
+        # Captured outside AgentsRoom; report_to under AGENTSROOM_AGENT_ID is pinned by report_to.json.
+        env = {k: v for k, v in os.environ.items() if k != 'AGENTSROOM_AGENT_ID'}
         for case in fixture['cases']:
-            with self.subTest(code=case['code']):
+            with self.subTest(code=case['code']), unittest.mock.patch.dict(os.environ, env, clear=True):
                 result = contract.dispatch_result(case['outcome'], case['code'],
                                                   case['request'], **case['extra'])
                 self.assertEqual(contract.render_output(result) + '\n', case['stdout'])
@@ -152,3 +155,43 @@ class DispatchContractTests(unittest.TestCase):
                     self.assertNotIn('retry', result)
         with self.assertRaises(KeyError):
             contract.dispatch_result('blocked', 'not-a-code', {})
+
+
+class ReportToContractTests(unittest.TestCase):
+    """#165: non-retryable blocked dispatch results name the kit inbox under AgentsRoom."""
+    FIXTURE = json.loads((ROOT / 'tests/fixtures/contract/report_to.json').read_text())
+
+    def env(self, agent_id):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(
+            ('HANDOFF_', 'CONTEXT_WATCH_', 'AGENTSROOM_', 'CODEX_', 'CLAUDE_', 'TMUX'))}
+        if agent_id is not None:
+            env['AGENTSROOM_AGENT_ID'] = agent_id
+        return env
+
+    def test_report_to_only_on_non_retryable_blocked_with_agent_id(self):
+        for case in self.FIXTURE['cases']:
+            with self.subTest(case=case['name']):
+                with unittest.mock.patch.dict(os.environ, self.env(case['agent_id']), clear=True):
+                    result = getattr(contract, case['call'])(*case['args'])
+                self.assertEqual(contract.render_output(result) + '\n', case['stdout'])
+                if 'report_to' in case['stdout']:
+                    self.assertEqual(result['report_to'], self.FIXTURE['report_to'])
+                else:
+                    self.assertNotIn('report_to', result)
+
+    def test_report_to_constant_is_a_fresh_copy(self):
+        with unittest.mock.patch.dict(os.environ, {'AGENTSROOM_AGENT_ID': 'agent-x'}):
+            first = contract.blocked_result({}, 'invalid_request', 'x')
+            first['report_to']['project'] = 'mutated'
+            second = contract.blocked_result({}, 'invalid_request', 'x')
+        self.assertEqual(second['report_to'], self.FIXTURE['report_to'])
+
+    def test_hold_cli_invalid_scope_carries_report_to_only_under_agentsroom(self):
+        case = self.FIXTURE['hold_cli']
+        with tempfile.TemporaryDirectory() as temp:
+            for agent_id, expected in ((None, case['unset_stdout']), ('agent-x', case['set_stdout'])):
+                with self.subTest(agent_id=agent_id):
+                    env = dict(self.env(agent_id), HOME=temp, HANDOFF_STATE_DIR=temp, HANDOFF_TELEMETRY='0')
+                    p = subprocess.run([sys.executable, str(HOOKS / case['script']), *case['args']],
+                                       text=True, capture_output=True, cwd=temp, env=env, timeout=30)
+                    self.assertEqual((p.stdout, p.stderr, p.returncode), (expected, '', 1))
