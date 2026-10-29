@@ -371,7 +371,7 @@ class RestartTests(unittest.TestCase):
         location = Path(intents.location(self.root, 'legacy'))
         original = json.loads(location.read_text())
         base = dict(original, root=self.root + '/foreign', path=self.root + '/foreign/checkpoint.md',
-                    checkpoint_id='0' * 64)
+                    checkpoint_id='0' * 64, state='refused', refusal='Host definitively refused.')
         cases = [('root', dict(base, path=self.path)),
                  ('root', dict(base, checkpoint_id=original['checkpoint_id'])),
                  ('request_id', dict(base, request_id=None)),
@@ -388,6 +388,82 @@ class RestartTests(unittest.TestCase):
                 self.assertEqual(result['invalid_intent']['field'], field)
                 self.assertEqual(location.read_text(), raw)
                 self.assertIsNone(restart.status(self.root, 'next-request'))
+
+    def test_pending_or_invalid_state_foreign_intents_block_without_losing_evidence(self):
+        import handoff_intents as intents
+        import shutil
+        foreign = str(Path(self.root) / 'foreign')
+        Path(foreign).mkdir()
+        saved = protocol.save(foreign, 'old', 'foreign-save', {
+            'topic': 'foreign', 'description': 'Foreign checkpoint',
+            'body': '## Objective\nForeign\n## Current state\nSaved\n## Next steps\nContinue\n'})
+        self.assertEqual(saved['outcome'], 'saved', saved)
+        ready = restart.preflight(foreign, saved['path'], 'old', 'term', 'foreign-request',
+                                  workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        source = Path(intents.location(foreign, 'foreign-request'))
+        original = json.loads(source.read_text())
+        for state in ('pending', 'garbage', None):
+            with self.subTest(state=state), tempfile.TemporaryDirectory(dir=self.root) as case:
+                # Each attempt gets its own registry: a wrongly ready result must
+                # not create a local pending intent that masks later failures.
+                root = str(Path(case).resolve())
+                checkpoint = protocol.save(root, 'old', 'save-case', {
+                    'topic': 'local', 'description': 'Local checkpoint',
+                    'body': '## Objective\nLocal\n## Current state\nSaved\n## Next steps\nContinue\n'})
+                self.assertEqual(checkpoint['outcome'], 'saved', checkpoint)
+                copied = Path(intents.location(root, 'foreign-request', create=True))
+                shutil.copyfile(source, copied)
+                record = dict(original)
+                if state is None:
+                    record.pop('state')
+                else:
+                    record['state'] = state
+                copied.write_text(json.dumps(record))
+                raw = copied.read_bytes()
+                result = restart.preflight(root, checkpoint['path'], 'old', 'term', 'next-request',
+                                           workers=[], host_capable=True)
+                self.assertEqual((result['outcome'], result.get('reason'), result['dispatch']),
+                                 ('blocked', 'invalid-persisted-intent', False), result)
+                diagnostic = result['invalid_intent']
+                self.assertEqual(diagnostic['path'], str(copied))
+                self.assertEqual(diagnostic['request_id'], 'foreign-request')
+                self.assertEqual(diagnostic['field'], 'root' if state == 'pending' else 'state')
+                self.assertEqual(copied.read_bytes(), raw)
+                self.assertIsNone(restart.status(root, 'next-request'))
+
+    def test_malformed_settled_foreign_intents_still_block(self):
+        import handoff_intents as intents
+        self.preflight(request_id='settled-base')
+        restart.record_refusal(self.root, 'settled-base', 'Host definitively refused.')
+        base = restart.status(self.root, 'settled-base')
+        cases = [dict(state='refused', refusal=None),
+                 dict(state='retrieved', successor_session=None, retrieval_fingerprint='delivered'),
+                 dict(state='retrieved', successor_session='old', retrieval_fingerprint='delivered'),
+                 dict(state='retrieved', successor_session='new', retrieval_fingerprint=None),
+                 dict(host_confirmed=True, host_acceptance={}),
+                 dict(state='retrieved', successor_session='new', retrieval_fingerprint='delivered',
+                      host_confirmed=True, host_acceptance={}),
+                 dict(workers='not a list'), dict(intent_at=0), dict(fingerprint='invalid')]
+        for changes in cases:
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory(dir=self.root) as case:
+                root = str(Path(case).resolve())
+                checkpoint = protocol.save(root, 'old', 'save-case', {
+                    'topic': 'local', 'description': 'Local checkpoint',
+                    'body': '## Objective\nLocal\n## Current state\nSaved\n## Next steps\nContinue\n'})
+                self.assertEqual(checkpoint['outcome'], 'saved', checkpoint)
+                copied = Path(intents.location(root, 'settled-base', create=True))
+                copied.write_text(json.dumps(dict(base, **changes)))
+                raw = copied.read_bytes()
+                result = restart.preflight(root, checkpoint['path'], 'old', 'term', 'next-request',
+                                           workers=[], host_capable=True)
+                self.assertEqual((result['outcome'], result.get('reason'), result['dispatch']),
+                                 ('blocked', 'invalid-persisted-intent', False), result)
+                self.assertEqual(result['invalid_intent']['path'], str(copied))
+                self.assertEqual(result['invalid_intent']['request_id'], 'settled-base')
+                self.assertNotIn('skipped_intents', result)
+                self.assertEqual(copied.read_bytes(), raw)
+                self.assertIsNone(restart.status(root, 'next-request'))
 
     def test_unreadable_own_intent_reports_io_error_and_keeps_dispatch_evidence(self):
         import handoff_intents as intents
@@ -927,9 +1003,9 @@ class AdoptTests(unittest.TestCase):
         self.prompt = ready['restart_prompt']
         self.json = json
 
-    def pointer(self, session, terminal='term'):
+    def pointer(self, session, terminal='term', root=None):
         import hashlib, time
-        key = self.root + '\0' + terminal
+        key = (root or self.root) + '\0' + terminal
         name = 'context-watch-terminal-%s.json' % hashlib.sha1(key.encode()).hexdigest()[:20]
         (Path(self.root) / name).write_text(self.json.dumps(dict(session_id=session, ts=time.time())))
 
@@ -1137,11 +1213,18 @@ class AdoptTests(unittest.TestCase):
                 ready = restart.preflight(foreign, checkpoint, 'foreign-old', 'other', foreign_id,
                                           workers=[], host_capable=True)
                 self.assertEqual(ready['outcome'], 'ready', ready)
-                receipt = protocol.prepare(checkpoint, foreign, 'foreign-new')['delivery_receipt']
-                restart.confirm_successor(foreign, foreign_id, 'foreign-new', 'other', receipt)
+                if index == 0:
+                    receipt = protocol.prepare(checkpoint, foreign, 'foreign-new')['delivery_receipt']
+                    restart.confirm_successor(foreign, foreign_id, 'foreign-new', 'other', receipt)
+                else:
+                    restart.record_refusal(foreign, foreign_id, 'Host definitively refused.')
             copied = Path(intents.location(self.root, foreign_id))
             shutil.copyfile(intents.location(foreign, foreign_id), copied)
             copies.append((copied, copied.read_bytes(), foreign_id, foreign))
+            if index == 1:
+                # Validation uses the copied bytes even if the original worktree
+                # has gone away; it must not look up state in the foreign root.
+                shutil.rmtree(foreign)
 
         saved_run = subprocess.run(
             [sys.executable, str(HOOKS / 'handoff_ledger.py'), 'save', self.root,
@@ -1474,6 +1557,59 @@ class RestartCommandTests(unittest.TestCase):
         code, again = self.restart_cli('--workers', '[]', '--host-capable')
         self.assertEqual((code, again['outcome'], again['dispatch']), (1, 'pending', False), again)
         self.assertNotIn('restart_prompt', again)
+
+    def test_foreign_diagnostics_are_bounded_but_the_full_registry_is_checked(self):
+        import handoff_intents as intents
+        foreign = str(Path(self.root) / 'foreign')
+        Path(foreign).mkdir()
+        saved = protocol.save(foreign, 'old', 'foreign-save', {
+            'topic': 'foreign', 'description': 'Foreign checkpoint', 'body': self.BODY})
+        ready = restart.preflight(foreign, saved['path'], 'old', 'term', 'foreign-base',
+                                  workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        restart.record_refusal(foreign, 'foreign-base', 'Host definitively refused.')
+        base = restart.status(foreign, 'foreign-base')
+        for count in (0, 1, 15):
+            with self.subTest(count=count), tempfile.TemporaryDirectory(dir=self.root) as case:
+                root = str(Path(case).resolve())
+                checkpoint = protocol.save(root, 'old', 'save-case', {
+                    'topic': 'local', 'description': 'Local checkpoint', 'body': self.BODY})
+                copies = []
+                for index in range(count):
+                    request = 'foreign-%02d' % index
+                    copied = Path(intents.location(root, request, create=True))
+                    copied.write_text(json.dumps(dict(base, request_id=request)))
+                    copies.append((copied, copied.read_bytes()))
+                self.pointer('old', root=root)
+                # An unknown worker inventory fails after the registry scan.
+                for workers, outcome in (((), 'blocked'), (('--workers', '[]'), 'ready')):
+                    code, result = self.restart_cli('--root', root, '--path', checkpoint['path'],
+                                                    '--host-capable', *workers, AGENTSROOM_AGENT_ID='term')
+                    self.assertEqual((code, result['outcome']),
+                                     (0 if outcome == 'ready' else 1, outcome), result)
+                    self.assertEqual(len(result.get('skipped_intents', [])), min(count, 10))
+                    self.assertEqual(result.get('skipped_total', 0), count)
+                    self.assertEqual(result['dispatch'], outcome == 'ready')
+                    if outcome == 'blocked':
+                        self.assertEqual(result['reason'], 'worker-inventory-unknown')
+                    for copied, raw in copies:
+                        self.assertEqual(copied.read_bytes(), raw)
+                    if outcome == 'blocked' and count == 15:
+                        # This record sorts last, after fourteen valid foreign
+                        # records. The output cap must never stop validation.
+                        last, original = max(copies)
+                        last.write_text(json.dumps(dict(json.loads(original), state='pending')))
+                        pending = last.read_bytes()
+                        code, blocked = self.restart_cli('--root', root, '--path', checkpoint['path'],
+                                                         '--workers', '[]', '--host-capable',
+                                                         AGENTSROOM_AGENT_ID='term')
+                        self.assertEqual((code, blocked['reason'], blocked['dispatch']),
+                                         (1, 'invalid-persisted-intent', False), blocked)
+                        self.assertEqual(blocked['invalid_intent']['path'], str(last))
+                        self.assertEqual(blocked['skipped_total'], 14)
+                        self.assertEqual(len(blocked['skipped_intents']), 10)
+                        self.assertEqual(last.read_bytes(), pending)
+                        last.write_bytes(original)
 
     def test_duplicate_restart_passes_stored_drift_warnings_through(self):
         config = Path(self.root) / '.claude/settings.local.json'

@@ -35,6 +35,7 @@ prune_settled = intents.prune_settled
 intent_expired = intents.expired
 INTENT_MAX_AGE = intents.TTL['pending']
 SETTLED_RETENTION = intents.TTL['settled']
+SKIPPED_INTENTS_LIMIT = 10
 _accepted_event = intents.accepted_event
 _acceptance_valid = intents.acceptance_valid
 _confined_transcript = intents.confined_transcript
@@ -114,12 +115,16 @@ def preflight(root, path, session, terminal, request_id, workers=None,
     is uncertain after a crash: reconcile with the host, never blindly dispatch.
     """
     skipped_intents = []
+    skipped_total = 0
+
+    def with_skipped(result):
+        if skipped_total:
+            result['skipped_intents'] = list(skipped_intents)
+            result['skipped_total'] = skipped_total
+        return result
 
     def blocked(reason):
-        result = dict(outcome='blocked', dispatch=False, reason=reason, host_confirmed=False)
-        if skipped_intents:
-            result['skipped_intents'] = list(skipped_intents)
-        return result
+        return with_skipped(dict(outcome='blocked', dispatch=False, reason=reason, host_confirmed=False))
 
     def invalid_intent(exc, entry):
         diagnostic = (exc.diagnostic if isinstance(exc, intents.InvalidIntent) else
@@ -216,8 +221,8 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                                             'hook_drift to "block" to stop restarts on drift.' % names))
         if ledger.resolve(path, root).get('authoritative') != path:
             return blocked('stale-checkpoint')
-        # Scope clearly foreign roots before strict validation. Local or uncertain
-        # bindings (including legacy request IDs) still guard against redispatch.
+        # Scope valid settled foreign records before canonical root validation.
+        # Pending, local or uncertain bindings still guard against redispatch.
         entry = str(Path(location).parent)
         try:
             for entry in intents.entries(root):
@@ -226,7 +231,9 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                 foreign = intents.foreign_root_diagnostic(root, entry, request_id, path,
                                                          checkpoint.checkpoint_id)
                 if foreign is not None:
-                    skipped_intents.append(foreign)
+                    skipped_total += 1
+                    if len(skipped_intents) < SKIPPED_INTENTS_LIMIT:
+                        skipped_intents.append(foreign)
                     continue
                 other = intents.canonical(root, entry)
                 same_checkpoint = (other['path'] == path or
@@ -326,10 +333,7 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         # Durable single-attempt reservation, written before any host call is returned.
         record['dispatch_started_at'] = time.time()
         intents.write(location, record)
-        result = dict(record, outcome='ready', dispatch=True)
-        if skipped_intents:
-            result['skipped_intents'] = list(skipped_intents)
-        return result
+        return with_skipped(dict(record, outcome='ready', dispatch=True))
 
 
 TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
@@ -964,8 +968,8 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
                           'checkpoint open and report.')
         if result.get('invalid_intent'):
             out['action'] = result['action']
-    if result.get('skipped_intents'):
-        out['skipped_intents'] = result['skipped_intents']
+    if result.get('skipped_total'):
+        out.update(skipped_intents=result['skipped_intents'], skipped_total=result['skipped_total'])
     return out
 
 

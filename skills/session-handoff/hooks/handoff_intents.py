@@ -328,7 +328,11 @@ def status(root, request_id):
         record = _read_record(path, request_id)
     except FileNotFoundError:
         return None
+    return _validate_record(record, root, request_id, path)
 
+
+def _validate_record(record, root, request_id, path):
+    """Validate an already-read record against its logical root and physical file."""
     def require(valid, field, detail):
         if not valid:
             raise InvalidIntent(path, field, detail, request_id)
@@ -401,16 +405,17 @@ def canonical(root, entry):
 def foreign_root_diagnostic(root, entry, request_id, path, checkpoint_id):
     """Identify a foreign record without reading its original root or changing it.
 
-    Only a canonical filename and readable, distinct root/request/checkpoint
-    binding establish that it cannot hold this request's dispatch evidence.
-    Anything uncertain falls through to strict canonical validation.
+    Only a fully valid settled record with a canonical filename and distinct
+    root/request/checkpoint binding can be skipped. Pending or uncertain evidence
+    falls through to strict canonical validation.
     """
     record = _read_record(entry)
     foreign_root = record.get('root')
     foreign_request = record.get('request_id')
     foreign_path = record.get('path')
     foreign_checkpoint = record.get('checkpoint_id')
-    if (not isinstance(foreign_root, str) or not os.path.isabs(foreign_root)
+    if (record.get('state') not in SETTLED
+            or not isinstance(foreign_root, str) or not os.path.isabs(foreign_root)
             or foreign_root != os.path.realpath(foreign_root)
             or foreign_root == os.path.realpath(root)
             or not isinstance(foreign_request, str) or not foreign_request.strip()
@@ -421,6 +426,10 @@ def foreign_root_diagnostic(root, entry, request_id, path, checkpoint_id):
             or not isinstance(foreign_checkpoint, str)
             or re.fullmatch(r'[0-9a-f]{64}', foreign_checkpoint) is None
             or foreign_checkpoint == checkpoint_id):
+        return None
+    try:
+        _validate_record(record, foreign_root, foreign_request, entry)
+    except ValueError:
         return None
     return InvalidIntent(entry, 'root', 'Foreign root; this record does not apply to this restart.',
                          foreign_request, recorded=foreign_root, expected=os.path.realpath(root)).diagnostic

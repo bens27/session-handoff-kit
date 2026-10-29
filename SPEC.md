@@ -682,16 +682,24 @@ whose checkpoint is no longer open and authoritative (compared by real path),
 without waiting on a busy record's lock and removing its lock sidecar; pending intents (expired
 or not) and invalid records are never pruned.
 Preflight validates the attempted request's own intent first, before scanning
-the registry. The scan skips a clearly unrelated foreign-root entry without
-changing it: its readable root and checkpoint path must be canonical absolute
+the registry. The scan skips a clearly unrelated foreign-root entry only when
+its state is settled (`retrieved` or `refused`) and the already-read record passes
+the same field and host-evidence validation as `status`, against its recorded
+root. It never reads the foreign root's registry. A definitive refusal with
+`host_confirmed: false` needs no host-acceptance evidence; `host_confirmed: true`
+requires valid native evidence in either settled state. The entry is unchanged:
+its readable root and checkpoint path must be canonical absolute
 paths, its nonempty request ID must match its filename, and its request ID,
 checkpoint path and checkpoint ID must all differ from the current attempt.
-The checkpoint ID must be a lowercase SHA256. The verdict lists every skipped
-entry in `skipped_intents`, with `path`, `field: root`, `request_id`, bounded
-`detail`, and separate full `recorded` and `expected` roots. Other restart gates
+The checkpoint ID must be a lowercase SHA256. When entries are skipped, the verdict
+lists at most the first 10 in `skipped_intents`, with `path`, `field: root`,
+`request_id`, bounded `detail`, and separate full `recorded` and `expected` roots;
+`skipped_total` counts all skipped entries. Every registry entry is still checked
+after the output cap, and both fields survive later gate failures. Other restart gates
 still run; a skip alone never authorizes dispatch. The original foreign JSON
 and associated state are never moved, rewritten or deleted by this scoping step.
-Local, related and uncertain bindings still fail closed. An invalid record
+Pending, missing-state, invalid-state or malformed settled foreign records remain
+blocking evidence. Local, related and uncertain bindings still fail closed. An invalid record
 returns `reason: invalid-persisted-intent` with
 `invalid_intent: {path, field, detail, request_id?}`. `path` names the offending
 JSON file, distinct from the current checkpoint `path`; `field` names the
@@ -709,8 +717,8 @@ for a new request ID.
 Preserve the checkpoint and intent, do not dispatch, and reconcile the named
 record with native host history. Transient file errors require restoring access,
 not discarding evidence. Do not rewrite a binding or automatically quarantine or
-remove any record to bypass a block. Foreign records need no repair for a fresh
-unrelated restart; any later live-state reconciliation is an operator decision.
+remove any record to bypass a block. Valid settled foreign records need no repair
+for a fresh unrelated restart; any later live-state reconciliation is an operator decision.
 See [`docs/restart-recovery.md`](docs/restart-recovery.md) for recovery details;
 incident-specific evidence is recorded on ticket #166.
 New saves record the hook-observed workspace (or project root) and SHA256 of

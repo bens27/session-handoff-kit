@@ -6,13 +6,22 @@ existing dispatch evidence must survive every blocked or skipped result.
 
 ## Unrelated foreign roots
 
-A readable record for another canonical absolute root is skipped only when its
-request ID matches its filename, its checkpoint path is canonical and absolute,
+A readable record for another canonical absolute root is skipped only when it
+is settled (`retrieved` or `refused`) and passes the normal field and host-evidence
+validation against that recorded root. Validation uses the copied record; the
+foreign worktree and its registry need not exist. `retrieved` requires a different
+successor session and a retrieval fingerprint; `refused` requires a refusal
+string. Both states require valid native acceptance evidence if `host_confirmed`
+is true. A definitive refusal with `host_confirmed: false` remains valid.
+Its request ID must match its filename, its checkpoint path must be canonical and absolute,
 and its request ID, checkpoint path and SHA256 checkpoint ID all differ from the
 current attempt. Local records, related checkpoints and uncertain bindings still
-undergo strict validation. Missing JSON or identity data cannot prove isolation.
+undergo strict validation. Pending, missing-state, invalid-state and malformed
+settled foreign records still block. Missing JSON or identity data cannot prove isolation.
 
-The verdict lists every skipped record, including on a later gate failure:
+The verdict lists at most the first 10 skipped records, including on a later gate
+failure. `skipped_total` counts all skipped entries. The output cap never stops
+the registry scan: a later pending or unsafe record still blocks.
 
 ```json
 {
@@ -23,12 +32,13 @@ The verdict lists every skipped record, including on a later gate failure:
     "detail": "Foreign root; this record does not apply to this restart.",
     "recorded": "/project/.worktrees/lane",
     "expected": "/project"
-  }]
+  }],
+  "skipped_total": 1
 }
 ```
 
-The foreign files remain untouched. No quarantine or registry repair is needed
-for an unrelated fresh save and restart. A skip does not bypass publication,
+The foreign files remain untouched. Valid settled records need no quarantine or
+registry repair for an unrelated fresh save and restart. A skip does not bypass publication,
 identity, worker inventory, holds, host capability or duplicate-dispatch gates.
 Only `outcome: ready` with `dispatch: true` permits the host restart call.
 

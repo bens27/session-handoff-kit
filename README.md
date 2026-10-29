@@ -790,11 +790,15 @@ native cycle in one command with compact output:
   terminal yields `outcome: held` (stage `hold`) after the receipt is recorded and
   before any resume; rerun after an explicit release.
 
-Clearly unrelated foreign-root records are skipped without changing them.
-`skipped_intents` lists each file's `path`, `field: root`, `request_id`,
+Clearly unrelated foreign-root records are skipped only when settled (`retrieved`
+or `refused`) and valid under the normal field and host-evidence checks, using
+the recorded root without reading its registry. Their bytes remain unchanged.
+`skipped_intents` lists at most 10 files' `path`, `field: root`, `request_id`,
 `recorded` root and `expected` registry root. The current request and checkpoint
 must differ, and the filename and root/path bindings must be canonical;
-unreadable or uncertain scope still blocks with `invalid-persisted-intent`.
+`skipped_total` counts all skipped entries, including on later gate failures.
+The full registry is checked after the output cap. Pending, invalid-state,
+malformed or uncertain foreign records still block with `invalid-persisted-intent`.
 Its `invalid_intent` object names the offending file and field. Preserve it and
 follow the [restart recovery procedure](docs/restart-recovery.md).
 An invalid intent for the attempted request itself must never be quarantined
