@@ -1163,7 +1163,6 @@ class AdoptTests(unittest.TestCase):
         # Preserve historical order, including the staleness verdict added by #99.
         index = expected_keys.index('staleness' if 'staleness' in expected_keys else 'restart')
         expected_keys[index:index] = ['reviewed', 'review']
-        expected_keys.insert(expected_keys.index('restart'), 'report_back_draft')
         for attempt in ('first delivery', 'same-successor replay'):
             with self.subTest(attempt=attempt):
                 code, raw, out = self.adopt()
@@ -1181,6 +1180,14 @@ class AdoptTests(unittest.TestCase):
                 self.assertTrue(raw.isascii(), 'Adopt must retain its original JSON escaping.')
 
     def test_adopt_returns_local_unsent_report_draft(self):
+        restart.record_refusal(self.root, 'req-1', 'Use addressed checkpoint instead')
+        self.path = protocol.save(self.root, 'old', 'save-addressed', {
+            'topic': 'addressed', 'description': 'Requested work',
+            'body': self.BODY + '## Requester\nLane D\n'})['path']
+        ready = restart.preflight(self.root, self.path, 'old', 'term', 'req-addressed',
+                                  workers=[], host_capable=True)
+        self.assertEqual(ready['outcome'], 'ready', ready)
+        self.prompt = ready['restart_prompt']
         self.pointer('new')
         code, _, result = self.adopt()
         self.assertEqual((code, result['outcome']), (0, 'resumed'))
@@ -1192,6 +1199,15 @@ class AdoptTests(unittest.TestCase):
         self.assertIn('Test it', draft['message'])
         _, _, replay = self.adopt()
         self.assertEqual(replay['report_back_draft'], result['report_back_draft'])
+
+    def test_adopt_without_addresses_omits_draft(self):
+        self.pointer('new')
+        for attempt in ('delivery', 'replay'):
+            with self.subTest(attempt=attempt):
+                code, _, result = self.adopt()
+                self.assertEqual((code, result['outcome']), (0, 'resumed'))
+                self.assertNotIn('report_back_draft', result)
+        self.assertEqual(list(Path(self.root).rglob('*.report-back.json')), [])
 
     def test_adopt_delivers_body_once_and_records_retrieval_without_prompt_echo(self):
         self.pointer('new')

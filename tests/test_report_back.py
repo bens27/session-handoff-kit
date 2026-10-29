@@ -51,18 +51,36 @@ class ReportBackTests(unittest.TestCase):
         self.assertEqual(replay['report_back_draft'], info)
         self.assertEqual(draft_path.read_text(), 'Edited by successor')
 
-    def test_missing_addresses_stay_unspecified_and_projection_keeps_draft_link(self):
+    def test_no_addresses_skips_draft_in_delivery_projection_and_replay(self):
         from handoff_contract import project_output
         path = protocol.save(self.root, 'author', 'save-1', dict(
             topic='legacy', description='Legacy checkpoint',
             body='## Objective\nContinue\n## Current state\nReady\n## Next steps\nInspect\n'))['path']
         result = protocol.resume(self.root, 'successor', path)
-        info = project_output(result, 'path,body')['report_back_draft']
-        draft = json.loads(Path(info['path']).read_text())
-        self.assertIsNone(draft['requester'])
-        self.assertIsNone(draft['ticket'])
-        self.assertIn('Requester: [unspecified]', draft['message'])
-        self.assertIn('Ticket: [unspecified]', draft['message'])
+        self.assertEqual(result['outcome'], 'resumed')
+        self.assertNotIn('report_back_draft', result)
+        self.assertNotIn('report_back_draft', project_output(result, 'path,body'))
+        self.assertNotIn('report_back_draft', protocol.resume(self.root, 'successor', path))
+        self.assertEqual(list(Path(self.root).rglob('*.report-back.json')), [])
+
+    def test_one_known_address_keeps_draft_and_projection_link(self):
+        from handoff_contract import project_output
+        ticket = '68bb0fa0-e7e0-4241-b6b8-fb88c6afc9b5'
+        for requester, ticket_value in (('Lane D', None), (None, ticket)):
+            with self.subTest(requester=requester, ticket=ticket_value):
+                body = '## Objective\nContinue\n## Current state\nReady\n## Next steps\nInspect\n'
+                if requester:
+                    body += '## Requester\n' + requester + '\n'
+                metadata = {'ticket': ticket_value} if ticket_value else {}
+                path = protocol.save(self.root, 'author', str(requester), dict(
+                    topic='one-' + ('requester' if requester else 'ticket'),
+                    description='One address', body=body, **metadata))['path']
+                result = protocol.resume(self.root, 'successor', path)
+                info = project_output(result, 'path,body')['report_back_draft']
+                draft = json.loads(Path(info['path']).read_text())
+                self.assertEqual(draft['requester'], requester)
+                self.assertEqual(draft['ticket'], ticket_value)
+                self.assertIn('[unspecified]', draft['message'])
 
     def test_retrieval_and_refused_resume_do_not_produce_drafts(self):
         path = self.save(verify='echo unsafe')
@@ -77,7 +95,7 @@ class ReportBackTests(unittest.TestCase):
 
     def test_draft_keeps_full_saved_sections_without_rewriting_checkpoint_body(self):
         state = 'Saved evidence ' * 2000
-        body = '## Objective\nContinue\n## Current state\n' + state + '\n## Next steps\nInspect\n'
+        body = '## Requester\nLane D\n## Objective\nContinue\n## Current state\n' + state + '\n## Next steps\nInspect\n'
         path = protocol.save(self.root, 'author', 'save-1', dict(
             topic='large', description='Large state', body=body))['path']
         before = Path(path).read_text().split('\n---\n', 1)[-1]

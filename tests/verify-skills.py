@@ -101,6 +101,14 @@ def main():
           and re.search(r"\b(around|near|about|approximately)\s+lines?\b", a_tpl, re.IGNORECASE) is not None,
           "handoff-template.md must steer needed files into path#L references and flag 'around line N' prose")
 
+    check("agent-template-requester-section",
+          "## Requester" in a_tpl and "agent ID" in a_tpl and "project inbox" in a_tpl,
+          "template must describe the optional requester and reply destination")
+    check("agent-save-requester-guidance", "Requester" in a_save,
+          "save branch must carry requester guidance even for minimal pressure saves")
+    check("agent-pointer-requester-guidance", "Requester" in a,
+          "skill pointer must route requester capture to the template")
+
     # Contract literals may live in either half of a skill directory.
     agent_skill = "\n".join((a, a_tpl, a_save, a_resume))
     chat_skill = chat + "\n" + chat_tpl

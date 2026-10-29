@@ -38,7 +38,7 @@ not authorization; live requests and workspace take precedence.
    Interpret nothing. Without options, ask its text; otherwise follow it. Read
    the named `branch` before drafting a save, or when a resume result gives no
    next step.
-   Audit saves: use optional `## Findings` bullets from `handoff-template.md`.
+   Optional `## Requester` and audit `## Findings` bullets: see `handoff-template.md`.
 4. `outcome: none`: continue the user's task.
    `blocked` reports `code`; retry only when `retryable`, with the same request.
 5. Before using an older decision, redispatch with

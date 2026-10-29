@@ -624,10 +624,11 @@ previously reused body/references and previously loaded required skills. Expired
 payloads are pruned on subsequent resume; compact holder provenance is retained.
 Pending replay alongside current open work requires explicit selection.
 
-Successful resume/adopt also returns `report_back_draft: {path, status: draft}`.
+When requester or ticket is known, successful resume/adopt also returns `report_back_draft: {path, status: draft}`.
 The local JSON draft records requester (optional `## Requester` body section),
 validated ticket metadata, checkpoint path, saved objective/state and planned
-next steps. Missing addresses remain unspecified. It is persisted atomically
+next steps. If both addresses are absent, no draft is created or advertised;
+otherwise the missing address remains unspecified. It is persisted atomically
 in a drafts subdirectory beside transfer receipts before acknowledgment, without changing checkpoint
 content; write failure blocks acknowledgment. Replay preserves successor edits.
 The kit never sends drafts or invokes a network write/MCP send operation.

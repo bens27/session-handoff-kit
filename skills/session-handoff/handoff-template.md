@@ -61,6 +61,14 @@ current authorization, review gate and facts needed to avoid repeating side effe
 1. <the next authorized action, or the decision needed before proceeding>
 ```
 
+When someone requested the work, add an optional section naming who asked and
+where to reply (agent ID or project inbox). Omit it when unknown:
+
+```markdown
+## Requester
+<requester and reply destination>
+```
+
 Optional sections: `## Decisions and rationale` for a decision that changes the
 next action; `## In flight` for an interrupted operation; `## Gotchas` for a
 replay hazard. Omit them when the core already covers those facts.

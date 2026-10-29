@@ -708,11 +708,11 @@ the tail of large transcripts so it stays fast on every tool call.
 
 ### Resume
 
-Successful `resume` and `adopt` return `report_back_draft.path`, a local JSON
+When requester or ticket is known, successful `resume` and `adopt` return `report_back_draft.path`, a local JSON
 file containing an unsent message for the requester and ticket. Review its
 saved state and planned next steps before choosing whether to send it.
 An optional `## Requester` body section names the recipient; absent addresses
-stay unspecified. Replay preserves edits. See [report-back drafts](docs/report-back-drafts.md).
+stay unspecified. With neither address, no draft is created. Replay preserves edits. See [report-back drafts](docs/report-back-drafts.md).
 
 ## Parallel workers
 

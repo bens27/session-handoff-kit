@@ -51,6 +51,7 @@ that says when it continues in the body). `--legacy-next-step` returns the full 
 The resume turn is a status check: load only the tools its FIRST concrete step calls, not the
 whole plan's branches; ids and messageIds already in the body take targeted calls, not directory listings. Use `--reuse-receipt` only for body/references
 still in this context, and `--catalog` to declare installed skills already loaded.
+`report_back_draft` is unsent; send only when reporting back and the user/requester flow calls for it.
 A previous session’s read history does not establish loaded content here.
 `--fields` trims optional output; successful delivery retains its required context.
 A failed output can be retried with the same resume command; the proven holder gets the durable package without repeating verification. For ownership conflicts, read [continuation.md](../continuation.md#ownership-recovery).
