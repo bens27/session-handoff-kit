@@ -311,7 +311,10 @@ working directory. The successor's boot prompt named only a transcript file
 (`.agentsroom/handoff-transcript-<agent-id>.txt`), not the summary, and the
 transcript existed only under the primary checkout's `.agentsroom/`, not the
 successor's working directory; the successor found the summary only by reading
-the transcript. Do not describe summary delivery as working. The kit cannot
+the transcript. A later 2026-10-29 session (no new replacement; its first
+prompt was `/clear` then "Continue the handoff", naming neither file) found
+that same summary only by listing its working directory's `.agentsroom/`.
+Do not describe summary delivery as working. The kit cannot
 redirect a host request silently: the successor must receive the actual saved
 checkpoint path or a host-persisted summary. Write the summary file only when
 the host names its exact path. The predecessor records the summary's absolute
