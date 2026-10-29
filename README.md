@@ -706,6 +706,14 @@ Design guarantees: stdlib-only Python, fail-open (any error exits 0), fires
 once per session via a temp-dir latch keyed on `session_id`, and only scans
 the tail of large transcripts so it stays fast on every tool call.
 
+### Resume
+
+When requester or ticket is known, successful `resume` and `adopt` return `report_back_draft.path`, a local JSON
+file containing an unsent message for the requester and ticket. Review its
+saved state and planned next steps before choosing whether to send it.
+An optional `## Requester` body section names the recipient; absent addresses
+stay unspecified. With neither address, no draft is created. Replay preserves edits. See [report-back drafts](docs/report-back-drafts.md).
+
 ## Parallel workers
 
 When a coordinator splits kit work across parallel workers, each worker brief

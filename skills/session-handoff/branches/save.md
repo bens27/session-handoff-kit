@@ -19,6 +19,7 @@ its restart section as directed below.
    save contract, draft from it; otherwise read `../handoff-template.md`.
    `python3 <ledger> save --template` prints a valid JSON draft. Replace its
    facts with the authorized objective, constraints, evidence and exact next step.
+   Include `## Requester` when known: who asked and where to reply, per the template.
    Record durable goals, constraints and follow-ups in `continuity` (schema in
    `handoff-template.md`); successor saves retain them until explicitly updated.
    Build a minimal continuation core, not a session report. Require only excerpts

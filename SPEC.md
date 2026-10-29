@@ -624,6 +624,17 @@ previously reused body/references and previously loaded required skills. Expired
 payloads are pruned on subsequent resume; compact holder provenance is retained.
 Pending replay alongside current open work requires explicit selection.
 
+When requester or ticket is known, successful resume/adopt also returns `report_back_draft: {path, status: draft}`.
+The local JSON draft records requester (optional `## Requester` body section),
+validated ticket metadata, checkpoint path, saved objective/state and planned
+next steps. If both addresses are absent, no draft is created or advertised;
+otherwise the missing address remains unspecified. It is persisted atomically
+in a drafts subdirectory beside transfer receipts before acknowledgment, without changing checkpoint
+content; write failure blocks acknowledgment. Replay preserves successor edits.
+The kit never sends drafts or invokes a network write/MCP send operation.
+Drafts are not completion evidence or permission to send; the successor decides.
+See [Report-back drafts](docs/report-back-drafts.md) for schema and retention.
+
 AgentsRoom save transition candidates include `requires_preflight: true`.
 Dispatch requires the standalone preflight module to return ready/dispatch from
 current authoritative host observations; unknown capability, identity, inventory

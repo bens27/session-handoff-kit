@@ -1646,6 +1646,34 @@ def section(body, title):
     return match[1].strip() if match else ''
 
 
+def report_back_draft(root, session, path):
+    """Write a local draft only. Caller holds the checkpoint lock after preparation.
+
+    No transport or recipient discovery: missing addresses remain unspecified.
+    A retry never overwrites a draft the successor may have edited.
+    """
+    from handoff_contract import checkpoint_metadata
+    checkpoint = Record.load(path)
+    body = checkpoint.text.split('\n---\n', 1)[-1]
+    requester = section(body, 'Requester') or None
+    ticket = checkpoint_metadata(checkpoint.fm).get('ticket')
+    if requester is None and ticket is None:
+        return dict(outcome='skipped')
+    transfer = receipt_path(root, session, path)
+    draft_path = os.path.join(os.path.dirname(transfer), 'drafts',
+                              os.path.basename(transfer) + '.report-back.json')
+    if not os.path.exists(draft_path):
+        message = ('Report-back draft — not sent. Confirm recipient and facts before sending.\n'
+                   'Requester: %s\nTicket: %s\nCheckpoint: %s\n\n'
+                   'Resuming: %s\n\nSaved state (not a live status check):\n%s\n\n'
+                   'Planned next steps (not yet executed):\n%s\n') % (
+                       requester or '[unspecified]', ticket or '[unspecified]', path,
+                       section(body, 'Objective'), section(body, 'Current state'), section(body, 'Next steps'))
+        write_json(draft_path, dict(status='draft', sent=False, requester=requester,
+                                   ticket=ticket, checkpoint=path, message=message))
+    return dict(outcome='drafted', path=draft_path, status='draft')
+
+
 REPLAY_TTL = 7200
 NEXT_STEP_BYTES = 3000
 NEXT_STEP_MARKER = ' [... continues in the body under ## Next steps]'
@@ -1835,7 +1863,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
             result = run()
         except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
             result = dict(outcome='blocked', action=str(exc)[:500] + '; the handoff stays recoverable. Resolve this, then rerun resume.')
-        return None if result['outcome'] == success else dict(result, stage=name), result
+        return None if result['outcome'] in ((success,) if isinstance(success, str) else success) else dict(result, stage=name), result
     failed, prepared = stage('prepare', lambda: prepare(target, root, session, execute=True, budget=budget,
                                                        catalog=catalog, reuse_receipt=reuse_receipt), 'prepared')
     if failed:
@@ -1872,10 +1900,6 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
     if 'warnings' in prepared:
         result['warnings'] = prepared['warnings']
     attach_staleness(root, result)
-    output_bytes = len(json.dumps(result, ensure_ascii=False).encode())
-    if output_bytes > budget:
-        result.setdefault('warnings', []).append(
-            'Resume output exceeds the recommended %d bytes; all required content is included.' % budget)
     # Persist the full package before acknowledging: stdout can fail after the
     # transfer. A retry by its holder replays without repeating verification.
     with ledger.locked(path):
@@ -1884,6 +1908,15 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         if 'package' not in receipt:
             return dict(outcome='needs-context', stage='prepare', path=path,
                         action='Legacy preparation has no complete replay package; run prepare --execute again before acknowledgement.')
+        failed, draft = stage('report-back', lambda: report_back_draft(root, session, path), ('drafted', 'skipped'))
+        if failed:
+            return failed
+        if draft['outcome'] == 'drafted':
+            result['report_back_draft'] = {k: draft[k] for k in ('path', 'status')}
+        output_bytes = len(json.dumps(result, ensure_ascii=False).encode())
+        if output_bytes > budget:
+            result.setdefault('warnings', []).append(
+                'Resume output exceeds the recommended %d bytes; all required content is included.' % budget)
         receipt['delivery'] = dict(result, **receipt['package'])
         receipt['delivery'].pop('reused_from', None)
         receipt['delivery']['action'] = 'Continue with ## Next steps in the delivered body.'
