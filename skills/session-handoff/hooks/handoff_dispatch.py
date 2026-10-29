@@ -19,7 +19,8 @@ from handoff_record import Record
 import handoff_protocol as protocol
 from handoff_contract import (
     DISPATCH_BRANCHES as BRANCH, DISPATCH_CODES as CODES, DISPATCH_RETRY as RETRY,
-    dispatch_result as result, blocked_result as blocked, python_command, emit_output, exit_status)
+    dispatch_result as result, blocked_result as blocked, python_command, emit_output, exit_status,
+    report_fields)
 
 LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'handoff_ledger.py')
 PREFLIGHT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')
@@ -874,7 +875,8 @@ def cli(argv):
         reason = getattr(a, 'reason', None)
         if not SCOPE.fullmatch(a.scope) or (cmd == 'hold' and not reason.strip()):
             emit_output(dict(outcome='blocked', code='invalid_request', retryable=False,
-                                  action='Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.'))
+                                  action='Use --scope project|topic:<topic>|terminal:<id> and a nonempty --reason.',
+                                  **report_fields('blocked', 'invalid_request')))
             return 1
         emit_output(set_hold(handoff_identity.project_root(a.root), a.scope, reason and reason.strip()[:300]), pretty=a.pretty)
         return 0

@@ -1021,6 +1021,12 @@ provenance), `authorized_to_execute`, the selected `target`, active `holds`,
 `restart` eligibility, one `next_action`, and a `state` token. The agent loads
 only the `branch` file the result names.
 
+Under AgentsRoom (`AGENTSROOM_AGENT_ID` set), a `blocked` result with a
+non-retryable `code` also carries `report_to: {"to": "inbox", "project":
+"session-handoff-kit"}`: report the failure to the kit's project inbox rather
+than retrying. The key is absent on retryable, successful and non-AgentsRoom
+results.
+
 - **Vocabulary.** Save requests include `session handoff`, optionally followed
   by `to yourself`, `to your successor`, `to successor` or `to self`;
   `hand off [this|the|my] work|session|handoff`; and bare `handoff` or `hand off`
