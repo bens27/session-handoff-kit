@@ -1079,13 +1079,14 @@ def handle_session_start(evt, agent):
 
 # ---------------------------------------------------------------- stop nudge
 
-def session_checkpoint_published(cwd, session):
-    """Any validated checkpoint this session published (#180 advisory guard)."""
+def session_checkpoint_published(cwd, session, since):
+    """A validated checkpoint this session published at or after `since` (the
+    advisory latch's mtime): an older save does not cover the notice (#180)."""
     if not session:
         return False
     try:
         return any(r['fm'].get('session_id') == session and r['fm'].get('checkpoint_id') and not r['problems']
-                   and r['fm'].get('status') != 'unpublished'
+                   and r['fm'].get('status') != 'unpublished' and r['mtime'] >= since
                    for r in _ledger()._records(handoff_identity.project_root(cwd)))
     except OSError:
         return False
@@ -1109,7 +1110,11 @@ def nudge_unwritten_handoff(evt):
             return
         marker = latch + ".nudged"
     elif os.path.exists(latch + ".advised"):
-        if session_checkpoint_published(cwd, key):
+        try:
+            since = os.path.getmtime(latch + ".advised")
+        except OSError:
+            return
+        if session_checkpoint_published(cwd, key, since):
             return
         marker = latch + ".advised.nudged"
     else:
@@ -1526,10 +1531,11 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
             startup = noted if type(noted) is int else None
         action = wd.advise(occupancy, lead, decision, latch, advised, startup)
     if action == wd.ADVISORY_REARM:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        for stale in (path, path + ".nudged"):  # the spent Stop block re-arms with the advisory (#180)
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
         return
     if action != wd.ADVISE:
         return
@@ -1707,7 +1713,8 @@ def main():
                          floor_probe, lambda: handoff_written_since(cwd, session_id))
     if decision.action == wd.REARM:
         for path in (first, second, floor_latch, first + ".cleared",
-                     first + ".nudged", first + ".announced", first + ".restart-blocked", advised_latch):
+                     first + ".nudged", first + ".announced", first + ".restart-blocked", advised_latch,
+                     advised_latch + ".nudged"):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:

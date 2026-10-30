@@ -12,7 +12,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_context_watch_regressions import HookCase  # noqa: E402
+from test_context_watch_regressions import HookCase, claude_call  # noqa: E402
 from test_dispatch import BODY, LEDGER  # noqa: E402
 
 
@@ -64,6 +64,29 @@ class PromiseGuard(HookCase):
         self.advise()
         self.save()
         self.assertNotIn('"decision": "block"', self.stop())
+
+    def test_checkpoint_saved_before_the_advisory_does_not_count(self):
+        # N1: only a checkpoint published since the notice satisfies the guard.
+        self.save()
+        old = os.path.getmtime(next(p for p in (os.path.join(self.tmp, '.handoffs', f)
+                                                  for f in os.listdir(os.path.join(self.tmp, '.handoffs')))
+                                      if p.endswith('.md')))
+        self.advise()
+        os.utime(self.base + ".advised", (old + 60, old + 60))
+        self.assertIn('"decision": "block"', self.stop())
+
+    def test_advisory_guard_rearms_after_compaction(self):
+        # B2: compaction re-arms the advisory, so its spent block must re-arm too.
+        extra = {"CONTEXT_WATCH_THINKING": "0"}
+        self.write([claude_call(20000), claude_call(105000)])
+        self.assertIn("Early warning", self.run_hook(extra=extra))
+        self.assertIn('"decision": "block"', self.stop(**extra))
+        self.assertEqual(self.stop(**extra), "")
+        self.write([claude_call(20000)], "a")  # compaction
+        self.run_hook(extra=extra)
+        self.write([claude_call(105000)], "a")
+        self.assertIn("Early warning", self.run_hook(extra=extra))
+        self.assertIn('"decision": "block"', self.stop(**extra))
 
     def test_no_notice_never_blocks(self):
         self.assertEqual(self.stop(), "")

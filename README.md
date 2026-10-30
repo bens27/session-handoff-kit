@@ -478,7 +478,7 @@ off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
 Once the early warning or the threshold notice has fired, the Stop hook
 blocks the end of a turn once, in every mode, while this session has published
-no checkpoint (Claude only; Codex Stop hooks cannot block). The agent then saves,
+no checkpoint since that notice (Claude only; Codex Stop hooks cannot block). The agent then saves,
 or says plainly that nothing was saved, instead of promising a handoff that does
 not exist (#180).
 
