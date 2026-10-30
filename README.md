@@ -1101,6 +1101,14 @@ that ask the caller to act (`needs-confirmation`, `needs-context`,
   also carries `target.terminal_latest`, the newest checkpoint this terminal
   wrote (any status), and in AgentsRoom a `recovery_hint` that points to the
   tab's open assignments. Both are evidence; neither is ever adopted.
+  An explicitly selected checkpoint tagged with another terminal whose hook
+  pointer was refreshed in the last 1800 s (`HANDOFF_OWNER_LIVE_SECONDS`) gives
+  `ask`/`owner_live` for resume and autoresume, with `target.owner`
+  (`terminal`, `seen_s`, `live`): its owner tab is live, so do not act as it
+  (#194). Only when the user confirms you are not acting as that owner, resend
+  with `"confirm_not_owner": true`; dispatch then proceeds and adds an
+  `owner_live_confirmed` warning. Retrieve, own checkpoints, untagged ones and
+  owners whose pointer is stale or missing are unchanged.
   Unmatched non-path prose such as `resume later` gives
   `ask`/`lifecycle_unrecognised`, without selecting a target.
   A bare readable choice is also accepted with an explicit `resume`/`retrieve`

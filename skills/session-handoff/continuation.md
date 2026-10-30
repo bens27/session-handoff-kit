@@ -60,6 +60,11 @@ workspace findings and does not rerun verification. After context loss replay
 includes the full body, references and skills, including previously reused or
 loaded material. A newer successor or live foreign claim blocks replay.
 
+Dispatch answers `ask`/`owner_live` when you name another terminal's
+checkpoint while that terminal's hooks ran in the last 30 minutes: its owner
+tab is live. Do not act as that owner. Ask the user; resend with
+`"confirm_not_owner": true` only if they confirm you are not acting as it.
+
 Receipts are durable per checkpoint and resuming session under
 `~/.local/state/session-handoff/transfers/`; preparing another topic preserves
 prior transfer provenance. Holder provenance and replay packages are HMAC-authenticated. Unsigned historical

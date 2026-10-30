@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 
 import handoff_identity
 from handoff_holds import (  # noqa: F401  (re-exported for existing callers)
@@ -26,7 +27,9 @@ LEDGER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'handoff_ledge
 PREFLIGHT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'restart_preflight.py')
 OPERATIONS = ('save', 'pressure', 'retrieve', 'resume', 'autoresume')
 REQUEST_KEYS = frozenset(('operation', 'prompt', 'target', 'session', 'authorization', 'override', 'host',
-                          'request_id', 'reuse', 'expect', 'topic', 'draft'))
+                          'request_id', 'reuse', 'expect', 'topic', 'draft', 'confirm_not_owner'))
+# #194: an owner terminal whose hook pointer is this fresh counts as a live tab.
+OWNER_LIVE_SECONDS = 1800
 DRAFT_REQUIRED = ('topic', 'description', 'body', 'suggested_skills')
 # ticket/base/role are #95's checkpoint-header fields: save checks their format and writes them.
 DRAFT_OPTIONAL = frozenset(('predecessor', 'references', 'optional_references', 'continuity', 'skills',
@@ -401,6 +404,34 @@ def intent_target_request(root, request, host):
     return dict(request, target=record['path'])
 
 
+def owner_live_seconds():
+    try:
+        return max(0, int(os.environ.get('HANDOFF_OWNER_LIVE_SECONDS', OWNER_LIVE_SECONDS)))
+    except ValueError:
+        return OWNER_LIVE_SECONDS
+
+
+def live_foreign_owner(root, path):
+    """#194: {terminal, seen_s, live} when another terminal owns `path` and its hook
+    pointer is fresh; None for own, untagged, unknown or stale owners. The kit sees
+    only the owner's hook activity: an open but idle tab past the window looks dead."""
+    try:
+        owner = (handoff_identity.read_front_matter(path).get('terminal') or '').strip()
+    except (OSError, ValueError):
+        return None
+    me = protocol.terminal_id()
+    if not owner or owner == me:
+        return None
+    try:
+        data = handoff_identity._read_terminal_pointer(handoff_identity.terminal_pointer_path(root, owner))
+        seen = time.time() - float(data['ts'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not 0 <= seen <= owner_live_seconds():
+        return None
+    return dict(terminal=owner, seen_s=int(seen), live=True)
+
+
 def select_target(root, request, session):
     """Exact path/topic never falls back; otherwise zero/one/many owned is deterministic."""
     operation, target = request['_operation'], request.get('target')
@@ -452,6 +483,10 @@ def select_target(root, request, session):
             if operation == 'retrieve':
                 return info, ('proceed', 'history_only', 'Closed checkpoint (%s): inspection only.' % status)
             return info, ('blocked', 'target_closed', 'This checkpoint is %s; it cannot be resumed again.' % status)
+        if operation in ('resume', 'autoresume'):
+            owner = live_foreign_owner(root, path)
+            if owner:  # decided in route, after pending-intent checks keep precedence
+                info['owner'] = owner
         return info, None
     found = protocol.lookup(root, session=session)
     if found['outcome'] == 'error':
@@ -780,6 +815,9 @@ def route(request, root):
                            'dispatch again and act only on the new next_action.', **common)
     checkpoint = (target or {}).get('predecessor') if saving else (target or {}).get('path')
     pending, failure, warnings = pending_dispatch(root, host, session, checkpoint, saving)
+    if (target or {}).get('owner') and request.get('confirm_not_owner') is True:
+        warnings = list(warnings or []) + ['owner_live_confirmed: terminal %s is live; the caller confirmed it is not '
+                                           'acting as that owner.' % target['owner']['terminal']]
     if warnings:
         common['warnings'] = warnings
     if failure:
@@ -790,6 +828,14 @@ def route(request, root):
                        'the host before any retry; never re-dispatch or record host confirmation yourself.', **common)
     if pending and not saving and stale_marked(pending):
         return blocked(request, 'dispatch_stale', stale_text(pending), **common)
+    owner = (target or {}).get('owner') if not saving else None
+    # A pending restart intent keeps its own terminal-proven successor rule (dispatch_pending).
+    pending_governs = bool(pending) and operation in ('resume', 'autoresume') and bool(authorized)
+    if owner and not pending_governs and request.get('confirm_not_owner') is not True:
+        return _stop(request, ('ask', 'owner_live', 'This checkpoint belongs to terminal %s, whose tab is live (hook seen '
+                               '%ds ago). Do not act as that owner: ask the user, or resend with confirm_not_owner '
+                               'true only if they confirm you are not acting as it.' % (owner['terminal'], owner['seen_s'])),
+                     **common)
     if saving and request.get('draft') is not None:
         return draft_save(root, request, session, target, common)
     if decision:  # history_only
