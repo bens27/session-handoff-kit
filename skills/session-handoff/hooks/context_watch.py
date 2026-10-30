@@ -1096,73 +1096,89 @@ def session_checkpoint_published(cwd, session, since):
 NUDGE_BAND_TOKENS = 10000
 
 
-def nudge_band(cwd, key, notice):
-    """Which +10k-token band past the notice occupancy this session is in: the
-    session note's last observed occupancy against the latch's first field."""
+def nudge_band(cwd, key, notice, current=None):
+    """Which +10k-token band past the notice occupancy this session is in:
+    `current` (else the session note's last observed occupancy) against the
+    latch's first field."""
     try:
         with open(notice, encoding="utf-8") as f:
             start = int(f.read().split("/", 1)[0])
     except (OSError, ValueError):
         return 0
-    current = _ledger().read_session_note(cwd, session=key).get("observed_occupancy_tokens")
+    if current is None:
+        current = _ledger().read_session_note(cwd, session=key).get("observed_occupancy_tokens")
     if type(current) is not int:
         return 0
     return max(0, (current - start) // NUDGE_BAND_TOKENS)
 
 
 def clear_nudges(notice):
-    """Re-arm every spent Stop block of a notice (all bands)."""
-    for stale in glob.glob(glob.escape(notice) + ".nudged*"):
+    """Re-arm every spent reminder and Stop warning of a notice (all bands)."""
+    for stale in glob.glob(glob.escape(notice) + ".nudged*") + glob.glob(glob.escape(notice) + ".reminded*"):
         try:
             os.remove(stale)
         except OSError:
             pass
 
 
+def unsaved_notice(cwd, key):
+    """The latch of this session's context-watch notice (threshold, else the
+    advisory) when no checkpoint was published since it, else None."""
+    latch = latch_path(key) if key else None
+    if not latch:
+        return None
+    if os.path.exists(latch):
+        return None if handoff_written_since(cwd, key) else latch
+    advised = latch + ".advised"
+    try:
+        since = os.path.getmtime(advised)
+    except OSError:
+        return None
+    return None if session_checkpoint_published(cwd, key, since) else advised
+
+
+def claim_band(notice, kind, band):
+    """One shot per band: O_EXCL, so the same band never repeats."""
+    try:
+        os.close(os.open("%s.%s.%d" % (notice, kind, band), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return True
+    except OSError:
+        return False  # spent already, or unwritable temp dir
+
+
+def remind_unwritten_handoff(agent, evt, event_name, cwd, key, occupancy):
+    """#184: while nothing was saved since this session's notice, instruct the
+    agent once per +10k-token band past it. Never blocks; reads no message text."""
+    notice = unsaved_notice(cwd, key)
+    if not notice or not claim_band(notice, "reminded", nudge_band(cwd, key, notice, occupancy)):
+        return
+    emit(agent, event_name, (
+        "[context-watch] This session has a context-watch notice and no checkpoint saved since it "
+        "(about %dk tokens now). Save a checkpoint before any clearing, so a cleared session keeps "
+        "this work's context. Never tell the user the work continues after a handoff, in a next session "
+        "or with a successor unless you can name the saved checkpoint path. "
+        "For the JSON draft format run %s. Publish with %s; stop after outcome saved."
+        % (occupancy // 1000, python_command(LEDGER, 'save', '--template'),
+           command_template(LEDGER, ('save', '--session', key), '--input <draft.json>'))), "warn")
+
+
 def nudge_unwritten_handoff(evt):
-    """Every mode (#180): a context-watch notice (the threshold trigger or the
-    earlier advisory) fired this session, the turn is ending, and no checkpoint
-    was published since. Block the stop once so the agent saves now, or drops
-    any claim that the work continues later, instead of promising a handoff that
-    does not exist. Claude only (Codex Stop hooks cannot block)."""
+    """Every mode (#180, #184): a context-watch notice fired this session, the
+    turn is ending, and no checkpoint was published since. Warn the user once per
+    +10k-token band past the notice, without blocking, so the session is not
+    cleared before it saves. Claude only (Codex has no Stop hook)."""
     if evt.get("stop_hook_active") or detect_agent(evt, []) != "claude":
         return
     key = session_key(evt)
-    latch = latch_path(key) if key else None
-    if not latch:
-        return
     cwd = evt.get("cwd") or os.getcwd()
-    if os.path.exists(latch):
-        if handoff_written_since(cwd, key):
-            return
-        notice = latch
-    elif os.path.exists(latch + ".advised"):
-        try:
-            since = os.path.getmtime(latch + ".advised")
-        except OSError:
-            return
-        if session_checkpoint_published(cwd, key, since):
-            return
-        notice = latch + ".advised"
-    else:
+    notice = unsaved_notice(cwd, key)
+    if not notice or not claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
         return
-    # B1: at most one block per +10k-token band past the notice, so a session that
-    # keeps working unsaved is reminded again without ever looping on one band.
-    marker = notice + ".nudged.%d" % nudge_band(cwd, key, notice)
-    try:
-        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-    except OSError:
-        return  # nudged once already, or unwritable temp dir
-    emit_output({"decision": "block", "reason": (
-        "[context-watch] No published checkpoint matches this session's context-watch notice. "
-        "Do not tell the user the work continues after a handoff, in a next session or with a successor "
-        "unless a checkpoint exists: save one now, or say plainly that nothing was saved. "
-        "For the JSON draft format run %s. Preserve the draft and publish with %s; stop after outcome saved. "
-        "If blocked, report the failed location and keep this session; do not clear. "
-        "Searched project: %s."
-        % (python_command(LEDGER, 'save', '--template'),
-           command_template(LEDGER, ('save', '--session', key), '--input <draft.json>'),
-           handoff_identity.project_root(cwd)))})
+    emit_output({"systemMessage": (
+        "[context-watch] This session got a context-watch notice and has published no checkpoint "
+        "since. Do not clear it yet: clearing now would lose this work's context. Ask the agent to "
+        "save a checkpoint first; any handoff it mentions without a saved path does not exist. "
+        "Searched project: %s." % handoff_identity.project_root(cwd))})
     sys.exit(0)
 
 
@@ -1765,6 +1781,7 @@ def main():
         if notice:
             emit(agent, event_name, notice, "warn")
         advisory(agent, evt, event_name, cwd, session_id, advised_latch, occupancy, decision, latch, wd, floor_probe)
+        remind_unwritten_handoff(agent, evt, event_name, cwd, session_id, occupancy)
         sys.exit(0)
     note_only = decision.action == wd.FLOOR_NOTE
 
@@ -1774,6 +1791,7 @@ def main():
             with os.fdopen(fd, "w") as f:
                 f.write("%d/%d/%d\n" % (occupancy, limit, breakdown["occupancy"]))
         except FileExistsError:
+            remind_unwritten_handoff(agent, evt, event_name, cwd, session_id, occupancy)
             sys.exit(0)
         except Exception:
             pass

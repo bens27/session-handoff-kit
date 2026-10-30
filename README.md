@@ -476,11 +476,14 @@ warning at 100k): finish the current slice and prepare notes, without saving or
 restarting. It fires once per window, re-arms after compaction, and `0` turns it
 off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
-Once the early warning or the threshold notice has fired, the Stop hook
-blocks the end of a turn at most once per +10k-token band past the notice, in every mode, while this session has published
-no checkpoint since that notice (Claude only; Codex Stop hooks cannot block). The agent then saves,
-or says plainly that nothing was saved, instead of promising a handoff that does
-not exist (#180).
+Once the early warning or the threshold notice has fired, and while this
+session has published no checkpoint since that notice, the kit reminds and
+warns, and never blocks (#180, #184). Once per +10k-token band past the notice,
+the agent's next prompt or tool call carries an instruction to save a checkpoint
+before any clearing and never to claim a handoff without a saved path (Claude
+and Codex). At the end of a turn the Stop hook shows you a non-blocking warning
+not to clear the session yet, once per band (Claude only; Codex has no Stop hook).
+A checkpoint saved since the notice silences both.
 
 `"resume_pointer_policy"` (`"ask"` default, `"latest-owned"` or `"manual"`) decides
 what a fresh session does when several restart checkpoints for its terminal

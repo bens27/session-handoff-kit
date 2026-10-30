@@ -1059,13 +1059,15 @@ whose initial prose avoids native CLI subcommands such as Codex's `resume`; an i
 Promise guard (#180), every mode, hook registration unchanged: if this
 session's threshold latch exists and no checkpoint matches its trigger, or only
 the advisory latch exists and the session has published no checkpoint since
-that latch was written, the Stop hook returns `{"decision": "block"}` at most
-once per +10k-token band past the notice: the band is the session note's
-`observed_occupancy_tokens` minus the latch's first field, divided by 10000, and
-each band's block is a one-shot marker, so the same band never blocks twice. Re-arming a latch after compaction re-arms its block. The reason tells the agent
-to save, or to say that nothing was saved, before claiming the work continues
-after a handoff. It reads no message text. `stop_hook_active` and non-Claude
-agents are never blocked.
+that latch was written, the guard reminds and warns and never blocks (#184).
+The band is the observed occupancy minus the latch's first field, divided by
+10000. Per band, one PostToolUse or UserPromptSubmit `additionalContext`
+reminder (Claude and Codex) tells the agent to save a checkpoint before any
+clearing and never to claim a handoff without a saved path; per band, one Stop
+`systemMessage` (Claude only, `stop_hook_active` excluded) warns the user not to
+clear the session yet. Each is a one-shot O_EXCL marker per band
+(`.reminded.<n>`, `.nudged.<n>`), so a band never repeats; re-arming a latch
+after compaction clears every marker. It reads no message text.
 An unrelated live task takes precedence and leaves checkpoints open.
 
 Exact retrieval/resume commands, topics and paths route without a model call.

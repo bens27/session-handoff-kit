@@ -11,7 +11,7 @@ Use the host's actual session ID when available. Generate one UUID and pass it a
 ID cannot override a hook-recorded identity.
 Never tell the user that work continues after a handoff, in a next session or
 with a successor until `outcome` is `saved`; if the save fails, say nothing was
-saved. The Stop hook blocks once after a context-watch notice while no checkpoint exists.
+saved. After a context-watch notice with no checkpoint since, the hooks remind you once per +10k tokens and warn the user at Stop; they never block.
 For installation/customization, read `../reference.md`; AgentsRoom wind-down uses
 its restart section as directed below.
 
