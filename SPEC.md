@@ -1323,7 +1323,16 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    checkpoint this terminal wrote, in any status, as recovery evidence only.
    It is never selected or resumed. Under AgentsRoom
    (`AGENTSROOM_AGENT_ID` set), `target.recovery_hint` adds that the tab's
-   open assignments (`assignments_mine`) are the next place to look (#180). Without a target, one open checkpoint owned by this
+   open assignments (`assignments_mine`) are the next place to look (#180). An exact resume or autoresume target tagged with another terminal returns
+   `ask`/`owner_live` when that terminal's hook pointer
+   (`context-watch-terminal-*.json`) has a `ts` at most
+   `HANDOFF_OWNER_LIVE_SECONDS` (default 1800) old, with `target.owner` =
+   `{terminal, seen_s, live}` and no execution authority (#194). The request key
+   `confirm_not_owner: true`, sent only after the user confirms the caller is not
+   acting as that owner, proceeds with an `owner_live_confirmed` warning. The
+   pointer is the only liveness signal the kit sees: an open tab whose hooks
+   have not fired within the window reads as not live. Retrieve, own, untagged,
+   stale-pointer and pointerless targets are unchanged. Without a target, one open checkpoint owned by this
    terminal is selected (`owned`). Several give `ask`/`target_ambiguous` by
    default; with the `owned_selection` setting `"newest"` (string, from
    `HANDOFF_OWNED_SELECTION` or `~/.context-watch/thresholds.json`; a project

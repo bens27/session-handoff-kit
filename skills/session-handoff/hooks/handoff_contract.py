@@ -201,7 +201,7 @@ DISPATCH_CODES = {
     'ok': False, 'recovery': False, 'history_only': False, 'held': False, 'released': False,
     'no_operation': False, 'not_lifecycle': False, 'lifecycle_unrecognised': False,
     'no_open_handoff': False, 'no_hold': False,
-    'claimed_elsewhere': False, 'stale_only': False, 'foreign_only': False, 'target_ambiguous': False,
+    'claimed_elsewhere': False, 'stale_only': False, 'foreign_only': False, 'owner_live': False, 'target_ambiguous': False,
     'topic_ambiguous': False, 'confirmation_required': False, 'invalid_request': False,
     'invalid_authorization': False, 'invalid_override': False, 'autoresume_not_enabled': False,
     'identity_conflict': False, 'identity_required': False, 'target_not_found': False,

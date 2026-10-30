@@ -14,6 +14,7 @@
     "claimed_elsewhere": false,
     "stale_only": false,
     "foreign_only": false,
+    "owner_live": false,
     "target_ambiguous": false,
     "topic_ambiguous": false,
     "confirmation_required": false,
