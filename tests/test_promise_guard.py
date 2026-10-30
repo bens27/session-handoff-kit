@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """#180: a turn must not end after a context-watch notice (advisory or threshold)
 while this session has published no checkpoint. Per +10k-token band past the
-notice the agent is reminded once and the user is warned once at Stop, in every
-mode; nothing ever blocks (#184).
+notice the agent is reminded once and the first Stop blocks once; every Stop
+while unsaved warns the user, in every mode (#186). Codex: reminder only.
 
 Run: python3 -m pytest tests/test_promise_guard.py"""
 import json
@@ -88,15 +88,16 @@ class PromiseGuard(HookCase):
         self.assertWarns(self.stop())
         self.occupancy(114000)
         self.assertWarns(self.continued_stop(), blocks=False)
-        self.assertEqual(self.stop(), "")  # that band is spent
+        self.assertWarns(self.stop())  # N1: the continued stop claimed nothing
+        self.assertWarns(self.stop(), blocks=False)  # now that band's block is spent
 
-    # ---- Stop: a non-blocking warning to the user, never a block (#184)
+    # ---- Stop: one block per band, a warning to the user on every unsaved stop (#186)
 
     def test_advisory_without_checkpoint_blocks_and_warns_once(self):
         self.advise()
         msg = self.assertWarns(self.stop())
         self.assertIn('clear', msg)
-        self.assertEqual(self.stop(), "")
+        self.assertWarns(self.stop(), blocks=False)
 
     def test_threshold_without_checkpoint_warns_in_automatic_mode(self):
         self.fire()
@@ -121,16 +122,16 @@ class PromiseGuard(HookCase):
         os.utime(self.base + ".advised", (old + 60, old + 60))
         self.assertWarns(self.stop())
 
-    def test_stop_warning_once_per_10k_band(self):
-        # B1 kept: one Stop warning per +10k band past the notice, never twice in a band.
+    def test_stop_blocks_once_per_10k_band(self):
+        # B1 kept: one Stop block per +10k band past the notice; later stops in the band only warn.
         self.advise()
         self.occupancy(103137)
         self.assertWarns(self.stop())
         self.occupancy(110000)
-        self.assertEqual(self.stop(), "")
+        self.assertWarns(self.stop(), blocks=False)
         self.occupancy(114000)
         self.assertWarns(self.stop())
-        self.assertEqual(self.stop(), "")
+        self.assertWarns(self.stop(), blocks=False)
 
     def test_threshold_stop_warning_rearms_per_band(self):
         self.fire()
@@ -139,10 +140,28 @@ class PromiseGuard(HookCase):
         self.occupancy(161000)
         self.assertWarns(self.stop())
 
+    def test_S1_every_unsaved_stop_warns_user(self):
+        # S1: every Stop warns while nothing was saved since the notice.
+        self.advise()
+        self.occupancy(103137)
+        self.assertWarns(self.stop())
+        self.occupancy(105000)
+        self.assertWarns(self.stop(), blocks=False)
+
+    def test_N1_continued_stop_keeps_next_band_block(self):
+        # N1: a stop_hook_active stop never claims a band's block.
+        self.advise()
+        self.occupancy(103137)
+        self.assertWarns(self.stop())
+        self.occupancy(114000)
+        self.assertWarns(self.continued_stop(), blocks=False)
+        self.occupancy(115000)
+        self.assertWarns(self.stop())
+
     def test_no_notice_never_warns(self):
         self.assertEqual(self.stop(), "")
 
-    # ---- the agent: one additionalContext reminder per +10k band (#184)
+    # ---- the agent: one additionalContext reminder per +10k band (#186)
 
     EXTRA = {"CONTEXT_WATCH_THINKING": "0"}
 
@@ -161,7 +180,7 @@ class PromiseGuard(HookCase):
         self.assertEqual(self.call(117000), "")  # same band: once
         self.assertIn("checkpoint", self.call(126000))  # next band
         self.assertWarns(self.stop(**self.EXTRA))  # band 2: blocks again, with the warning
-        self.assertEqual(self.stop(**self.EXTRA), "")
+        self.assertWarns(self.stop(**self.EXTRA), blocks=False)  # same band: warning only
 
     def test_save_silences_reminders_and_warning(self):
         self.write([claude_call(20000)])

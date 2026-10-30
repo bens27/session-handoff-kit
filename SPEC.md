@@ -1064,13 +1064,15 @@ The band is the observed occupancy minus the latch's first field, divided by
 10000. Per band, one PostToolUse or UserPromptSubmit `additionalContext`
 reminder (Claude and Codex, from band 1: band 0 is the notice itself) tells the
 agent to save a checkpoint before any clearing and never to claim a handoff
-without a saved path. Per band, one Stop output (Claude only; Codex: reminder
-only) carries `{"decision": "block"}`, whose reason requires a real save or a
-plain statement that nothing was saved and why, plus a `systemMessage` warning
-the user not to clear the session yet. The reply is never parsed and lifts
-nothing; only a save does. A band first reached on a `stop_hook_active` stop
-gets the warning without the block, so the guard never loops. Each is a one-shot O_EXCL marker per band
-(`.reminded.<n>`, `.nudged.<n>`), so a band never repeats; re-arming a latch
+without a saved path. Every Stop while unsaved (Claude only; Codex: reminder
+only) carries a `systemMessage` warning the user not to clear the session yet.
+The first ordinary Stop of each band also carries `{"decision": "block"}`, whose
+reason requires a real save or a plain statement that nothing was saved and
+why. The reply is never parsed and lifts nothing; only a save does. A
+`stop_hook_active` stop gets the warning only and claims no band, so the guard
+never loops and that band's block waits for the next ordinary stop. Reminders
+and blocks are one-shot O_EXCL markers per band (`.reminded.<n>`,
+`.nudged.<n>`), so neither repeats within a band; re-arming a latch
 after compaction clears every marker. It reads no message text.
 An unrelated live task takes precedence and leaves checkpoints open.
 

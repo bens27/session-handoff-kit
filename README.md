@@ -480,10 +480,10 @@ Once the early warning or the threshold notice has fired, and while this
 session has published no checkpoint since that notice, the kit reminds, blocks
 and warns (#180, #186). Once per further +10k-token band past the notice, the
 agent's next prompt or tool call carries an instruction to save a checkpoint
-before any clearing and never to claim a handoff without a saved path. Once per
-band, the Stop hook blocks the end of the turn until the agent really saves or
-states plainly that nothing was saved and why, and shows you a warning not to
-clear the session yet. The agent's statement lifts nothing: the next band blocks
+before any clearing and never to claim a handoff without a saved path. Every
+turn that ends unsaved shows you a warning not to clear the session yet. Once
+per band, the same Stop output also blocks the end of the turn until the agent
+really saves or states plainly that nothing was saved and why. The agent's statement lifts nothing: the next band blocks
 again. A checkpoint saved since the notice silences all three. Codex gets the
 reminder only (it has no Stop hook).
 

@@ -126,7 +126,9 @@ class NormalPolicyUnchanged(HookCase):
         out = self.run_hook(event="Stop", extra=extra)  # #186: blocks and warns
         self.assertIn('"decision": "block"', out)
         self.assertIn('"systemMessage"', out)
-        self.assertEqual(self.run_hook(event="Stop", extra=extra), "")  # nudged once
+        again = self.run_hook(event="Stop", extra=extra)  # S1: blocked once, still warns
+        self.assertIn('"systemMessage"', again)
+        self.assertNotIn('"decision"', again)
         self.write([claude_call(20000)], "a")  # compaction
         self.assertEqual(self.run_hook(extra=extra), "")  # re-armed
         self.write([claude_call(140000)], "a")

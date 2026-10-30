@@ -1147,8 +1147,9 @@ def claim_band(notice, kind, band):
 
 
 def remind_unwritten_handoff(agent, evt, event_name, cwd, key, occupancy):
-    """#184: while nothing was saved since this session's notice, instruct the
-    agent once per further +10k-token band past it. Never blocks; reads no message text."""
+    """#186: while nothing was saved since this session's notice, instruct the
+    agent once per further +10k-token band past it (Claude and Codex). The block
+    lives in nudge_unwritten_handoff; this never blocks and reads no message text."""
     notice = unsaved_notice(cwd, key)
     band = nudge_band(cwd, key, notice, occupancy) if notice else 0
     # Band 0 is the notice itself: it already carries the instruction.
@@ -1166,25 +1167,26 @@ def remind_unwritten_handoff(agent, evt, event_name, cwd, key, occupancy):
 
 def nudge_unwritten_handoff(evt):
     """Every mode (#180, #186): a context-watch notice fired this session, the
-    turn is ending, and no checkpoint was published since. Once per +10k-token
-    band past the notice, block the stop so the agent really saves or states
-    plainly that nothing was saved and why (the reply is never parsed; only a
-    save silences later bands), and warn the user in the same output. A stop
-    already continued by a block only warns, so the guard never loops.
-    Claude only (Codex has no Stop hook)."""
+    turn is ending, and no checkpoint was published since. Every such stop
+    warns the user. Once per +10k-token band past the notice, the same output
+    also blocks the stop so the agent really saves or states plainly that
+    nothing was saved and why (the reply is never parsed; only a save silences
+    the guard). A stop already continued by a block (stop_hook_active) only
+    warns and claims nothing, so the guard never loops and the band's block
+    stays for the next ordinary stop. Claude only (Codex has no Stop hook)."""
     if detect_agent(evt, []) != "claude":
         return
     key = session_key(evt)
     cwd = evt.get("cwd") or os.getcwd()
     notice = unsaved_notice(cwd, key)
-    if not notice or not claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
+    if not notice:
         return
     out = {"systemMessage": (
         "[context-watch] This session got a context-watch notice and has published no checkpoint "
         "since. Do not clear it yet: clearing now would lose this work's context. Ask the agent to "
         "save a checkpoint first; any handoff it mentions without a saved path does not exist. "
         "Searched project: %s." % handoff_identity.project_root(cwd))}
-    if not evt.get("stop_hook_active"):
+    if not evt.get("stop_hook_active") and claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
         out.update(decision="block", reason=(
             "[context-watch] No checkpoint has been published since this session's context-watch notice. "
             "Before ending this turn, do one of two things: really save a checkpoint now, or state plainly "
