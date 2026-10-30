@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/session-handoff/hooks'))
 from test_dispatch import Base  # noqa: E402
+import test_dispatch  # noqa: E402
 import handoff_identity  # noqa: E402
 
 
@@ -68,6 +69,35 @@ class ForeignLiveOwnerTests(Base):
         self.age_owner_pointer(5)
         r = self.dispatch(operation='retrieve', target=self.foreign)
         self.assertNotEqual(r.get('code'), 'owner_live', r)
+
+    def test_live_owner_blocks_autoresume(self):
+        self.age_owner_pointer(5)
+        r = self.dispatch(operation='autoresume', target=self.foreign, env={'CONTEXT_WATCH_AUTORESUME': '1'})
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'owner_live'), r)
+        self.assertFalse(r.get('authorized_to_execute'), r)
+        self.assertEqual(r['target']['owner']['terminal'], 'term-b')
+
+    def test_topic_target_reaches_owner_live_check(self):
+        self.age_owner_pointer(5)
+        r = self.dispatch(operation='resume', target='chief-work')
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'owner_live'), r)
+        self.assertEqual(r['target']['owner']['terminal'], 'term-b')
+
+
+class PendingGovernsOwnerLiveTests(Base):
+    """An authorized resume with a pending restart intent keeps the pending-intent rule
+    (dispatch_pending) instead of owner_live, even when the owner tab is live."""
+    intent = test_dispatch.PendingDispatchTests.intent
+
+    def test_pending_intent_governs_despite_live_owner(self):
+        self.record_hook_session('sess-a', terminal='term-a')  # owner term-a: fresh pointer = live
+        path = self.save()
+        self.assertEqual(self.intent(path)['outcome'], 'ready')
+        self.record_hook_session('other', terminal='term-b')
+        r = self.dispatch(prompt='continue the handoff', target=path, terminal='term-b')
+        self.assertNotEqual(r.get('code'), 'owner_live', r)
+        self.assertEqual((r['outcome'], r['code']), ('blocked', 'dispatch_pending'), r)
+        self.assertEqual(r['target']['owner']['terminal'], 'term-a')
 
 
 if __name__ == '__main__':
