@@ -472,8 +472,10 @@ are never thresholds.
 
 `"warning_window_tokens"` (int, default `30000`, like `CONTEXT_WATCH_WARNING_WINDOW`)
 sets an early warning that lead before the resolved threshold (130k gives a
-warning at 100k): finish the current slice and prepare notes, without saving or
-restarting. It fires once per window, re-arms after compaction, and `0` turns it
+warning at 100k). The warning tells the agent not to stop: save a checkpoint
+now (state, decisions, next steps), then continue the current task; the
+threshold notice later asks for a fresh save. The hook itself never saves or
+restarts. It fires once per window, re-arms after compaction, and `0` turns it
 off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
 Once the early warning or the threshold notice has fired, and while this

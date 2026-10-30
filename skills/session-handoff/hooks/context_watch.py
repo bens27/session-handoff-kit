@@ -1619,9 +1619,10 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
                "session_id": session_id, "cwd": cwd})
     emit(agent, event_name,
          "[context-watch] Early warning: context ~%s tokens, past the advisory point %s (lead %s [%s] before "
-         "the %s-token handoff threshold [%s]). Finish the current slice and do not start another; prepare "
-         "continuation notes (state, decisions, next steps). Do not save or restart now; the handoff notice "
-         "at the threshold says when." % (format(occupancy, ','), format(point, ','), format(lead, ','),
+         "the %s-token handoff threshold [%s]). Do not stop and do not hand the turn back to the user. "
+         "Save a checkpoint now with the session-handoff skill (state, decisions, next steps), then continue "
+         "the current task. At the threshold the handoff notice asks for a fresh save and says when to "
+         "clear." % (format(occupancy, ','), format(point, ','), format(lead, ','),
                                           lead_source, format(decision.limit, ','), decision.source), "warn")
 
 
