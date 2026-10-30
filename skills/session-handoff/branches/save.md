@@ -15,7 +15,10 @@ its restart section as directed below.
 
 ## §1 Wind-down protocol
 
-1. Finish the atomic action in flight. When a pressure notice supplies the minimal
+1. Finish the atomic action in flight. A process that must outlive this turn
+   (suite, verifier, build) runs detached with a log; register it before saving:
+   `python3 <ledger> run-register --pid N --log L --cmd C` (or `--command-id`).
+   The save carries it, and the successor sees its live state. Never kill it to save. When a pressure notice supplies the minimal
    save contract, draft from it; otherwise read `../handoff-template.md`.
    `python3 <ledger> save --template` prints a valid JSON draft. Replace its
    facts with the authorized objective, constraints, evidence and exact next step.
@@ -44,7 +47,8 @@ its restart section as directed below.
    then make the supported `agents_restart` call as the final tool action using
    the returned `restart_prompt`. End the turn immediately.
    Unknown observations, `blocked`, `pending`, `refused` and human holds preserve
-   the checkpoint/session. Reconcile pending intent instead of redispatching.
+   the checkpoint/session. `registered-process-running` means wait for the run to
+   exit or release it with `run-abandon <run_id> --reason TEXT`; never kill it. Reconcile pending intent instead of redispatching.
    For other transition kinds follow the save result's permitted action.
 5. Stop. Remaining authorized work belongs to the receiving session.
 

@@ -20,6 +20,7 @@ import handoff_identity
 import handoff_ledger as ledger
 from handoff_review import read_review
 import handoff_notes
+import handoff_runs
 import handoff_workspace as workspace
 from handoff_record import Record, _read_receipt
 from handoff_identity import default_session, terminal_id, terminal_session, truthy as _truthy  # noqa: F401
@@ -1035,6 +1036,10 @@ def save(root, session, request_id, document):
             fields['continuity'] = json.dumps(document['continuity'], sort_keys=True)
         if predecessor:
             fields['predecessor'] = predecessor
+        # #164: registered runs travel with the checkpoint; delivery re-observes them live.
+        runs = handoff_runs.snapshot(root, session, terminal_id())
+        if runs:
+            fields['runs'] = runs
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
         carried = None
@@ -1120,6 +1125,50 @@ def note(path, root, session, text):
                     action='Notes on this checkpoint are closed; its successor %s carries them. Note that checkpoint instead.' % added['successor'])
     return dict(outcome='noted', path=target, seq=added['seq'], notes=added['notes'],
                 action='Note sealed in the checkpoint sidecar; resume delivers it after the body. Never edit .handoffs/*.md.')
+
+
+def run_register(root, session, cmd, log, cwd, pid=None, command_id=None, rc_file=None):
+    """Register a long-running process so a handoff carries it; the kit only observes it."""
+    root = handoff_identity.project_root(root)
+    try:
+        out = handoff_runs.register(root, cmd, log, cwd, session, terminal_id(), pid=pid,
+                                    command_id=command_id, rc_file=rc_file)
+    except ValueError as exc:
+        return dict(outcome='invalid', action=str(exc)[:500])
+    return dict(outcome='registered', **out,
+                action='Run registered: saves carry it, resume shows its live state, and a restart holds while it runs. '
+                       'Release it with run-abandon %s --reason TEXT; the kit never kills it.' % out['run_id'])
+
+
+def run_abandon(root, run_id, reason):
+    """Release a run so it stops holding restarts; the process itself is untouched."""
+    root = handoff_identity.project_root(root)
+    try:
+        view = handoff_runs.abandon(root, run_id, reason)
+    except ValueError as exc:
+        return dict(outcome='invalid', action=str(exc)[:500])
+    return dict(outcome='abandoned', run=view,
+                action='Run released; it no longer holds a restart. The process was not signalled.')
+
+
+def run_list(root, session):
+    root = handoff_identity.project_root(root)
+    views = handoff_runs.for_session(root, session, terminal_id())
+    result = dict(outcome='listed', runs=views)
+    bad = handoff_runs.problems(root)
+    if bad:
+        result['problems'] = bad
+    return result
+
+
+def merged_runs(root, fm):
+    """Live registry views for the checkpoint's session; the frontmatter snapshot fills in runs the
+    registry lost (registry wins by run_id). Abandoned runs are not delivered."""
+    live = {v['run_id']: v for v in handoff_runs.for_session(root, fm.get('session_id') or '')}
+    for view in handoff_runs.from_snapshot(fm.get('runs')):
+        live.setdefault(view['run_id'], view)
+    return [v for v in sorted(live.values(), key=lambda v: (str(v.get('started_at') or ''), v['run_id']))
+            if v['state'] != 'abandoned']
 
 
 PACKAGE_BYTES = 32_000
@@ -1373,6 +1422,8 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         notes_state = handoff_notes.read(path, fm.get('checkpoint_id', ''))
         notes_section, notes_omitted = handoff_notes.render(notes_state['notes'])
         body += notes_section
+        run_views = merged_runs(root, fm)
+        body += handoff_runs.render(run_views)
         refs, skills, all_skills, seen, dependencies = [], [], [], set(), {}
         required = ledger._split_csv(fm.get('references', ''))
         own = checkpoint.trusted()
@@ -1392,6 +1443,9 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
         # to a previous delivery, this session, and unchanged content.
         reference_fingerprints = dict(dependencies)
         notes_digest = handoff_notes.digest(notes_state)  # new notes defeat reuse
+        if run_views:  # a run changing state defeats reuse too; no runs keeps the legacy digest
+            notes_digest = hashlib.sha256((notes_digest + '\0' + json.dumps(
+                [[v['run_id'], v['state'], v['rc'], v['log_missing']] for v in run_views])).encode()).hexdigest()
         delivery_file = handoff_identity.delivery_receipt_path(root, session)
         reused_bytes = 0
         if reuse_receipt:
@@ -1447,6 +1501,11 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             result['predecessor'] = fm['predecessor']
         if notes_state['notes']:
             result['notes'] = len(notes_state['notes'])
+        if run_views:
+            result['runs'] = len(run_views)
+            if any(v['state'] == 'running' for v in run_views):
+                result['action'] += (' A registered process is still running: read its log under Registered processes; '
+                                     'do not rerun or kill it.')
         if notes_omitted:
             result['notes_omitted'] = notes_omitted
         if notes_state['problems']:
@@ -1882,7 +1941,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                   next_step_section='Next steps', verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
                   metrics=prepared['metrics'], action='Continue with ## Next steps in the delivered body.')
-    for key in ('continuity', 'predecessor', 'reviewed', 'review', 'notes', 'notes_omitted', 'note_problems'):
+    for key in ('continuity', 'predecessor', 'reviewed', 'review', 'notes', 'notes_omitted', 'note_problems', 'runs'):
         if key in prepared:
             result[key] = prepared[key]
     if 'note_problems' in prepared:
@@ -2261,6 +2320,24 @@ def cli(argv):
     note_src = note_p.add_mutually_exclusive_group(required=True)
     note_src.add_argument('--text')
     note_src.add_argument('--input', help='File with the note text; - for stdin')
+    run_reg_p = sub.add_parser('run-register', description='Register a long-running process (suite, verifier, build) so a handoff carries it and a restart holds while it runs. The kit never kills or re-runs it.')
+    run_reg_p.add_argument('--root', default='.')
+    run_reg_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
+    run_src = run_reg_p.add_mutually_exclusive_group(required=False)
+    run_src.add_argument('--pid', type=int)
+    run_src.add_argument('--command-id', help='AgentsRoom commands_* id when there is no pid')
+    run_reg_p.add_argument('--log', required=True, help='Log the successor reads the result from')
+    run_reg_p.add_argument('--cmd', default='', help='The command line, for the successor to read')
+    run_reg_p.add_argument('--cwd', default='.')
+    run_reg_p.add_argument('--rc-file', help='File the process writes its exit status to')
+    run_ab_p = sub.add_parser('run-abandon', description='Release a registered run so it stops holding restarts; the process is not signalled.')
+    run_ab_p.add_argument('run_id')
+    run_ab_p.add_argument('--reason', required=True)
+    run_ab_p.add_argument('--root', default='.')
+    run_ab_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
+    run_ls_p = sub.add_parser('run-list', description='List runs registered by this session or terminal with their live state.')
+    run_ls_p.add_argument('--root', default='.')
+    run_ls_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     history_p = sub.add_parser('history')
     history_p.add_argument('root', nargs='?', default='.')
     history_p.add_argument('--topic')
@@ -2360,6 +2437,12 @@ def cli(argv):
         elif a.command == 'note':
             text = a.text if a.text is not None else (sys.stdin.read() if a.input == '-' else read_text(a.input))
             result = note(a.path, a.root, a.session, text)
+        elif a.command == 'run-register':
+            result = run_register(a.root, a.session, a.cmd, a.log, a.cwd, a.pid, a.command_id, a.rc_file)
+        elif a.command == 'run-abandon':
+            result = run_abandon(a.root, a.run_id, a.reason)
+        elif a.command == 'run-list':
+            result = run_list(a.root, a.session)
         elif a.command == 'wait':
             result = wait(a.root, a.target, a.status, a.timeout, a.interval)
         elif a.command == 'resume':

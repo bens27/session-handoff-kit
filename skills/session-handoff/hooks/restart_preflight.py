@@ -25,6 +25,7 @@ import handoff_ledger as ledger
 from handoff_record import Record, live as _checkpoint_live  # noqa: F401  (tests read it here)
 import handoff_pointers as pointers
 import handoff_protocol as protocol
+import handoff_runs
 
 
 # The intent store owns layout, TTLs, states, validation and the adopt command;
@@ -279,6 +280,16 @@ def preflight(root, path, session, terminal, request_id, workers=None,
                     return blocked('worker-report-changed')
             except (OSError, KeyError, TypeError):
                 return blocked('worker-report-not-durable')
+        # #164: a registered run (suite, verifier, build) would be orphaned by a restart. Observe only.
+        held = handoff_runs.running(root, session, terminal)
+        if held:
+            run = held[0]
+            return dict(blocked('registered-process-running'),
+                        process={k: run[k] for k in ('run_id', 'cmd', 'pid', 'log')},
+                        action='Hold: registered process %s (pid %s) is running; its result lands in %s. '
+                               'Do not call agents_restart. Wait for it to exit, or release it with '
+                               'run-abandon %s --reason TEXT; never kill it.'
+                               % (run['run_id'], run['pid'], run['log'], run['run_id']))
         if host_capable is not True:
             return blocked('host-capability-absent')
         if reentry is not None:
@@ -958,15 +969,15 @@ def restart(root, workers=None, host_capable=False, hold=False, path=None):
         if result.get('warnings'):
             out['warnings'] = result['warnings']
     else:
-        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy', 'warnings', 'invalid_intent') if k in result})
-        if result.get('action') and not result.get('invalid_intent'):
+        out.update({k: result[k] for k in ('reason', 'state', 'changed', 'policy', 'warnings', 'invalid_intent', 'process') if k in result})
+        if result.get('action') and not result.get('invalid_intent') and not result.get('process'):
             out['detail'] = result['action']
         out.update(
                    action='Do not call agents_restart. Pending means reconcile with host history; '
                           'refused means the host declined this checkpoint\'s deterministic request, so a '
                           'retry needs a new save once the cause is resolved; blocked means keep the '
                           'checkpoint open and report.')
-        if result.get('invalid_intent'):
+        if result.get('invalid_intent') or result.get('process'):
             out['action'] = result['action']
     if result.get('skipped_total'):
         out.update(skipped_intents=result['skipped_intents'], skipped_total=result['skipped_total'])
