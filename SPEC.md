@@ -345,10 +345,11 @@ latches (no handoff notice this session; a compaction re-arms) and logs
 `notice: "floor"` with `floor`.
 
 Early warning (`warning_window_tokens`, §7.3d configuration): the advisory is an instruction
-to act, never a stop signal (#190). It tells the agent not to stop or hand the
-turn back to the user, to save a checkpoint now with the session-handoff skill
-(state, decisions, next steps), then to continue the current task; the
-threshold notice later asks for a fresh save and says when to clear. The hook
+to act, never a stop signal (#190). It tells the agent to keep working on the
+current task, not to hand the turn back to the user, and to keep continuation
+notes current; it names no save or restart as an action now, since the
+threshold notice says when. Its wording must not match dispatch's `PRESSURE`
+classifier, which would route it as handoff pressure (a wind-down). The hook
 itself never publishes or restarts at the advisory.
 
 Codex contract note: the `PostToolUse` JSON channel is verified against the
