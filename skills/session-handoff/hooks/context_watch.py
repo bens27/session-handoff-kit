@@ -90,6 +90,7 @@ since the first notice (latch files in the temp directory); a drop below 50%
 of it (compaction) re-arms both.
 """
 
+import glob
 import hashlib
 import json
 import os
@@ -1092,6 +1093,32 @@ def session_checkpoint_published(cwd, session, since):
         return False
 
 
+NUDGE_BAND_TOKENS = 10000
+
+
+def nudge_band(cwd, key, notice):
+    """Which +10k-token band past the notice occupancy this session is in: the
+    session note's last observed occupancy against the latch's first field."""
+    try:
+        with open(notice, encoding="utf-8") as f:
+            start = int(f.read().split("/", 1)[0])
+    except (OSError, ValueError):
+        return 0
+    current = _ledger().read_session_note(cwd, session=key).get("observed_occupancy_tokens")
+    if type(current) is not int:
+        return 0
+    return max(0, (current - start) // NUDGE_BAND_TOKENS)
+
+
+def clear_nudges(notice):
+    """Re-arm every spent Stop block of a notice (all bands)."""
+    for stale in glob.glob(glob.escape(notice) + ".nudged*"):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+
+
 def nudge_unwritten_handoff(evt):
     """Every mode (#180): a context-watch notice (the threshold trigger or the
     earlier advisory) fired this session, the turn is ending, and no checkpoint
@@ -1108,7 +1135,7 @@ def nudge_unwritten_handoff(evt):
     if os.path.exists(latch):
         if handoff_written_since(cwd, key):
             return
-        marker = latch + ".nudged"
+        notice = latch
     elif os.path.exists(latch + ".advised"):
         try:
             since = os.path.getmtime(latch + ".advised")
@@ -1116,9 +1143,12 @@ def nudge_unwritten_handoff(evt):
             return
         if session_checkpoint_published(cwd, key, since):
             return
-        marker = latch + ".advised.nudged"
+        notice = latch + ".advised"
     else:
         return
+    # B1: at most one block per +10k-token band past the notice, so a session that
+    # keeps working unsaved is reminded again without ever looping on one band.
+    marker = notice + ".nudged.%d" % nudge_band(cwd, key, notice)
     try:
         os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except OSError:
@@ -1531,11 +1561,11 @@ def advisory(agent, evt, event_name, cwd, session_id, path, occupancy, decision,
             startup = noted if type(noted) is int else None
         action = wd.advise(occupancy, lead, decision, latch, advised, startup)
     if action == wd.ADVISORY_REARM:
-        for stale in (path, path + ".nudged"):  # the spent Stop block re-arms with the advisory (#180)
-            try:
-                os.remove(stale)
-            except OSError:
-                pass
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        clear_nudges(path)  # the spent Stop blocks re-arm with the advisory (#180)
         return
     if action != wd.ADVISE:
         return
@@ -1713,12 +1743,13 @@ def main():
                          floor_probe, lambda: handoff_written_since(cwd, session_id))
     if decision.action == wd.REARM:
         for path in (first, second, floor_latch, first + ".cleared",
-                     first + ".nudged", first + ".announced", first + ".restart-blocked", advised_latch,
-                     advised_latch + ".nudged"):
+                     first + ".announced", first + ".restart-blocked", advised_latch):
             try:
                 os.remove(path)  # the window was compacted: re-arm
             except OSError:
                 pass
+        clear_nudges(first)
+        clear_nudges(advised_latch)
         sys.exit(0)
     limit, source, floor = decision.limit, decision.source, decision.floor
     if decision.below_floor:

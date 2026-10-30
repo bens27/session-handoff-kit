@@ -15,6 +15,9 @@ sys.path.insert(0, HERE)
 from test_context_watch_regressions import HookCase, claude_call  # noqa: E402
 from test_dispatch import BODY, LEDGER  # noqa: E402
 
+sys.path.insert(0, os.path.join(HERE, "..", "skills", "session-handoff", "hooks"))
+import handoff_identity  # noqa: E402
+
 
 class PromiseGuard(HookCase):
     def setUp(self):
@@ -30,6 +33,14 @@ class PromiseGuard(HookCase):
     def fire(self):
         with open(self.base, "w") as f:
             f.write("150000/130000/140000\n")
+
+    def occupancy(self, tokens):
+        """Leave the session note the Stop hook reads, as write_session_note does."""
+        import time
+        path = handoff_identity.session_note_path(self.tmp, self.sid, self.tmp)
+        with open(path, "w") as f:
+            json.dump({"session_id": self.sid, "cwd": self.tmp, "ts": time.time(),
+                       "observed_occupancy_tokens": tokens}, f)
 
     def stop(self, **extra):
         return self.run_hook(event="Stop", extra=extra)
@@ -87,6 +98,35 @@ class PromiseGuard(HookCase):
         self.write([claude_call(105000)], "a")
         self.assertIn("Early warning", self.run_hook(extra=extra))
         self.assertIn('"decision": "block"', self.stop(**extra))
+
+    def test_guard_rearms_once_per_10k_band_past_the_notice(self):
+        # B1, f9997a4a replay: the notice at 103137 blocks once; the same band stays
+        # silent; 10k tokens later without a save, it blocks once more.
+        self.advise()
+        self.occupancy(103137)
+        self.assertIn('"decision": "block"', self.stop())
+        self.occupancy(110000)
+        self.assertEqual(self.stop(), "")
+        self.occupancy(114000)
+        self.assertIn('"decision": "block"', self.stop())
+        self.assertEqual(self.stop(), "")
+
+    def test_threshold_guard_rearms_per_band(self):
+        self.fire()
+        self.occupancy(150000)
+        self.assertIn('"decision": "block"', self.stop())
+        self.assertEqual(self.stop(), "")
+        self.occupancy(161000)
+        self.assertIn('"decision": "block"', self.stop())
+
+    def test_save_since_the_notice_silences_every_band(self):
+        self.advise()
+        self.occupancy(103137)
+        self.assertIn('"decision": "block"', self.stop())
+        self.save()
+        for tokens in (114000, 125000, 160000):
+            self.occupancy(tokens)
+            self.assertEqual(self.stop(), "")
 
     def test_no_notice_never_blocks(self):
         self.assertEqual(self.stop(), "")

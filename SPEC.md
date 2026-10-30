@@ -1059,8 +1059,10 @@ whose initial prose avoids native CLI subcommands such as Codex's `resume`; an i
 Promise guard (#180), every mode, hook registration unchanged: if this
 session's threshold latch exists and no checkpoint matches its trigger, or only
 the advisory latch exists and the session has published no checkpoint since
-that latch was written, the Stop hook returns `{"decision": "block"}` once per
-latch. Re-arming a latch after compaction re-arms its block. The reason tells the agent
+that latch was written, the Stop hook returns `{"decision": "block"}` at most
+once per +10k-token band past the notice: the band is the session note's
+`observed_occupancy_tokens` minus the latch's first field, divided by 10000, and
+each band's block is a one-shot marker, so the same band never blocks twice. Re-arming a latch after compaction re-arms its block. The reason tells the agent
 to save, or to say that nothing was saved, before claiming the work continues
 after a handoff. It reads no message text. `stop_hook_active` and non-Claude
 agents are never blocked.
