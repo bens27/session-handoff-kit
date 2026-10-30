@@ -714,6 +714,15 @@ saved state and planned next steps before choosing whether to send it.
 An optional `## Requester` body section names the recipient; absent addresses
 stay unspecified. With neither address, no draft is created. Replay preserves edits. See [report-back drafts](docs/report-back-drafts.md).
 
+Long-running work started before a handoff (a full suite, a verifier, a build)
+should be registered: `handoff_ledger.py run-register --pid N --log L --cmd C`
+(or `--command-id` for an AgentsRoom command). The next save carries it, and
+resume shows it under `## Registered processes` with its live state (running,
+exited with rc, abandoned). Read the result from its log; do not rerun it.
+`restart` holds with `registered-process-running` while it runs. Release one you
+no longer need with `run-abandon <run_id> --reason TEXT`. The kit never kills,
+signals or re-runs a registered process.
+
 ## Parallel workers
 
 When a coordinator splits kit work across parallel workers, each worker brief

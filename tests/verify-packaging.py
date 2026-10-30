@@ -168,7 +168,7 @@ def main():
         # structure to it, so a package without it installs a skill that points
         # at a file the user does not have.
         for art, member_needles, name in (
-                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md", "reference.md", "handoff_protocol.py", "handoff_notes.py", "handoff_autoclose.py", "handoff_contract.py", "restart_preflight.py", "handoff_pointers.py", "handoff_dispatch.py", "handoff_identity.py", "handoff_record.py", "handoff_review.py", "handoff_workspace.py", "handoff_intents.py", "handoff_holds.py", "watch_decision.py", "commit_ticket.py", "handoff_staleness.py", "handoff_mcp.py", "branches/save.md", "branches/resume.md"), "artifact-plugin"),
+                (plugin_art, ("plugin.json", "SKILL.md", "handoff-template.md", "reference.md", "handoff_protocol.py", "handoff_notes.py", "handoff_runs.py", "handoff_autoclose.py", "handoff_contract.py", "restart_preflight.py", "handoff_pointers.py", "handoff_dispatch.py", "handoff_identity.py", "handoff_record.py", "handoff_review.py", "handoff_workspace.py", "handoff_intents.py", "handoff_holds.py", "watch_decision.py", "commit_ticket.py", "handoff_staleness.py", "handoff_mcp.py", "branches/save.md", "branches/resume.md"), "artifact-plugin"),
                 (skill_art, ("SKILL.md", "handoff-template.md"), "artifact-skill")):
             if not os.path.isfile(art):
                 check(name, False, "%s not produced" % os.path.relpath(art, REPO))

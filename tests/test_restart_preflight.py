@@ -1752,3 +1752,89 @@ class RestartCommandTests(unittest.TestCase):
         self.assertEqual(intents(), [])
         code, out = self.restart_cli('--workers', '[]', '--host-capable', '--path', self.path)
         self.assertEqual(out['outcome'], 'ready', out)
+
+
+class RegisteredRunGateTests(unittest.TestCase):
+    """#164: a restart holds while a run this session or terminal registered is running.
+    The kit never signals the process; exit, a stale pid or run-abandon release the hold."""
+    setUp = RestartTests.setUp
+    preflight = RestartTests.preflight
+
+    def sleeper(self):
+        import subprocess
+        proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)  # the test owns this child
+        return proc
+
+    def register(self, pid, session='old', terminal='term'):
+        import handoff_runs
+        log = Path(self.root) / 'suite.log'
+        log.write_text('running\n')
+        return handoff_runs.register(self.root, 'pytest -q', str(log), self.root, session, terminal, pid=pid)['run_id']
+
+    def test_running_registered_process_holds_restart(self):
+        proc = self.sleeper()
+        run_id = self.register(proc.pid)
+        out = self.preflight()
+        self.assertEqual((out['outcome'], out['dispatch'], out['reason']),
+                         ('blocked', False, 'registered-process-running'), out)
+        self.assertEqual((out['process']['run_id'], out['process']['pid'], out['process']['cmd']),
+                         (run_id, proc.pid, 'pytest -q'), out)
+        self.assertIn('never kill', out['action'])
+        self.assertIn('run-abandon ' + run_id, out['action'])
+        self.assertIsNone(restart.status(self.root, 'restart-1'), 'a hold writes no intent')
+        self.assertIsNone(proc.poll(), 'the kit must not signal the process')
+
+    def test_run_from_same_terminal_other_session_holds(self):
+        proc = self.sleeper()
+        self.register(proc.pid, session='earlier')
+        self.assertEqual(self.preflight()['reason'], 'registered-process-running')
+
+    def test_exit_releases_hold(self):
+        proc = self.sleeper()
+        self.register(proc.pid)
+        proc.kill()
+        proc.wait()
+        self.assertEqual(self.preflight()['outcome'], 'ready')
+
+    def test_abandon_releases_hold(self):
+        import handoff_runs
+        proc = self.sleeper()
+        handoff_runs.abandon(self.root, self.register(proc.pid), 'moved to CI')
+        self.assertEqual(self.preflight()['outcome'], 'ready')
+        self.assertIsNone(proc.poll())
+
+    def test_stale_pid_releases_hold(self):
+        import handoff_runs
+        proc = self.sleeper()
+        self.register(proc.pid)
+        with patch.object(handoff_runs, '_start_time', return_value='Thu Jan  1 00:00:00 1970'):
+            self.assertEqual(self.preflight()['outcome'], 'ready')
+
+    def test_other_terminal_and_session_does_not_hold(self):
+        proc = self.sleeper()
+        self.register(proc.pid, session='someone', terminal='other')
+        self.assertEqual(self.preflight()['outcome'], 'ready')
+
+
+class RegisteredRunRestartCommandTests(unittest.TestCase):
+    setUp = RestartCommandTests.setUp
+    BODY = RestartCommandTests.BODY
+    pointer = RestartCommandTests.pointer
+    restart_cli = RestartCommandTests.restart_cli
+
+    def test_restart_command_forwards_process_and_keeps_its_action(self):
+        import subprocess
+        import handoff_runs
+        proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        log = Path(self.root) / 'suite.log'
+        log.write_text('running\n')
+        run_id = handoff_runs.register(self.root, 'pytest -q', str(log), self.root, 'old', 'term', pid=proc.pid)['run_id']
+        code, out = self.restart_cli('--workers', '[]', '--host-capable')
+        self.assertEqual((code, out['outcome'], out['reason']), (1, 'blocked', 'registered-process-running'), out)
+        self.assertEqual(out['process']['run_id'], run_id, out)
+        self.assertIn('run-abandon ' + run_id, out['action'])
+        self.assertNotIn('call', out)

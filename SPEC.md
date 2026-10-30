@@ -655,6 +655,10 @@ may also be `{id, state: "in_flight", via: "mailbox"}` when its reply is persist
 in the AgentsRoom inbox for the successor. Other workers without a report or
 `settled: true` block (`worker-report-not-durable`); an
 omitted `--workers` is unknown and blocks (`worker-inventory-unknown`).
+After the worker gate, a run registered with `run-register` by this session or
+terminal that is still `running` blocks with `registered-process-running` and
+`process: {run_id, cmd, pid, log}`; its action says to wait for exit or
+`run-abandon <run_id>`, never to kill it, and writes no intent (section 7.2.3).
 New ready intents return `restart_prompt`: one sentence naming one successor
 command, `restart_preflight.py adopt h-<24 hex>`. The handle is a prefix of the
 SHA256 of the canonical six-field binding (checkpoint_id, path, request_id, root,
@@ -983,6 +987,7 @@ cannot inject a `## ` heading. Per-note cap 2000 bytes (` [... shortened]`), tot
 cap 8000 bytes; omitted notes are counted in `notes_omitted`. Lines failing their
 seal are never delivered and are counted in `note_problems`. The delivery receipt
 binds a digest of the delivered notes, so `--reuse-receipt` reloads after a new note.
+Registered processes (section 7.2.3) follow the notes section with their live state.
 
 Successor fold: a save whose predecessor has an open sidecar appends the same
 rendered section to the new body once, then appends a sealed
@@ -995,6 +1000,40 @@ prefix of the predecessor's valid notes; it then closes the sidecar if the save 
 interrupted before closing, or warns about notes added after the fold, which stay
 open. Every `saved` action ends with "Record later facts with `note`; never edit
 .handoffs/*.md."
+
+#### 7.2.3 Registered processes (#164)
+
+Work that outlives a turn (a full test suite, a verifier, a build) is registered
+once, so a handoff carries it instead of orphaning it:
+
+```
+handoff_ledger.py run-register (--pid N | --command-id ID) --log L [--cmd C] [--cwd D] [--rc-file F]
+handoff_ledger.py run-abandon <run_id> --reason TEXT
+handoff_ledger.py run-list
+```
+
+`run-register` writes one record per run to `<root>/.handoffs/runs/<run_id>.json`
+(`run_id` is `run-<16 hex>`), with session, terminal, cmd, pid, the pid's
+`ps -o lstart=` start time, command_id, log, rc_file, cwd and started_at. It is sealed with
+`HMAC(receipt key, "handoff-run\0" + run_id, sha256(record without mac))`. A record
+that fails its seal is counted as a problem, never delivered and never holds.
+
+The kit only observes a run: `os.kill(pid, 0)` and `ps`. It never signals, kills,
+re-runs or restarts anything. States: `running` (pid alive with the recorded
+start time), `exited` (pid gone or reused, so a stale pid never holds; `rc` read
+from `rc_file` when present), `abandoned` (released by `run-abandon`; the process
+is untouched), `unobservable` (a commands_* id without a pid: delivered, never
+holds; `exited` once its rc_file has a value). `log_missing` is a separate flag.
+
+Save snapshots the session's or terminal's non-abandoned runs into the sealed
+frontmatter field `runs` (JSON, at most 20). Delivery (`prepare`, so `resume`
+and adopt) re-observes them live: registry records for the checkpoint's session,
+plus snapshot entries the registry lost (the registry wins by run_id), minus
+abandoned runs. They are appended after any notes as `## Registered processes`,
+one `- <run_id>: <state>[ rc=N][, log missing]` line each, with fields quoted
+`  > ` so they cannot inject a heading. The result carries `runs: <count>`; the
+reuse digest binds each run's state, so a run that changes state defeats
+`--reuse-receipt`. Restart preflight holds while any run is `running` (section 7.2).
 
 #### 7.2.2 Auto-close of landed checkpoints (#162)
 
