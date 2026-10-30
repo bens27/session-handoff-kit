@@ -1801,7 +1801,7 @@ class RegisteredRunGateTests(unittest.TestCase):
     def test_abandon_releases_hold(self):
         import handoff_runs
         proc = self.sleeper()
-        handoff_runs.abandon(self.root, self.register(proc.pid), 'moved to CI')
+        handoff_runs.abandon(self.root, self.register(proc.pid), 'moved to CI', 'old', 'term')
         self.assertEqual(self.preflight()['outcome'], 'ready')
         self.assertIsNone(proc.poll())
 
@@ -1810,6 +1810,28 @@ class RegisteredRunGateTests(unittest.TestCase):
         proc = self.sleeper()
         self.register(proc.pid)
         with patch.object(handoff_runs, '_start_time', return_value='Thu Jan  1 00:00:00 1970'):
+            self.assertEqual(self.preflight()['outcome'], 'ready')
+
+    def test_unknown_process_state_holds_restart(self):
+        # #182 N4: ps failing on a live pid must hold, not count as exited.
+        import handoff_runs
+        proc = self.sleeper()
+        run_id = self.register(proc.pid)
+        with patch.object(handoff_runs.subprocess, 'run', side_effect=OSError('ps: not found')):
+            out = self.preflight()
+        self.assertEqual((out['outcome'], out['reason']), ('blocked', 'registered-process-running'), out)
+        self.assertEqual((out['process']['run_id'], out['process']['state']), (run_id, 'unknown'), out)
+        self.assertIn('run-abandon ' + run_id, out['action'])
+        self.assertIn('cannot be read', out['action'])
+        self.assertIsNone(restart.status(self.root, 'restart-1'), 'a hold writes no intent')
+
+    def test_unknown_state_releases_once_pid_is_gone(self):
+        import handoff_runs
+        proc = self.sleeper()
+        self.register(proc.pid)
+        proc.kill()
+        proc.wait()
+        with patch.object(handoff_runs.subprocess, 'run', side_effect=OSError('ps: not found')):
             self.assertEqual(self.preflight()['outcome'], 'ready')
 
     def test_other_terminal_and_session_does_not_hold(self):

@@ -12,9 +12,16 @@ The kit only OBSERVES a run: os.kill(pid, 0) and `ps -o lstart=`. It never
 signals, kills, re-runs or restarts anything. State:
 
     running       pid alive with the recorded start time
+    unknown       pid alive but its start time cannot be read (ps failed, timed
+                  out or printed nothing, or failed at registration). Holds a
+                  restart like running (#182 N4: fail closed); released when
+                  os.kill(pid, 0) proves the pid gone, or by run-abandon.
     exited        pid gone or reused (a stale pid never holds), rc from rc_file
     abandoned     the agent released it explicitly with run-abandon
     unobservable  no pid (commands_* only): delivered, never holds a restart
+
+Only the registering session or terminal may abandon a run (#182 N1). A
+relative log or rc_file resolves against the registration cwd (#182 N3).
 
 A record whose MAC fails is counted as a problem and never delivered or trusted.
 Stdlib only.
@@ -36,6 +43,13 @@ MAC_DOMAIN = 'handoff-run\0'
 FIELD_LIMIT = 2000
 RENDER_LIMIT = 20
 _RUN_ID = re.compile(r'run-[0-9a-f]{16}')
+UNKNOWN = object()  # _start_time: the pid exists but ps could not say what it is
+HOLDING = ('running', 'unknown')
+START_UNREAD = '?'  # pid_start when ps failed at registration; ps never prints it
+
+
+class NotOwner(ValueError):
+    """run-abandon from a session and terminal that did not register the run."""
 
 
 def _runs_dir(root, create=False):
@@ -65,20 +79,30 @@ def _valid(entry, key):
                 and hmac.compare_digest(entry['mac'], record._mac(key, MAC_DOMAIN + entry['run_id'], _digest(entry))))
 
 
-def _start_time(pid):
-    """Process start time as ps prints it, or None when the pid is gone."""
+def _gone(pid):
     try:
         os.kill(pid, 0)  # signal 0: existence probe only, nothing is delivered
     except ProcessLookupError:
-        return None
+        return True
     except PermissionError:
         pass  # alive, owned by someone else
+    return False
+
+
+def _start_time(pid):
+    """Process start time as ps prints it, None when the pid is provably gone, or
+    UNKNOWN when it exists but ps fails, times out or prints nothing (#182 N4)."""
+    if _gone(pid):
+        return None
     try:
         out = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)], capture_output=True,
                              text=True, timeout=5)
+        started = ' '.join(out.stdout.split())
     except (OSError, subprocess.SubprocessError):
-        return None
-    return ' '.join(out.stdout.split()) or None
+        started = ''
+    if started:
+        return started
+    return None if _gone(pid) else UNKNOWN  # it may have exited between the two probes
 
 
 def _write(path, entry):
@@ -100,7 +124,9 @@ def _text(value, name):
 
 
 def register(root, cmd, log, cwd, session, terminal, pid=None, command_id=None, rc_file=None):
-    """Record one run. Returns {run_id, state}. Raises ValueError on bad input."""
+    """Record one run. Returns {run_id, state}. Raises ValueError on bad input.
+    A relative log or rc_file is taken relative to cwd (#182 N3); cwd itself is
+    taken relative to the caller's working directory."""
     log, cmd, cwd = _text(log, 'log'), _text(cmd, 'cmd'), _text(cwd, 'cwd')
     command_id, rc_file = _text(command_id, 'command_id'), _text(rc_file, 'rc_file')
     if not log.strip():
@@ -113,14 +139,20 @@ def register(root, cmd, log, cwd, session, terminal, pid=None, command_id=None, 
     if not key:
         raise ValueError('Local receipt key unavailable; a run cannot be sealed.')
     os.makedirs(_runs_dir(root, create=True), mode=0o700, exist_ok=True)
+    cwd = os.path.abspath(os.path.expanduser(cwd or '.'))
+    started = _start_time(pid) if pid else None
     entry = dict(run_id='run-' + secrets.token_hex(8), session=str(session or ''),
                  terminal=str(terminal or ''), cmd=cmd, pid=pid,
-                 pid_start=_start_time(pid) if pid else None, command_id=command_id,
-                 log=os.path.abspath(log), rc_file=os.path.abspath(rc_file) if rc_file else '',
-                 cwd=os.path.abspath(cwd or '.'), started_at=datetime.now().isoformat(timespec='seconds'),
+                 pid_start=START_UNREAD if started is UNKNOWN else started, command_id=command_id,
+                 log=_under(cwd, log), rc_file=_under(cwd, rc_file) if rc_file else '',
+                 cwd=cwd, started_at=datetime.now().isoformat(timespec='seconds'),
                  abandoned='')
     _write(record_path(root, entry['run_id']), _seal(entry, key))
     return dict(run_id=entry['run_id'], state=observe(entry)['state'])
+
+
+def _under(cwd, path):
+    return os.path.normpath(os.path.join(cwd, os.path.expanduser(path)))
 
 
 def _load(path, key):
@@ -132,13 +164,25 @@ def _load(path, key):
     return entry if _valid(entry, key) else None
 
 
-def abandon(root, run_id, reason):
-    """Explicit release: the run stops holding restarts. The process is untouched."""
+def owns(entry, session, terminal):
+    """The registering session, or a successor on the same terminal (the gate's own scope)."""
+    return bool((session and entry.get('session') == session)
+                or (terminal and entry.get('terminal') == terminal))
+
+
+def abandon(root, run_id, reason, session, terminal):
+    """Explicit release: the run stops holding restarts. The process is untouched.
+    Raises NotOwner unless the caller registered it, by session or terminal (#182 N1)."""
     key = record._receipt_key(create=True)
     path = record_path(root, run_id)
     entry = _load(path, key)
     if entry is None:
         raise ValueError('Run %s is missing or failed its seal; nothing changed.' % run_id)
+    if not owns(entry, session, terminal):
+        raise NotOwner('Run %s belongs to session %s (terminal %s), not this session %s (terminal %s); '
+                       'only its owner or a successor on its terminal may abandon it. Nothing changed.'
+                       % (run_id, entry.get('session') or '-', entry.get('terminal') or '-',
+                          session or '-', terminal or '-'))
     entry = {k: v for k, v in entry.items() if k != 'mac'}
     entry['abandoned'] = (_text(reason, 'reason').strip() or 'abandoned')[:200]
     _write(path, _seal(entry, key))
@@ -168,7 +212,13 @@ def observe(entry):
         view['state'] = 'exited' if view['rc'] is not None else 'unobservable'
     else:
         alive = _start_time(entry['pid'])
-        view['state'] = 'running' if alive and alive == entry.get('pid_start') else 'exited'
+        if alive is None:
+            view['state'] = 'exited'
+        elif alive is UNKNOWN or entry.get('pid_start') == START_UNREAD:
+            view['state'] = 'unknown'  # alive, identity unverifiable: hold (fail closed)
+        else:
+            # A pid already gone at registration (no pid_start) or with another start time is reused.
+            view['state'] = 'running' if alive == entry.get('pid_start') else 'exited'
     return view
 
 
@@ -202,8 +252,8 @@ def for_session(root, session, terminal=None):
 
 
 def running(root, session, terminal):
-    """Runs that hold a restart: running, registered by this session or terminal."""
-    return [r for r in for_session(root, session, terminal) if r['state'] == 'running']
+    """Runs that hold a restart: running or unknown, registered by this session or terminal."""
+    return [r for r in for_session(root, session, terminal) if r['state'] in HOLDING]
 
 
 SNAPSHOT_FIELDS = ('run_id', 'session', 'terminal', 'cmd', 'pid', 'pid_start', 'command_id',

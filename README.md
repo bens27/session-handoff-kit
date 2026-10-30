@@ -716,12 +716,18 @@ stay unspecified. With neither address, no draft is created. Replay preserves ed
 
 Long-running work started before a handoff (a full suite, a verifier, a build)
 should be registered: `handoff_ledger.py run-register --pid N --log L --cmd C`
-(or `--command-id` for an AgentsRoom command). The next save carries it, and
-resume shows it under `## Registered processes` with its live state (running,
-exited with rc, abandoned). Read the result from its log; do not rerun it.
-`restart` holds with `registered-process-running` while it runs. Release one you
-no longer need with `run-abandon <run_id> --reason TEXT`. The kit never kills,
-signals or re-runs a registered process.
+(or `--command-id` for an AgentsRoom command). A relative `--log` or `--rc-file`
+resolves against `--cwd`. The next save carries it, and resume shows it under
+`## Registered processes` with its live state (running, unknown, exited with rc,
+abandoned). Read the result from its log; do not rerun it. `restart` holds with
+`registered-process-running` while it runs, and also while its state is
+`unknown` (the pid is alive but `ps` fails), since it may still be running.
+A run registered with only `--command-id` has no pid to observe, so it never
+holds a restart; register the pid, or give the successor its log and
+`--rc-file`. Release a run you no longer need with
+`run-abandon <run_id> --reason TEXT`; only the registering session, or a
+successor on the same terminal, may release it. The kit never kills, signals or
+re-runs a registered process.
 
 ## Parallel workers
 

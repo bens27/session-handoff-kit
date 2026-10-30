@@ -87,7 +87,7 @@ class RunRegistryTests(unittest.TestCase):
     def test_abandon_releases_and_is_recorded(self):
         proc = self.sleeper()
         out = self.register(pid=proc.pid)
-        self.assertEqual(runs.abandon(str(self.root), out['run_id'], 'superseded')['state'], 'abandoned')
+        self.assertEqual(runs.abandon(str(self.root), out['run_id'], 'superseded', 'sess-a', 'term-a')['state'], 'abandoned')
         run = self.only()
         self.assertEqual((run['state'], run['abandoned']), ('abandoned', 'superseded'))
         self.assertEqual(runs.running(str(self.root), 'sess-a', 'term-a'), [])
@@ -136,6 +136,113 @@ class RunRegistryTests(unittest.TestCase):
         self.assertIn(str(self.log), section)
         self.assertNotIn('\n## Next steps', section)
 
+
+    # #182 N4: a failing ps must not count as exited (fail closed), but a pid
+    # that is provably gone still releases, and run-abandon always releases.
+    def ps_fails(self, exc=OSError('ps: not found')):
+        return mock.patch.object(runs.subprocess, 'run', side_effect=exc)
+
+    def test_ps_failure_on_live_pid_is_unknown_and_holds(self):
+        proc = self.sleeper()
+        self.register(pid=proc.pid)
+        for exc in (OSError('ps: not found'), subprocess.TimeoutExpired('ps', 5)):
+            with self.ps_fails(exc):
+                run = self.only()
+                self.assertEqual(run['state'], 'unknown', exc)
+                held = runs.running(str(self.root), 'sess-a', 'term-a')
+            self.assertEqual([r['run_id'] for r in held], [run['run_id']], exc)
+
+    def test_ps_printing_nothing_for_live_pid_is_unknown(self):
+        proc = self.sleeper()
+        self.register(pid=proc.pid)
+        empty = subprocess.CompletedProcess(['ps'], 1, stdout='', stderr='')
+        with mock.patch.object(runs.subprocess, 'run', return_value=empty):
+            self.assertEqual(self.only()['state'], 'unknown')
+
+    def test_ps_failure_with_gone_pid_is_exited(self):
+        proc = self.sleeper()
+        self.register(pid=proc.pid)
+        proc.kill()
+        proc.wait()
+        with self.ps_fails():
+            self.assertEqual(self.only()['state'], 'exited')
+            self.assertEqual(runs.running(str(self.root), 'sess-a', 'term-a'), [])
+
+    def test_ps_failure_at_registration_is_unknown_not_exited(self):
+        proc = self.sleeper()
+        with self.ps_fails():
+            self.register(pid=proc.pid)
+        # ps works again, but there is no recorded start time to compare against.
+        self.assertEqual(self.only()['state'], 'unknown')
+        proc.kill()
+        proc.wait()
+        self.assertEqual(self.only()['state'], 'exited')
+
+    def test_pid_gone_at_registration_never_holds_even_if_reused(self):
+        proc = subprocess.Popen([sys.executable, '-c', 'pass'])
+        proc.wait()
+        self.register(pid=proc.pid)
+        with mock.patch.object(runs, '_start_time', return_value='Thu Jan  1 00:00:00 1970'):
+            self.assertEqual(self.only()['state'], 'exited')
+
+    def test_abandon_releases_an_unknown_run(self):
+        proc = self.sleeper()
+        out = self.register(pid=proc.pid)
+        with self.ps_fails():
+            runs.abandon(str(self.root), out['run_id'], 'ps broken', 'sess-a', 'term-a')
+            self.assertEqual(runs.running(str(self.root), 'sess-a', 'term-a'), [])
+        self.assertIsNone(proc.poll(), 'abandon never touches the process')
+
+    # #182 N1: only the registering session or terminal may abandon a run.
+    def test_abandon_refuses_another_session_and_terminal(self):
+        proc = self.sleeper()
+        out = self.register(pid=proc.pid)
+        with self.assertRaises(runs.NotOwner) as caught:
+            runs.abandon(str(self.root), out['run_id'], 'mine now', 'sess-b', 'term-b')
+        self.assertIn('sess-a', str(caught.exception))
+        self.assertEqual(self.only()['state'], 'running')
+
+    def test_abandon_refuses_a_caller_without_identity(self):
+        proc = self.sleeper()
+        out = self.register(pid=proc.pid, session='', terminal='')
+        with self.assertRaises(runs.NotOwner):
+            runs.abandon(str(self.root), out['run_id'], 'x', '', '')
+
+    def test_abandon_allowed_from_same_terminal_after_handoff(self):
+        proc = self.sleeper()
+        out = self.register(pid=proc.pid)
+        view = runs.abandon(str(self.root), out['run_id'], 'successor', 'sess-b', 'term-a')
+        self.assertEqual(view['state'], 'abandoned')
+
+    # #182 N3: relative --log / --rc-file resolve against the registration cwd.
+    def test_relative_log_and_rc_file_resolve_against_cwd(self):
+        work = self.root / 'sub'
+        work.mkdir()
+        elsewhere = Path(self.tmp.name) / 'elsewhere'
+        elsewhere.mkdir()
+        proc = subprocess.Popen([sys.executable, '-c', 'pass'])
+        proc.wait()
+        (work / 'suite.rc').write_text('0\n')
+        (work / 'suite.log').write_text('ok\n')
+        old = os.getcwd()
+        os.chdir(elsewhere)
+        self.addCleanup(os.chdir, old)
+        runs.register(str(self.root), 'pytest', 'suite.log', str(work), 'sess-a', 'term-a',
+                      pid=proc.pid, rc_file='suite.rc')
+        run = self.only()
+        self.assertEqual(os.path.realpath(run['log']), str(work / 'suite.log'))
+        self.assertEqual((run['state'], run['rc'], run['log_missing']), ('exited', 0, False))
+
+    def test_relative_cwd_itself_resolves_against_process_cwd(self):
+        proc = self.sleeper()
+        old = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, old)
+        (self.root / 'sub').mkdir()
+        runs.register(str(self.root), 'pytest', 'x.log', 'sub', 'sess-a', 'term-a', pid=proc.pid)
+        run = self.only()
+        self.assertEqual(os.path.realpath(run['cwd']), str(self.root / 'sub'))
+        self.assertEqual(os.path.realpath(os.path.dirname(run['log'])), str(self.root / 'sub'))
 
 if __name__ == '__main__':
     unittest.main()

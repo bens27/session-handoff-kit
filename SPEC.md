@@ -656,8 +656,8 @@ in the AgentsRoom inbox for the successor. Other workers without a report or
 `settled: true` block (`worker-report-not-durable`); an
 omitted `--workers` is unknown and blocks (`worker-inventory-unknown`).
 After the worker gate, a run registered with `run-register` by this session or
-terminal that is still `running` blocks with `registered-process-running` and
-`process: {run_id, cmd, pid, log}`; its action says to wait for exit or
+terminal that is still `running`, or whose state is `unknown`, blocks with
+`registered-process-running` and `process: {run_id, cmd, pid, log, state}`; its action says to wait for exit or
 `run-abandon <run_id>`, never to kill it, and writes no intent (section 7.2.3).
 New ready intents return `restart_prompt`: one sentence naming one successor
 command, `restart_preflight.py adopt h-<24 hex>`. The handle is a prefix of the
@@ -1014,16 +1014,33 @@ handoff_ledger.py run-list
 
 `run-register` writes one record per run to `<root>/.handoffs/runs/<run_id>.json`
 (`run_id` is `run-<16 hex>`), with session, terminal, cmd, pid, the pid's
-`ps -o lstart=` start time, command_id, log, rc_file, cwd and started_at. It is sealed with
+`ps -o lstart=` start time (`?` when `ps` could not read it), command_id, log,
+rc_file, cwd and started_at. `cwd` resolves against the caller's working
+directory; a relative `log` or `rc_file` resolves against `cwd`. It is sealed with
 `HMAC(receipt key, "handoff-run\0" + run_id, sha256(record without mac))`. A record
 that fails its seal is counted as a problem, never delivered and never holds.
 
 The kit only observes a run: `os.kill(pid, 0)` and `ps`. It never signals, kills,
 re-runs or restarts anything. States: `running` (pid alive with the recorded
-start time), `exited` (pid gone or reused, so a stale pid never holds; `rc` read
-from `rc_file` when present), `abandoned` (released by `run-abandon`; the process
-is untouched), `unobservable` (a commands_* id without a pid: delivered, never
-holds; `exited` once its rc_file has a value). `log_missing` is a separate flag.
+start time), `unknown` (the pid exists but `ps` fails, times out or prints
+nothing, or the start time was unreadable at registration), `exited` (pid gone
+or reused, so a stale pid never holds; `rc` read from `rc_file` when present),
+`abandoned` (released by `run-abandon`; the process is untouched),
+`unobservable` (a commands_* id without a pid: delivered, never holds; `exited`
+once its rc_file has a value). `log_missing` is a separate flag.
+
+`unknown` holds a restart like `running`: an unreadable process may still be
+running, so the gate fails closed. It cannot deadlock. The existence probe
+`os.kill(pid, 0)` does not depend on `ps`: once it reports the pid gone, the run
+is `exited` even while `ps` keeps failing. Until then, `run-abandon` always
+releases it.
+
+`run-abandon` succeeds only for the session that registered the run, or a
+caller on the run's terminal (the same scope the gate holds for, so a successor
+can always release what holds it). Anyone else gets `outcome: conflict`,
+`reason: not-owner`, naming the owner; nothing changes. Session identity is the
+one the ledger already resolves for every command (hook-recorded, then host,
+then `--session`).
 
 Save snapshots the session's or terminal's non-abandoned runs into the sealed
 frontmatter field `runs` (JSON, at most 20). Delivery (`prepare`, so `resume`
@@ -1033,7 +1050,8 @@ abandoned runs. They are appended after any notes as `## Registered processes`,
 one `- <run_id>: <state>[ rc=N][, log missing]` line each, with fields quoted
 `  > ` so they cannot inject a heading. The result carries `runs: <count>`; the
 reuse digest binds each run's state, so a run that changes state defeats
-`--reuse-receipt`. Restart preflight holds while any run is `running` (section 7.2).
+`--reuse-receipt`. Restart preflight holds while any run is `running` or `unknown`
+(section 7.2).
 
 #### 7.2.2 Auto-close of landed checkpoints (#162)
 
