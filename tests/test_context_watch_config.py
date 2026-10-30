@@ -235,6 +235,21 @@ class AdvisoryWindow(Case):
         self.assertIn("Save a checkpoint before", again)
         self.assertIn("handoff threshold", self.at(130000))
 
+    def test_advisory_is_an_instruction_to_act_not_a_stop_signal(self):
+        """#190: the early warning says keep working, never reads as a pause, a save or a restart,
+        and dispatch does not classify it as handoff pressure."""
+        sys.path.insert(0, os.path.dirname(HOOK))
+        import handoff_dispatch
+        msg = self.at(100000)
+        self.assertIn("Keep working on the current task", msg)
+        self.assertIn("your own working notes", msg)
+        self.assertTrue(msg.endswith("do not save yet."), msg)
+        self.assertNotEqual(handoff_dispatch.classify(msg), "pressure")
+        self.assertEqual(msg.count("save"), 1, "the only save is the 'do not save yet' close")
+        for stop_cue in ("do not start another", "Save", "continuation notes", "restart", "publish", "write",
+                         "stop and"):
+            self.assertNotIn(stop_cue, msg)
+
     def test_single_jump_gives_the_notice_not_the_advisory(self):
         out = self.at(140000)
         self.assertIn("handoff threshold", out)

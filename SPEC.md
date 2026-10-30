@@ -344,6 +344,14 @@ note naming the floor and a suggested minimum threshold, occupies both
 latches (no handoff notice this session; a compaction re-arms) and logs
 `notice: "floor"` with `floor`.
 
+Early warning (`warning_window_tokens`, §7.3d configuration): the advisory is an instruction
+to act, never a stop signal (#190). It tells the agent to keep working on the
+current task, not to hand the turn back to the user, and to track progress
+in its own working notes; it says not to save yet and names no restart, since
+the threshold notice says when. Its wording must not match dispatch's `PRESSURE`
+classifier, which would route it as handoff pressure (a wind-down). The hook
+itself never publishes or restarts at the advisory.
+
 Codex contract note: the `PostToolUse` JSON channel is verified against the
 Codex hooks documentation (additionalContext is added as developer context;
 `decision: block` or exit 2 replaces the tool result; plain stdout is
