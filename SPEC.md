@@ -1432,6 +1432,18 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    the environment's. `authorized_to_execute` stays false until the successor
    receipt makes the intent `retrieved`. `restart_preflight` itself still refuses a conflicting
    second intent.
+   When `adopt` blocks at stage `resume`, the result carries `failure` with the
+   failed resume stage's evidence (`stage`, `outcome`, and when present
+   `exit_code`, `log`, `excerpt`, `new_failures`, `fixed`, `verify`, `path`), so a
+   reason that says to inspect the excerpt or log has them in hand (#202). A
+   `verification-timeout` means the recorded verify ran past its limit: rerunning
+   `adopt` repeats it; run `handoff_protocol.py verify <path> --timeout <s>`, then
+   `acknowledge <path>`. The two `host_confirmed` fields mean different things.
+   Top-level `host_confirmed` says whether this result proves host acceptance for
+   the caller to act on, and every `blocked` or `held` result sets it to false.
+   `restart.host_confirmed` is the intent record's stored value: whether native
+   acceptance was ever observed. A block can show false at the top and true under
+   `restart`.
    `authorization_source` is informational on every outcome and never execution authority; only `authorized_to_execute` gates execution.
 10. An exact target never falls back. Closed history is reached only by an
     explicit target.

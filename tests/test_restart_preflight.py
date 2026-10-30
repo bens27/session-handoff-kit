@@ -1860,3 +1860,34 @@ class RegisteredRunRestartCommandTests(unittest.TestCase):
         self.assertEqual(out['process']['run_id'], run_id, out)
         self.assertIn('run-abandon ' + run_id, out['action'])
         self.assertNotIn('call', out)
+
+
+class AdoptVerifyFailureTests(unittest.TestCase):
+    BODY = AdoptTests.BODY
+    """#202: a resume-stage block from verify carries the excerpt and log its reason names."""
+
+    def setUp(self):
+        real_save = protocol.save
+
+        def save_with_verify(root, session, request_id, document, *a, **k):
+            return real_save(root, session, request_id,
+                             dict(document, verify='echo VERIFY-FAIL-MARKER; exit 3'), *a, **k)
+        with patch.object(protocol, 'save', save_with_verify):
+            AdoptTests.setUp(self)
+
+    pointer, adopt = AdoptTests.pointer, AdoptTests.adopt
+
+    def test_verify_failure_block_carries_excerpt_and_log(self):
+        self.pointer('new')
+        code, raw, out = self.adopt()
+        self.assertEqual((code, out['outcome'], out['stage']), (1, 'blocked', 'resume'), out)
+        self.assertIn('excerpt', out['reason'])
+        failure = out['failure']
+        self.assertEqual((failure['stage'], failure['outcome'], failure['exit_code']),
+                         ('verify', 'verification-failed', 3), failure)
+        self.assertIn('VERIFY-FAIL-MARKER', failure['excerpt'])
+        self.assertTrue(os.path.isfile(failure['log']), failure)
+        self.assertNotIn('UNIQUE-BODY-MARKER', raw)
+        # Top-level host_confirmed: this result authorizes nothing; restart.* reports the intent.
+        self.assertFalse(out['host_confirmed'])
+        self.assertIn('host_confirmed', out['restart'])

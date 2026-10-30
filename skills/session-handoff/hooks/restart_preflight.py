@@ -35,6 +35,8 @@ status = intents.status
 prune_settled = intents.prune_settled
 intent_expired = intents.expired
 INTENT_MAX_AGE = intents.TTL['pending']
+# Fields of a failed protocol.resume stage that adopt passes through on a resume block (#202).
+RESUME_FAILURE_KEYS = ("stage", "outcome", "exit_code", "log", "excerpt", "new_failures", "fixed", "verify", "path")
 SETTLED_RETENTION = intents.TTL['settled']
 SKIPPED_INTENTS_LIMIT = 10
 _accepted_event = intents.accepted_event
@@ -705,7 +707,12 @@ def adopt(root, request_id, binding=None, _deliver_body=False):
     except (OSError, ValueError, TypeError, KeyError, ledger.ConflictError) as exc:
         result = dict(outcome='blocked', action=str(exc))
     if result.get('outcome') not in ('resumed', 'needs-confirmation'):
-        return dict(blocked('resume', result.get('action') or result.get('outcome')), restart=identity, report=report)
+        # #202: keep the evidence the reason points at (verify log, bounded excerpt, exit code).
+        failure = {k: result[k] for k in RESUME_FAILURE_KEYS if k in result}
+        out = dict(blocked('resume', result.get('action') or result.get('outcome')), restart=identity, report=report)
+        if failure:
+            out['failure'] = failure
+        return out
     delivered = protocol.inbox_document(root, result)
     if delivered is not result:
         result = delivered
