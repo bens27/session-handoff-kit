@@ -242,9 +242,12 @@ class AdvisoryWindow(Case):
         import handoff_dispatch
         msg = self.at(100000)
         self.assertIn("Keep working on the current task", msg)
-        self.assertIn("keep continuation notes current", msg)
+        self.assertIn("your own working notes", msg)
+        self.assertTrue(msg.endswith("do not save yet."), msg)
         self.assertNotEqual(handoff_dispatch.classify(msg), "pressure")
-        for stop_cue in ("do not start another", "save", "Save", "restart", "publish", "write", "stop and"):
+        self.assertEqual(msg.count("save"), 1, "the only save is the 'do not save yet' close")
+        for stop_cue in ("do not start another", "Save", "continuation notes", "restart", "publish", "write",
+                         "stop and"):
             self.assertNotIn(stop_cue, msg)
 
     def test_single_jump_gives_the_notice_not_the_advisory(self):

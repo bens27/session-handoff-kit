@@ -346,9 +346,9 @@ latches (no handoff notice this session; a compaction re-arms) and logs
 
 Early warning (`warning_window_tokens`, §7.3d configuration): the advisory is an instruction
 to act, never a stop signal (#190). It tells the agent to keep working on the
-current task, not to hand the turn back to the user, and to keep continuation
-notes current; it names no save or restart as an action now, since the
-threshold notice says when. Its wording must not match dispatch's `PRESSURE`
+current task, not to hand the turn back to the user, and to track progress
+in its own working notes; it says not to save yet and names no restart, since
+the threshold notice says when. Its wording must not match dispatch's `PRESSURE`
 classifier, which would route it as handoff pressure (a wind-down). The hook
 itself never publishes or restarts at the advisory.
 
