@@ -25,6 +25,7 @@ DIAGNOSTIC_FIELDS = frozenset({
     'outcome', 'action', 'stage', 'warnings', 'errors', 'problems',
     'withheld_references', 'exit_code', 'log', 'excerpt', 'verify',
     'baseline_failures', 'new_failures', 'fixed', 'candidates', 'holder', 'note_problems',
+    'retryable', 'report_to',
 })
 
 
@@ -211,6 +212,22 @@ DISPATCH_CODES = {
     'saved': False, 'restart': False, 'restart_blocked': False, 'publication_failed': False, 'dispatch_stale': False,
 }
 DISPATCH_RETRY = dict(max_attempts=3, backoff_seconds=[1, 4, 16], same_request=True)
+# Ledger save/resume failures (#173), same rule: a protocol outcome is its own code
+# unless the site names a cause. Hyphenated outcomes never collide with dispatch codes.
+PROTOCOL_CODES = {
+    'publication_interrupted': True,
+    'blocked': False, 'conflict': False, 'invalid': False, 'incomplete': False, 'error': False,
+    'needs-context': False, 'needs-original-draft': False, 'needs-confirmation': False,
+    'verification-failed': False, 'verification-timeout': False, 'timeout': False,
+}
+assert not set(PROTOCOL_CODES) & set(DISPATCH_CODES)
+# Non-retryable outcomes the kit project should hear about; the rest instruct the caller.
+REPORTED_OUTCOMES = frozenset(('blocked', 'conflict', 'invalid'))
+
+
+def retryable(code):
+    """The single retryability decision for the dispatch and protocol surfaces."""
+    return DISPATCH_CODES[code] if code in DISPATCH_CODES else PROTOCOL_CODES[code]
 
 
 def dispatch_result(outcome, code, request, **extra):
@@ -223,7 +240,7 @@ def dispatch_result(outcome, code, request, **extra):
                 branch=DISPATCH_BRANCHES.get(operation), restart=dict(eligible='unknown', blockers=[]),
                 next_action=dict(kind='continue', command='', text='Continue the current request.'), recheck=[])
     base.update(extra)
-    base['retryable'] = DISPATCH_CODES[code]
+    base['retryable'] = retryable(code)
     if base['retryable']:
         base['retry'] = dict(DISPATCH_RETRY)
     base.update(report_fields(outcome, code))
@@ -235,12 +252,23 @@ REPORT_TO = dict(to='inbox', project='session-handoff-kit')
 
 
 def report_fields(outcome, code):
-    """{'report_to': ...} for a non-retryable blocked result under AgentsRoom, else {}.
+    """{'report_to': ...} for a non-retryable reported failure under AgentsRoom, else {}.
 
-    Retryability comes only from DISPATCH_CODES; absent means no key, never null."""
-    if outcome != 'blocked' or DISPATCH_CODES[code] or not os.environ.get('AGENTSROOM_AGENT_ID'):
+    Retryability comes only from retryable(); absent means no key, never null."""
+    if outcome not in REPORTED_OUTCOMES or retryable(code) or not os.environ.get('AGENTSROOM_AGENT_ID'):
         return {}
     return dict(report_to=dict(REPORT_TO))
+
+
+def protocol_failure(operation, result):
+    """Add retryable [+ report_to] to a failed ledger save/resume result (#173); strip the cause.
+
+    Other operations and non-failures are returned unchanged, apart from the private cause."""
+    code = result.pop('_code', None) or result.get('outcome')
+    if operation in ('save', 'resume') and exit_status('protocol', result.get('outcome'), operation):
+        result['retryable'] = retryable(code)
+        result.update(report_fields(result['outcome'], code))
+    return result
 
 
 def blocked_result(request, code, text, retryable=False, **extra):

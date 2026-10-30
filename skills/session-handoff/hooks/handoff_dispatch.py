@@ -285,7 +285,7 @@ def draft_save(root, request, session, target, common):
     if saved.get('outcome') != 'saved':
         return blocked(request, 'publication_failed', 'Publication %s: %s Keep the draft; never clear.'
                        % (saved.get('outcome'), saved.get('action', '')), stage='publication',
-                       publication=saved, warnings=warnings, **extra)
+                       publication={k: v for k, v in saved.items() if k != '_code'}, warnings=warnings, **extra)
     warnings += saved.get('warnings') or []
     extra.update(path=saved['path'], checkpoint_id=saved['checkpoint_id'], transition=saved['transition'],
                  warnings=warnings)

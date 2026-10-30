@@ -1,0 +1,206 @@
+{
+ "source": "CLI stdout captured at a69967e (baseline_stdout); stdout = baseline + appended #173 keys",
+ "added_keys": [
+  "retryable",
+  "report_to"
+ ],
+ "files": {
+  "a.json": {
+   "topic": "ok-topic",
+   "description": "d",
+   "body": "## Objective\nx\n## Current state\ny\n## Next steps\nz\n"
+  },
+  "b.json": {
+   "topic": "ok-topic",
+   "description": "d2",
+   "body": "## Objective\nx\n## Current state\ny\n## Next steps\nz\n"
+  },
+  "empty.json": {
+   "topic": "ok-topic",
+   "description": "d",
+   "body": ""
+  }
+ },
+ "cases": [
+  {
+   "name": "save_no_session",
+   "agent_id": null,
+   "steps": [
+    [
+     "save",
+     ".",
+     "--input",
+     "a.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\"}\n",
+   "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\", \"retryable\": false}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_conflict_request_id",
+   "agent_id": null,
+   "steps": [
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--request-id",
+     "r1",
+     "--input",
+     "a.json"
+    ],
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--request-id",
+     "r1",
+     "--input",
+     "b.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"conflict\", \"action\": \"This request ID was already saved with different content. Use a new request ID.\", \"project\": \"<ROOT>/proj\"}\n",
+   "stdout": "{\"outcome\": \"conflict\", \"action\": \"This request ID was already saved with different content. Use a new request ID.\", \"project\": \"<ROOT>/proj\", \"retryable\": false}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_empty_body",
+   "agent_id": null,
+   "steps": [
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--input",
+     "empty.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"invalid\", \"action\": \"Keep the previous checkpoint and draft. Repair the named document problems and retry.\", \"problems\": [\"checkpoint body is empty; preserve the incomplete file and finish its content\"], \"project\": \"<ROOT>/proj\"}\n",
+   "stdout": "{\"outcome\": \"invalid\", \"action\": \"Keep the previous checkpoint and draft. Repair the named document problems and retry.\", \"problems\": [\"checkpoint body is empty; preserve the incomplete file and finish its content\"], \"project\": \"<ROOT>/proj\", \"retryable\": false}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_missing_input",
+   "agent_id": null,
+   "steps": [
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--input",
+     "missing.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"invalid\", \"action\": \"[Errno 2] No such file or directory: 'missing.json'; correct the input and retry.\"}\n",
+   "stdout": "{\"outcome\": \"invalid\", \"action\": \"[Errno 2] No such file or directory: 'missing.json'; correct the input and retry.\", \"retryable\": false}\n",
+   "rc": 1
+  },
+  {
+   "name": "resume_no_session",
+   "agent_id": null,
+   "steps": [
+    [
+     "resume"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\"}\n",
+   "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\", \"retryable\": false}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_no_session",
+   "agent_id": "agent-x",
+   "steps": [
+    [
+     "save",
+     ".",
+     "--input",
+     "a.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\"}\n",
+   "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\", \"retryable\": false, \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_conflict_request_id",
+   "agent_id": "agent-x",
+   "steps": [
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--request-id",
+     "r1",
+     "--input",
+     "a.json"
+    ],
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--request-id",
+     "r1",
+     "--input",
+     "b.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"conflict\", \"action\": \"This request ID was already saved with different content. Use a new request ID.\", \"project\": \"<ROOT>/proj\"}\n",
+   "stdout": "{\"outcome\": \"conflict\", \"action\": \"This request ID was already saved with different content. Use a new request ID.\", \"project\": \"<ROOT>/proj\", \"retryable\": false, \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_empty_body",
+   "agent_id": "agent-x",
+   "steps": [
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--input",
+     "empty.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"invalid\", \"action\": \"Keep the previous checkpoint and draft. Repair the named document problems and retry.\", \"problems\": [\"checkpoint body is empty; preserve the incomplete file and finish its content\"], \"project\": \"<ROOT>/proj\"}\n",
+   "stdout": "{\"outcome\": \"invalid\", \"action\": \"Keep the previous checkpoint and draft. Repair the named document problems and retry.\", \"problems\": [\"checkpoint body is empty; preserve the incomplete file and finish its content\"], \"project\": \"<ROOT>/proj\", \"retryable\": false, \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n",
+   "rc": 1
+  },
+  {
+   "name": "save_missing_input",
+   "agent_id": "agent-x",
+   "steps": [
+    [
+     "save",
+     ".",
+     "--session",
+     "s1",
+     "--input",
+     "missing.json"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"invalid\", \"action\": \"[Errno 2] No such file or directory: 'missing.json'; correct the input and retry.\"}\n",
+   "stdout": "{\"outcome\": \"invalid\", \"action\": \"[Errno 2] No such file or directory: 'missing.json'; correct the input and retry.\", \"retryable\": false, \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n",
+   "rc": 1
+  },
+  {
+   "name": "resume_no_session",
+   "agent_id": "agent-x",
+   "steps": [
+    [
+     "resume"
+    ]
+   ],
+   "baseline_stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\"}\n",
+   "stdout": "{\"outcome\": \"blocked\", \"action\": \"No session identity found: pass --session <this session id> (or set HANDOFF_SESSION_ID) and rerun. Never borrow another session identity.\", \"retryable\": false, \"report_to\": {\"to\": \"inbox\", \"project\": \"session-handoff-kit\"}}\n",
+   "rc": 1
+  }
+ ]
+}
