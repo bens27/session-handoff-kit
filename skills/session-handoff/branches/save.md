@@ -47,8 +47,9 @@ its restart section as directed below.
    then make the supported `agents_restart` call as the final tool action using
    the returned `restart_prompt`. End the turn immediately.
    Unknown observations, `blocked`, `pending`, `refused` and human holds preserve
-   the checkpoint/session. `registered-process-running` means wait for the run to
-   exit or release it with `run-abandon <run_id> --reason TEXT`; never kill it. Reconcile pending intent instead of redispatching.
+   the checkpoint/session. `registered-process-running` (state `running`, or
+   `unknown` when `ps` cannot read it) means wait for the run to exit or release
+   it with `run-abandon <run_id> --reason TEXT`; never kill it. Reconcile pending intent instead of redispatching.
    For other transition kinds follow the save result's permitted action.
 5. Stop. Remaining authorized work belongs to the receiving session.
 

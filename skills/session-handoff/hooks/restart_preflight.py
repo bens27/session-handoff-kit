@@ -284,12 +284,16 @@ def preflight(root, path, session, terminal, request_id, workers=None,
         held = handoff_runs.running(root, session, terminal)
         if held:
             run = held[0]
+            # #182 N4: 'unknown' (pid alive, ps unreadable) holds too: fail closed. It releases
+            # once os.kill(pid, 0) proves the pid gone, or by run-abandon; never by killing it.
+            run_status = ('is running' if run['state'] == 'running' else
+                          'is alive but its state cannot be read (ps failed), so it may still be running')
             return dict(blocked('registered-process-running'),
-                        process={k: run[k] for k in ('run_id', 'cmd', 'pid', 'log')},
-                        action='Hold: registered process %s (pid %s) is running; its result lands in %s. '
+                        process={k: run[k] for k in ('run_id', 'cmd', 'pid', 'log', 'state')},
+                        action='Hold: registered process %s (pid %s) %s; its result lands in %s. '
                                'Do not call agents_restart. Wait for it to exit, or release it with '
                                'run-abandon %s --reason TEXT; never kill it.'
-                               % (run['run_id'], run['pid'], run['log'], run['run_id']))
+                               % (run['run_id'], run['pid'], run_status, run['log'], run['run_id']))
         if host_capable is not True:
             return blocked('host-capability-absent')
         if reentry is not None:

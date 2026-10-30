@@ -72,6 +72,25 @@ class RunHandoffTests(unittest.TestCase):
         self.assertEqual((code, out['outcome'], out['run']['state']), (0, 'abandoned', 'abandoned'), out)
         self.assertIsNone(proc.poll(), 'abandon must never touch the process')
 
+    def test_abandon_from_another_session_and_terminal_is_refused(self):
+        # #182 N1
+        proc = self.sleeper()
+        run_id = self.register('--pid', proc.pid)[1]['run_id']
+        code, out = self.cli('run-abandon', run_id, '--reason', 'grab', '--session', 'sess-b', terminal='term-b')
+        self.assertEqual((code, out['outcome'], out['reason']), (1, 'conflict', 'not-owner'), out)
+        self.assertIn('sess-a', out['action'])
+        self.assertEqual(self.cli('run-list', '--session', 'sess-a')[1]['runs'][0]['state'], 'running')
+
+    def test_relative_log_resolves_against_registration_cwd(self):
+        # #182 N3: the CLI runs with cwd=root; --cwd names a subdirectory.
+        (self.root / 'sub').mkdir()
+        proc = self.sleeper()
+        code, out = self.cli('run-register', '--session', 'sess-a', '--pid', proc.pid, '--log', 'suite.log',
+                             '--rc-file', 'suite.rc', '--cwd', 'sub')
+        self.assertEqual(out['outcome'], 'registered', out)
+        run = self.cli('run-list', '--session', 'sess-a')[1]['runs'][0]
+        self.assertEqual(os.path.realpath(run['log']), os.path.realpath(self.root / 'sub' / 'suite.log'))
+
     def test_register_needs_pid_or_command_id(self):
         code, out = self.register()
         self.assertEqual((code, out['outcome']), (1, 'invalid'), out)

@@ -1140,11 +1140,13 @@ def run_register(root, session, cmd, log, cwd, pid=None, command_id=None, rc_fil
                        'Release it with run-abandon %s --reason TEXT; the kit never kills it.' % out['run_id'])
 
 
-def run_abandon(root, run_id, reason):
+def run_abandon(root, run_id, reason, session):
     """Release a run so it stops holding restarts; the process itself is untouched."""
     root = handoff_identity.project_root(root)
     try:
-        view = handoff_runs.abandon(root, run_id, reason)
+        view = handoff_runs.abandon(root, run_id, reason, session, terminal_id())
+    except handoff_runs.NotOwner as exc:
+        return dict(outcome='conflict', reason='not-owner', action=str(exc)[:500])
     except ValueError as exc:
         return dict(outcome='invalid', action=str(exc)[:500])
     return dict(outcome='abandoned', run=view,
@@ -2328,7 +2330,7 @@ def cli(argv):
     run_src.add_argument('--command-id', help='AgentsRoom commands_* id when there is no pid')
     run_reg_p.add_argument('--log', required=True, help='Log the successor reads the result from')
     run_reg_p.add_argument('--cmd', default='', help='The command line, for the successor to read')
-    run_reg_p.add_argument('--cwd', default='.')
+    run_reg_p.add_argument('--cwd', default='.', help='Working directory of the run; a relative --log or --rc-file resolves against it')
     run_reg_p.add_argument('--rc-file', help='File the process writes its exit status to')
     run_ab_p = sub.add_parser('run-abandon', description='Release a registered run so it stops holding restarts; the process is not signalled.')
     run_ab_p.add_argument('run_id')
@@ -2440,7 +2442,7 @@ def cli(argv):
         elif a.command == 'run-register':
             result = run_register(a.root, a.session, a.cmd, a.log, a.cwd, a.pid, a.command_id, a.rc_file)
         elif a.command == 'run-abandon':
-            result = run_abandon(a.root, a.run_id, a.reason)
+            result = run_abandon(a.root, a.run_id, a.reason, a.session)
         elif a.command == 'run-list':
             result = run_list(a.root, a.session)
         elif a.command == 'wait':
