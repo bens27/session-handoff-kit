@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """#180: a turn must not end after a context-watch notice (advisory or threshold)
-while this session has published no checkpoint. Per +10k-token band past the
+while this session has published no checkpoint. #208: after the advisory only the
+user warning fires; reminders and blocks start at the threshold notice. Per +10k-token band past the
 notice the agent is reminded once and the first Stop blocks once; every Stop
 while unsaved warns the user, in every mode (#186). Codex: reminder only.
 
@@ -83,19 +84,29 @@ class PromiseGuard(HookCase):
 
     def test_continued_stop_warns_without_blocking(self):
         # A band first reached on a stop a block already continued: warn only, never loop.
-        self.advise()
-        self.occupancy(103137)
+        self.fire()  # #208: blocks are threshold-only
+        self.occupancy(150000)
         self.assertWarns(self.stop())
-        self.occupancy(114000)
+        self.occupancy(161000)
         self.assertWarns(self.continued_stop(), blocks=False)
         self.assertWarns(self.stop())  # N1: the continued stop claimed nothing
         self.assertWarns(self.stop(), blocks=False)  # now that band's block is spent
 
+    # ---- #204 / decision #208: the advisory arms the user warning only
+
+    def test_204_advisory_only_warns_never_blocks_or_reminds(self):
+        self.advise()
+        for tokens in (103137, 114000, 124000):
+            self.occupancy(tokens)
+            self.assertWarns(self.stop(), blocks=False)
+        self.write([claude_call(20000), claude_call(124000)])
+        self.assertEqual(self.context(self.run_hook(extra={"CONTEXT_WATCH_THINKING": "0"})), "")
+
     # ---- Stop: one block per band, a warning to the user on every unsaved stop (#186)
 
-    def test_advisory_without_checkpoint_blocks_and_warns_once(self):
+    def test_advisory_without_checkpoint_warns_without_block(self):
         self.advise()
-        msg = self.assertWarns(self.stop())
+        msg = self.assertWarns(self.stop(), blocks=False)  # #208
         self.assertIn('clear', msg)
         self.assertWarns(self.stop(), blocks=False)
 
@@ -105,7 +116,7 @@ class PromiseGuard(HookCase):
 
     def test_advisory_without_checkpoint_warns_in_automatic_mode(self):
         self.advise()
-        self.assertWarns(self.stop(HANDOFF_AUTO='1'))
+        self.assertWarns(self.stop(HANDOFF_AUTO='1'), blocks=False)
 
     def test_session_that_saved_after_advisory_is_not_warned(self):
         self.advise()
@@ -120,16 +131,16 @@ class PromiseGuard(HookCase):
                                       if p.endswith('.md')))
         self.advise()
         os.utime(self.base + ".advised", (old + 60, old + 60))
-        self.assertWarns(self.stop())
+        self.assertWarns(self.stop(), blocks=False)  # #208: warning, no block
 
     def test_stop_blocks_once_per_10k_band(self):
         # B1 kept: one Stop block per +10k band past the notice; later stops in the band only warn.
-        self.advise()
-        self.occupancy(103137)
+        self.fire()  # #208: blocks are threshold-only
+        self.occupancy(150000)
         self.assertWarns(self.stop())
-        self.occupancy(110000)
+        self.occupancy(157000)
         self.assertWarns(self.stop(), blocks=False)
-        self.occupancy(114000)
+        self.occupancy(161000)
         self.assertWarns(self.stop())
         self.assertWarns(self.stop(), blocks=False)
 
@@ -142,20 +153,20 @@ class PromiseGuard(HookCase):
 
     def test_S1_every_unsaved_stop_warns_user(self):
         # S1: every Stop warns while nothing was saved since the notice.
-        self.advise()
-        self.occupancy(103137)
+        self.fire()  # #208: blocks are threshold-only
+        self.occupancy(150000)
         self.assertWarns(self.stop())
-        self.occupancy(105000)
+        self.occupancy(152000)
         self.assertWarns(self.stop(), blocks=False)
 
     def test_N1_continued_stop_keeps_next_band_block(self):
         # N1: a stop_hook_active stop never claims a band's block.
-        self.advise()
-        self.occupancy(103137)
+        self.fire()  # #208: blocks are threshold-only
+        self.occupancy(150000)
         self.assertWarns(self.stop())
-        self.occupancy(114000)
+        self.occupancy(161000)
         self.assertWarns(self.continued_stop(), blocks=False)
-        self.occupancy(115000)
+        self.occupancy(162000)
         self.assertWarns(self.stop())
 
     def test_no_notice_never_warns(self):
@@ -169,18 +180,16 @@ class PromiseGuard(HookCase):
         self.write([claude_call(tokens)], "a")
         return self.context(self.run_hook(extra=self.EXTRA))
 
-    def test_f9997a4a_replay_reminds_and_blocks_per_band(self):
+    def test_f9997a4a_replay_warns_only_below_threshold(self):
+        # #208 retarget: f9997a4a promised a handoff at ~106k, below the 130k threshold. The
+        # advisory arms only the user warning (every unsaved Stop); no save reminder, no block.
         self.write([claude_call(20000)])
         self.run_hook(extra=self.EXTRA)
         self.assertIn("Early warning", self.call(105000))
-        self.assertEqual(self.call(106000), "")  # band 0: the notice itself
-        first = self.call(116000)
-        self.assertIn("save a checkpoint before", first.lower())
-        self.assertIn("never", first.lower())
-        self.assertEqual(self.call(117000), "")  # same band: once
-        self.assertIn("checkpoint", self.call(126000))  # next band
-        self.assertWarns(self.stop(**self.EXTRA))  # band 2: blocks again, with the warning
-        self.assertWarns(self.stop(**self.EXTRA), blocks=False)  # same band: warning only
+        for tokens in (106000, 116000, 126000):
+            self.assertEqual(self.call(tokens), "")
+        self.assertWarns(self.stop(**self.EXTRA), blocks=False)
+        self.assertWarns(self.stop(**self.EXTRA), blocks=False)
 
     def test_save_silences_reminders_and_warning(self):
         self.write([claude_call(20000)])
@@ -196,17 +205,17 @@ class PromiseGuard(HookCase):
         self.write([claude_call(20000)])
         self.run_hook(extra=self.EXTRA)
         self.assertIn("Early warning", self.call(105000))
-        self.assertIn("checkpoint", self.call(116000))
-        self.assertWarns(self.stop(**self.EXTRA))
+        self.assertEqual(self.call(116000), "")  # #208
+        self.assertWarns(self.stop(**self.EXTRA), blocks=False)
         self.call(20000)  # compaction
         self.assertIn("Early warning", self.call(105000))
-        self.assertIn("checkpoint", self.call(116000))
-        self.assertWarns(self.stop(**self.EXTRA))
+        self.assertEqual(self.call(116000), "")  # #208
+        self.assertWarns(self.stop(**self.EXTRA), blocks=False)
 
     def test_codex_gets_the_reminder_on_post_tool_use(self):
         self.codex = True
-        self.advise()
-        self.write([codex_count(114000, 114000)])
+        self.fire()  # #208
+        self.write([codex_count(161000, 161000)])
         self.assertIn("Save a checkpoint before", self.context(self.run_hook(extra=self.EXTRA)))
         self.assertEqual(self.context(self.run_hook(extra=self.EXTRA)), "")
 
