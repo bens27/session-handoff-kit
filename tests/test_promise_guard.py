@@ -57,15 +57,42 @@ class PromiseGuard(HookCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(json.loads(p.stdout)['outcome'], 'saved', p.stdout + p.stderr)
 
-    def assertWarns(self, out):
-        self.assertNotIn('"decision"', out)
-        msg = json.loads(out)['systemMessage']
-        self.assertIn('no checkpoint', msg)
-        return msg
+    def assertWarns(self, out, blocks=True):
+        """#186: the user warning on every guarded stop; the block on the first stop of a band."""
+        out = json.loads(out)
+        self.assertIn('no checkpoint', out['systemMessage'])
+        if not blocks:
+            self.assertNotIn('decision', out)
+            return out['systemMessage']
+        self.assertEqual(out['decision'], 'block')
+        self.assertIn('nothing was saved and why', out['reason'])
+        self.assertIn('only a saved checkpoint does', out['reason'])
+        return out['systemMessage']
+
+    def continued_stop(self):
+        """A Stop whose turn a block already continued (stop_hook_active)."""
+        from test_context_watch_regressions import CLEAN, HOOK
+        env = {k: v for k, v in os.environ.items() if k not in CLEAN}
+        env.update(HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0",
+                   CONTEXT_WATCH_AGENT="claude")
+        evt = {"hook_event_name": "Stop", "session_id": self.sid, "cwd": self.tmp,
+               "transcript_path": self.transcript, "stop_hook_active": True}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=env,
+                           capture_output=True, text=True, timeout=30)
+        return p.stdout.strip()
+
+    def test_continued_stop_warns_without_blocking(self):
+        # A band first reached on a stop a block already continued: warn only, never loop.
+        self.advise()
+        self.occupancy(103137)
+        self.assertWarns(self.stop())
+        self.occupancy(114000)
+        self.assertWarns(self.continued_stop(), blocks=False)
+        self.assertEqual(self.stop(), "")  # that band is spent
 
     # ---- Stop: a non-blocking warning to the user, never a block (#184)
 
-    def test_advisory_without_checkpoint_warns_once_never_blocks(self):
+    def test_advisory_without_checkpoint_blocks_and_warns_once(self):
         self.advise()
         msg = self.assertWarns(self.stop())
         self.assertIn('clear', msg)
@@ -123,7 +150,7 @@ class PromiseGuard(HookCase):
         self.write([claude_call(tokens)], "a")
         return self.context(self.run_hook(extra=self.EXTRA))
 
-    def test_f9997a4a_replay_reminds_per_band_and_never_blocks(self):
+    def test_f9997a4a_replay_reminds_and_blocks_per_band(self):
         self.write([claude_call(20000)])
         self.run_hook(extra=self.EXTRA)
         self.assertIn("Early warning", self.call(105000))
@@ -133,9 +160,8 @@ class PromiseGuard(HookCase):
         self.assertIn("never", first.lower())
         self.assertEqual(self.call(117000), "")  # same band: once
         self.assertIn("checkpoint", self.call(126000))  # next band
-        out = self.stop(**self.EXTRA)
-        self.assertNotIn('"decision"', out)
-        self.assertWarns(out)
+        self.assertWarns(self.stop(**self.EXTRA))  # band 2: blocks again, with the warning
+        self.assertEqual(self.stop(**self.EXTRA), "")
 
     def test_save_silences_reminders_and_warning(self):
         self.write([claude_call(20000)])
@@ -165,12 +191,11 @@ class PromiseGuard(HookCase):
         self.assertIn("Save a checkpoint before", self.context(self.run_hook(extra=self.EXTRA)))
         self.assertEqual(self.context(self.run_hook(extra=self.EXTRA)), "")
 
-    def test_guard_source_has_no_block(self):
+    def test_reminder_source_has_no_block(self):
         import inspect
         sys.path.insert(0, os.path.join(HERE, "..", "skills", "session-handoff", "hooks"))
         import context_watch
-        for fn in (context_watch.nudge_unwritten_handoff, context_watch.remind_unwritten_handoff):
-            self.assertNotIn('"block"', inspect.getsource(fn))
+        self.assertNotIn('"block"', inspect.getsource(context_watch.remind_unwritten_handoff))
 
 
 if __name__ == "__main__":

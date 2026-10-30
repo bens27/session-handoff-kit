@@ -122,7 +122,7 @@ class StopNudge(HookCase):
         with open(base, "w") as f:
             f.write("150000/130000/140000\n")
         open(base + "2", "w").close()
-        self.assertIn('"systemMessage"', self.stop())
+        self.assertIn('"decision": "block"', self.stop())
 
 
 class StartupAutoresumeNote(unittest.TestCase):

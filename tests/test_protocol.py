@@ -1218,7 +1218,8 @@ with patch('time.time', return_value=float(sys.argv[2])):
         unrelated = json.loads(self.save().stdout)
         self.cli('resume', unrelated['path'])
         stopped = self.hook('Stop', session=sid)
-        self.assertNotIn('decision', stopped)  # #184: warn, never block
+        self.assertEqual(stopped.get('decision'), 'block')
+        self.assertNotIn('--request-id', stopped['reason'])  # save derives it from the draft
         self.assertIn('no checkpoint', stopped['systemMessage'])
         doc = {'topic':'actual', 'description':'Required checkpoint', 'body':'## Objective\nFix it.\n## Current state\nReady.\n## Next steps\nTest.\n'}
         result = json.loads(self.cli('save', '.', '--session', sid, '--request-id', 'fired', input=json.dumps(doc)).stdout)

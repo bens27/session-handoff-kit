@@ -477,13 +477,15 @@ restarting. It fires once per window, re-arms after compaction, and `0` turns it
 off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
 Once the early warning or the threshold notice has fired, and while this
-session has published no checkpoint since that notice, the kit reminds and
-warns, and never blocks (#180, #184). Once per +10k-token band past the notice,
-the agent's next prompt or tool call carries an instruction to save a checkpoint
-before any clearing and never to claim a handoff without a saved path (Claude
-and Codex). At the end of a turn the Stop hook shows you a non-blocking warning
-not to clear the session yet, once per band (Claude only; Codex has no Stop hook).
-A checkpoint saved since the notice silences both.
+session has published no checkpoint since that notice, the kit reminds, blocks
+and warns (#180, #186). Once per further +10k-token band past the notice, the
+agent's next prompt or tool call carries an instruction to save a checkpoint
+before any clearing and never to claim a handoff without a saved path. Once per
+band, the Stop hook blocks the end of the turn until the agent really saves or
+states plainly that nothing was saved and why, and shows you a warning not to
+clear the session yet. The agent's statement lifts nothing: the next band blocks
+again. A checkpoint saved since the notice silences all three. Codex gets the
+reminder only (it has no Stop hook).
 
 `"resume_pointer_policy"` (`"ask"` default, `"latest-owned"` or `"manual"`) decides
 what a fresh session does when several restart checkpoints for its terminal

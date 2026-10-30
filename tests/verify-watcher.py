@@ -620,7 +620,7 @@ def main():
           and "type /clear" not in p_auto_t.stdout, "stdout=%r" % p_auto_t.stdout[:500])
 
     # 13b. Stop nudge (warn mode): the trigger fired, the turn ends, no handoff
-    #      written -> warn at stop once (#184: never block); never twice, never
+    #      written -> block the stop once per band and warn the user (#186); never twice, never
     #      after the handoff exists, never for a floor note, never for Codex.
     proj_n = os.path.join(tmp, "proj-nudge")
     os.makedirs(os.path.join(proj_n, ".handoffs"))
@@ -632,8 +632,8 @@ def main():
     with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n), "w") as f:
         f.write("150000/130000/140000\n")
     p_n = run_hook(nudge_evt, env_n)
-    check("stop-nudge-warns-once", '"systemMessage"' in p_n.stdout
-          and '"decision"' not in p_n.stdout, "stdout=%r" % p_n.stdout[:300])
+    check("stop-nudge-blocks-and-warns-once", '"decision": "block"' in p_n.stdout
+          and '"systemMessage"' in p_n.stdout and "save --session" in p_n.stdout, "stdout=%r" % p_n.stdout[:300])
     p_n = run_hook(nudge_evt, env_n)
     check("stop-nudge-not-twice", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
     sid_n2 = "verify-" + uuid.uuid4().hex[:8]

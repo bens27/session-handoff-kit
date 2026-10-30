@@ -1165,22 +1165,37 @@ def remind_unwritten_handoff(agent, evt, event_name, cwd, key, occupancy):
 
 
 def nudge_unwritten_handoff(evt):
-    """Every mode (#180, #184): a context-watch notice fired this session, the
-    turn is ending, and no checkpoint was published since. Warn the user once per
-    +10k-token band past the notice, without blocking, so the session is not
-    cleared before it saves. Claude only (Codex has no Stop hook)."""
-    if evt.get("stop_hook_active") or detect_agent(evt, []) != "claude":
+    """Every mode (#180, #186): a context-watch notice fired this session, the
+    turn is ending, and no checkpoint was published since. Once per +10k-token
+    band past the notice, block the stop so the agent really saves or states
+    plainly that nothing was saved and why (the reply is never parsed; only a
+    save silences later bands), and warn the user in the same output. A stop
+    already continued by a block only warns, so the guard never loops.
+    Claude only (Codex has no Stop hook)."""
+    if detect_agent(evt, []) != "claude":
         return
     key = session_key(evt)
     cwd = evt.get("cwd") or os.getcwd()
     notice = unsaved_notice(cwd, key)
     if not notice or not claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
         return
-    emit_output({"systemMessage": (
+    out = {"systemMessage": (
         "[context-watch] This session got a context-watch notice and has published no checkpoint "
         "since. Do not clear it yet: clearing now would lose this work's context. Ask the agent to "
         "save a checkpoint first; any handoff it mentions without a saved path does not exist. "
-        "Searched project: %s." % handoff_identity.project_root(cwd))})
+        "Searched project: %s." % handoff_identity.project_root(cwd))}
+    if not evt.get("stop_hook_active"):
+        out.update(decision="block", reason=(
+            "[context-watch] No checkpoint has been published since this session's context-watch notice. "
+            "Before ending this turn, do one of two things: really save a checkpoint now, or state plainly "
+            "to the user that nothing was saved and why. Never say the work continues after a handoff, in "
+            "a next session or with a successor without a saved checkpoint path. Your statement does not "
+            "lift this guard: only a saved checkpoint does, and every further +10k tokens blocks again. "
+            "For the JSON draft format run %s. Preserve the draft and publish with %s; stop after outcome "
+            "saved. If the save fails, report the failed location and keep this session; do not clear."
+            % (python_command(LEDGER, 'save', '--template'),
+               command_template(LEDGER, ('save', '--session', key), '--input <draft.json>'))))
+    emit_output(out)
     sys.exit(0)
 
 

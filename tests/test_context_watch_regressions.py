@@ -123,13 +123,15 @@ class NormalPolicyUnchanged(HookCase):
         extra = {"CONTEXT_WATCH_THINKING": "0"}
         self.write([claude_call(20000), claude_call(140000)])
         self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
-        self.assertIn('"systemMessage"', self.run_hook(event="Stop", extra=extra))  # warns, never blocks (#184)
+        out = self.run_hook(event="Stop", extra=extra)  # #186: blocks and warns
+        self.assertIn('"decision": "block"', out)
+        self.assertIn('"systemMessage"', out)
         self.assertEqual(self.run_hook(event="Stop", extra=extra), "")  # nudged once
         self.write([claude_call(20000)], "a")  # compaction
         self.assertEqual(self.run_hook(extra=extra), "")  # re-armed
         self.write([claude_call(140000)], "a")
         self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
-        self.assertIn('"systemMessage"', self.run_hook(event="Stop", extra=extra))
+        self.assertIn('"decision": "block"', self.run_hook(event="Stop", extra=extra))
 
 
 class FlooredCompaction(HookCase):

@@ -1059,13 +1059,17 @@ whose initial prose avoids native CLI subcommands such as Codex's `resume`; an i
 Promise guard (#180), every mode, hook registration unchanged: if this
 session's threshold latch exists and no checkpoint matches its trigger, or only
 the advisory latch exists and the session has published no checkpoint since
-that latch was written, the guard reminds and warns and never blocks (#184).
+that latch was written, the guard reminds, blocks and warns (#186).
 The band is the observed occupancy minus the latch's first field, divided by
 10000. Per band, one PostToolUse or UserPromptSubmit `additionalContext`
-reminder (Claude and Codex) tells the agent to save a checkpoint before any
-clearing and never to claim a handoff without a saved path; per band, one Stop
-`systemMessage` (Claude only, `stop_hook_active` excluded) warns the user not to
-clear the session yet. Each is a one-shot O_EXCL marker per band
+reminder (Claude and Codex, from band 1: band 0 is the notice itself) tells the
+agent to save a checkpoint before any clearing and never to claim a handoff
+without a saved path. Per band, one Stop output (Claude only; Codex: reminder
+only) carries `{"decision": "block"}`, whose reason requires a real save or a
+plain statement that nothing was saved and why, plus a `systemMessage` warning
+the user not to clear the session yet. The reply is never parsed and lifts
+nothing; only a save does. A band first reached on a `stop_hook_active` stop
+gets the warning without the block, so the guard never loops. Each is a one-shot O_EXCL marker per band
 (`.reminded.<n>`, `.nudged.<n>`), so a band never repeats; re-arming a latch
 after compaction clears every marker. It reads no message text.
 An unrelated live task takes precedence and leaves checkpoints open.
