@@ -1055,6 +1055,14 @@ notice routes to the bundled AgentsRoom restart procedure. After a ready preflig
 the agent ends with `agents_restart` using the returned exact `restart_prompt`,
 whose initial prose avoids native CLI subcommands such as Codex's `resume`; an inherited
 `TMUX_PANE` is ignored there, and the tmux Stop hook never types into it.
+
+Promise guard (#180), every mode, hook registration unchanged: if this
+session's threshold latch exists and no checkpoint matches its trigger, or only
+the advisory latch exists and the session has published no checkpoint, the Stop
+hook returns `{"decision": "block"}` once per latch. The reason tells the agent
+to save, or to say that nothing was saved, before claiming the work continues
+after a handoff. It reads no message text. `stop_hook_active` and non-Claude
+agents are never blocked.
 An unrelated live task takes precedence and leaves checkpoints open.
 
 Exact retrieval/resume commands, topics and paths route without a model call.
@@ -1241,7 +1249,13 @@ Retrieval caches delivery metadata without claiming or mutating the checkpoint.
    match this terminal; an untagged one must match the resolved session. A
    foreign readable name returns `ask`/`foreign_only` with candidates and no
    execution authority; the user must explicitly select its exact path or
-   kebab-case topic. Without a target, one open checkpoint owned by this
+   kebab-case topic. When no target is given and every open checkpoint is
+   foreign, `ask`/`foreign_only` also returns `target.terminal_latest`
+   (`path`, `topic`, `ended`, `status`, `description`): the newest
+   checkpoint this terminal wrote, in any status, as recovery evidence only.
+   It is never selected or resumed. Under AgentsRoom
+   (`AGENTSROOM_AGENT_ID` set), `target.recovery_hint` adds that the tab's
+   open assignments (`assignments_mine`) are the next place to look (#180). Without a target, one open checkpoint owned by this
    terminal is selected (`owned`). Several give `ask`/`target_ambiguous` by
    default; with the `owned_selection` setting `"newest"` (string, from
    `HANDOFF_OWNED_SELECTION` or `~/.context-watch/thresholds.json`; a project

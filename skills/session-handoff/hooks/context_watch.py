@@ -10,8 +10,10 @@ session-handoff skill. Any cost savings are a logged byproduct (see analytics),
 not the objective.
 
 Hook events: PostToolUse + UserPromptSubmit (threshold watch), SessionStart
-(open-handoff announcer, see handoff_ledger.py), Stop (fully-automatic mode only:
-clears a tmux-hosted session once its handoff is written).
+(open-handoff announcer, see handoff_ledger.py), Stop (every mode: blocks a turn
+once when a context-watch notice, advisory included, fired and this session has
+no published checkpoint (#180); fully-automatic mode only: clears a tmux-hosted
+session once its handoff is written).
 
 Occupancy measure (what the window holds heading into the NEXT call):
   Claude Code: last main-chain usage -> input_tokens + cache_creation_input_tokens
@@ -1077,26 +1079,49 @@ def handle_session_start(evt, agent):
 
 # ---------------------------------------------------------------- stop nudge
 
+def session_checkpoint_published(cwd, session):
+    """Any validated checkpoint this session published (#180 advisory guard)."""
+    if not session:
+        return False
+    try:
+        return any(r['fm'].get('session_id') == session and r['fm'].get('checkpoint_id') and not r['problems']
+                   and r['fm'].get('status') != 'unpublished'
+                   for r in _ledger()._records(handoff_identity.project_root(cwd)))
+    except OSError:
+        return False
+
+
 def nudge_unwritten_handoff(evt):
-    """Warn mode: the trigger fired this session, the turn is ending, and no
-    handoff was written since. Block the stop once so the agent writes it now
-    instead of the notice being lost with the turn. Claude only (Codex Stop
-    hooks cannot block)."""
+    """Every mode (#180): a context-watch notice (the threshold trigger or the
+    earlier advisory) fired this session, the turn is ending, and no checkpoint
+    was published since. Block the stop once so the agent saves now, or drops
+    any claim that the work continues later, instead of promising a handoff that
+    does not exist. Claude only (Codex Stop hooks cannot block)."""
     if evt.get("stop_hook_active") or detect_agent(evt, []) != "claude":
         return
     key = session_key(evt)
     latch = latch_path(key) if key else None
-    if not latch or not os.path.exists(latch):
+    if not latch:
         return
     cwd = evt.get("cwd") or os.getcwd()
-    if handoff_written_since(cwd, key):
+    if os.path.exists(latch):
+        if handoff_written_since(cwd, key):
+            return
+        marker = latch + ".nudged"
+    elif os.path.exists(latch + ".advised"):
+        if session_checkpoint_published(cwd, key):
+            return
+        marker = latch + ".advised.nudged"
+    else:
         return
     try:
-        os.close(os.open(latch + ".nudged", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except OSError:
         return  # nudged once already, or unwritable temp dir
     emit_output({"decision": "block", "reason": (
-        "[context-watch] No published checkpoint matches this session's trigger. "
+        "[context-watch] No published checkpoint matches this session's context-watch notice. "
+        "Do not tell the user the work continues after a handoff, in a next session or with a successor "
+        "unless a checkpoint exists: save one now, or say plainly that nothing was saved. "
         "For the JSON draft format run %s. Preserve the draft and publish with %s; stop after outcome saved. "
         "If blocked, report the failed location and keep this session; do not clear. "
         "Searched project: %s."
@@ -1229,8 +1254,7 @@ def handle_stop(evt):
             if claim_once(evt, '.automatic-paused'):
                 emit_output({'systemMessage': '[context-watch] Automatic handoff paused. Checkpoint remains open at %s. Report the diagnostics; a fresh session can explicitly continue the handoff after addressing re-entry overhead or the restart budget.' % paused[-1]['path']})
             sys.exit(0)
-    if not auto_mode_on():
-        nudge_unwritten_handoff(evt)
+    nudge_unwritten_handoff(evt)  # every mode (#180)
     if not pane and not env("HANDOFF_AUTO_RUNNER") and (auto_mode_on() or env("AGENTSROOM_AGENT_ID")):
         announce_manual_clear(evt)
     if not auto_mode_on() or not pane or env("HANDOFF_AUTO_RUNNER"):

@@ -476,6 +476,11 @@ warning at 100k): finish the current slice and prepare notes, without saving or
 restarting. It fires once per window, re-arms after compaction, and `0` turns it
 off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
+Once the early warning or the threshold notice has fired, the Stop hook
+blocks the end of a turn once, in every mode, while this session has published
+no checkpoint (Claude only; Codex Stop hooks cannot block). The agent then saves,
+or says plainly that nothing was saved, instead of promising a handoff that does
+not exist (#180).
 
 `"resume_pointer_policy"` (`"ask"` default, `"latest-owned"` or `"manual"`) decides
 what a fresh session does when several restart checkpoints for its terminal
@@ -1072,7 +1077,10 @@ that ask the caller to act (`needs-confirmation`, `needs-context`,
   readable topic or unique description match proceeds only when owned by this
   terminal (or, for an untagged checkpoint, this session). A foreign readable
   name gives `ask`/`foreign_only`; name its exact path or kebab-case topic to
-  select it explicitly.
+  select it explicitly. When only foreign checkpoints are open, that answer
+  also carries `target.terminal_latest`, the newest checkpoint this terminal
+  wrote (any status), and in AgentsRoom a `recovery_hint` that points to the
+  tab's open assignments. Both are evidence; neither is ever adopted.
   Unmatched non-path prose such as `resume later` gives
   `ask`/`lifecycle_unrecognised`, without selecting a target.
   A bare readable choice is also accepted with an explicit `resume`/`retrieve`
