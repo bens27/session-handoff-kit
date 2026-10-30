@@ -327,7 +327,8 @@ class MandatoryGate(unittest.TestCase):
                 cwd=str(self.project), transcript_path=str(self.transcript))),
             text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['decision'], 'block')
+        self.assertNotIn('decision', json.loads(result.stdout))  # #184: the guard warns, never blocks
+        self.assertIn('systemMessage', json.loads(result.stdout))
 
     def test_project_v3_auto_cannot_grant_continuation(self):
         self.config(auto=True)

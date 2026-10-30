@@ -1148,9 +1148,11 @@ def claim_band(notice, kind, band):
 
 def remind_unwritten_handoff(agent, evt, event_name, cwd, key, occupancy):
     """#184: while nothing was saved since this session's notice, instruct the
-    agent once per +10k-token band past it. Never blocks; reads no message text."""
+    agent once per further +10k-token band past it. Never blocks; reads no message text."""
     notice = unsaved_notice(cwd, key)
-    if not notice or not claim_band(notice, "reminded", nudge_band(cwd, key, notice, occupancy)):
+    band = nudge_band(cwd, key, notice, occupancy) if notice else 0
+    # Band 0 is the notice itself: it already carries the instruction.
+    if band < 1 or not claim_band(notice, "reminded", band):
         return
     emit(agent, event_name, (
         "[context-watch] This session has a context-watch notice and no checkpoint saved since it "

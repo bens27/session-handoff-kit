@@ -127,12 +127,12 @@ class PromiseGuard(HookCase):
         self.write([claude_call(20000)])
         self.run_hook(extra=self.EXTRA)
         self.assertIn("Early warning", self.call(105000))
-        first = self.call(106000)
+        self.assertEqual(self.call(106000), "")  # band 0: the notice itself
+        first = self.call(116000)
         self.assertIn("save a checkpoint before", first.lower())
         self.assertIn("never", first.lower())
-        self.assertEqual(self.call(107000), "")  # same band: once
-        self.assertIn("checkpoint", self.call(116000))  # next band
-        self.assertEqual(self.call(117000), "")
+        self.assertEqual(self.call(117000), "")  # same band: once
+        self.assertIn("checkpoint", self.call(126000))  # next band
         out = self.stop(**self.EXTRA)
         self.assertNotIn('"decision"', out)
         self.assertWarns(out)
@@ -142,7 +142,7 @@ class PromiseGuard(HookCase):
         self.run_hook(extra=self.EXTRA)
         self.assertIn("Early warning", self.call(105000))
         self.save()
-        for tokens in (106000, 116000, 126000):
+        for tokens in (116000, 126000):
             self.assertEqual(self.call(tokens), "")
         self.assertEqual(self.stop(**self.EXTRA), "")
 
@@ -151,17 +151,17 @@ class PromiseGuard(HookCase):
         self.write([claude_call(20000)])
         self.run_hook(extra=self.EXTRA)
         self.assertIn("Early warning", self.call(105000))
-        self.assertIn("checkpoint", self.call(106000))
+        self.assertIn("checkpoint", self.call(116000))
         self.assertWarns(self.stop(**self.EXTRA))
         self.call(20000)  # compaction
         self.assertIn("Early warning", self.call(105000))
-        self.assertIn("checkpoint", self.call(106000))
+        self.assertIn("checkpoint", self.call(116000))
         self.assertWarns(self.stop(**self.EXTRA))
 
     def test_codex_gets_the_reminder_on_post_tool_use(self):
         self.codex = True
         self.advise()
-        self.write([codex_count(104000, 104000)])
+        self.write([codex_count(114000, 114000)])
         self.assertIn("Save a checkpoint before", self.context(self.run_hook(extra=self.EXTRA)))
         self.assertEqual(self.context(self.run_hook(extra=self.EXTRA)), "")
 

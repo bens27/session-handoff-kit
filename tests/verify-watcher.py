@@ -191,13 +191,14 @@ def main():
     #    since the first AND occupancy 25% of the threshold past the first
     #    (and >= 125%); then never again until a compaction re-arms it.
     p2 = run_hook(evt, dict(envx, CONTEXT_WATCH_TOKENS="120000"))  # 137k < 150k
-    check("latch-fires-once", p2.returncode == 0 and p2.stdout.strip() == "",
+    no_notice = lambda out: "context-pressure" not in out and "SECOND NOTICE" not in out  # #184 reminders allowed
+    check("latch-fires-once", p2.returncode == 0 and no_notice(p2.stdout),
           "stdout=%r" % p2.stdout[:200])
     # Parallel tool results land before the model saw the first notice: the
     # transcript usage is unchanged, so no second notice even far past 125%.
     p2p = run_hook(dict(evt, hook_event_name="UserPromptSubmit", prompt="word " * 40000),
                    dict(envx, CONTEXT_WATCH_PENDING="1"))  # 137k + ~50k pending
-    check("latch-no-second-before-model-turn", p2p.stdout.strip() == "",
+    check("latch-no-second-before-model-turn", no_notice(p2p.stdout),
           "stdout=%r" % p2p.stdout[:200])
     grown = os.path.join(tmp, "claude-grown.jsonl")
     with open(grown, "w") as f:
@@ -207,7 +208,7 @@ def main():
                                                   "cache_read_input_tokens": 125000,
                                                   "output_tokens": 2000}}}) + "\n")
     p2g = run_hook(dict(evt, transcript_path=grown), envx)  # 157k: turn taken, < 137k+25k
-    check("latch-no-second-until-quarter-past-first", p2g.stdout.strip() == "",
+    check("latch-no-second-until-quarter-past-first", no_notice(p2g.stdout),
           "stdout=%r" % p2g.stdout[:200])
     with open(grown, "a") as f:
         f.write(json.dumps({"message": {"model": "claude-opus-4",
@@ -619,7 +620,7 @@ def main():
           and "type /clear" not in p_auto_t.stdout, "stdout=%r" % p_auto_t.stdout[:500])
 
     # 13b. Stop nudge (warn mode): the trigger fired, the turn ends, no handoff
-    #      written -> block the stop once with a reminder; never twice, never
+    #      written -> warn at stop once (#184: never block); never twice, never
     #      after the handoff exists, never for a floor note, never for Codex.
     proj_n = os.path.join(tmp, "proj-nudge")
     os.makedirs(os.path.join(proj_n, ".handoffs"))
@@ -631,8 +632,8 @@ def main():
     with open(os.path.join(latchdir, "context-watch-%s.fired" % sid_n), "w") as f:
         f.write("150000/130000/140000\n")
     p_n = run_hook(nudge_evt, env_n)
-    check("stop-nudge-blocks-once", '"decision": "block"' in p_n.stdout
-          and "save --session" in p_n.stdout, "stdout=%r" % p_n.stdout[:300])
+    check("stop-nudge-warns-once", '"systemMessage"' in p_n.stdout
+          and '"decision"' not in p_n.stdout, "stdout=%r" % p_n.stdout[:300])
     p_n = run_hook(nudge_evt, env_n)
     check("stop-nudge-not-twice", p_n.stdout.strip() == "", "stdout=%r" % p_n.stdout[:200])
     sid_n2 = "verify-" + uuid.uuid4().hex[:8]
@@ -672,7 +673,7 @@ def main():
     checkpoint(proj_wt, sid_wt, env_n)
     p_n = run_hook(dict(nudge_evt, session_id=sid_wt, cwd=os.path.join(wt, ".handoffs")), env_n)
     check("stop-worktree-rejects-main-checkout-handoff",
-          "No published checkpoint matches" in p_n.stdout and wt in p_n.stdout,
+          "published no checkpoint" in p_n.stdout and wt in p_n.stdout,
           "stdout=%r" % p_n.stdout[:300])
     checkpoint(wt, sid_wt, env_n)
     p_n = run_hook(dict(nudge_evt, session_id=sid_wt, cwd=os.path.join(wt, ".handoffs")), env_n)
