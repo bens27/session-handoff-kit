@@ -9,6 +9,9 @@ is needed, `python3 <ledger> session` returns the current facts without source r
 Use the host's actual session ID when available. Generate one UUID and pass it as
 `--session` only if the ledger reports no recorded session. A differing explicit
 ID cannot override a hook-recorded identity.
+Never tell the user that work continues after a handoff, in a next session or
+with a successor until `outcome` is `saved`; if the save fails, say nothing was
+saved. After a context-watch notice with no checkpoint since, each +10k tokens brings a reminder and one Stop block (every unsaved Stop also warns the user): really save, or state plainly that nothing was saved and why. Only a save ends it.
 For installation/customization, read `../reference.md`; AgentsRoom wind-down uses
 its restart section as directed below.
 

@@ -473,7 +473,15 @@ def select_target(root, request, session):
     if len(mine) > 1:
         return dict(candidates=[_candidate(i) for i in mine]), ('ask', 'target_ambiguous', 'Several of this session\'s checkpoints are open; ask the user which one.')
     if found['total']:
-        return dict(candidates=[_candidate(i) for i in found['items']]), (
+        info = dict(candidates=[_candidate(i) for i in found['items']])
+        latest = ledger.terminal_latest(root, protocol.terminal_id())
+        if latest:  # #180: this tab's own trail, shown as evidence, never adopted
+            info['terminal_latest'] = latest
+            if os.environ.get('AGENTSROOM_AGENT_ID'):
+                info['recovery_hint'] = ("This terminal's latest checkpoint is %s. If it does not cover the "
+                                         "work, call assignments_mine for this tab's open assignments before "
+                                         "asking the user." % latest['status'])
+        return info, (
             'ask', 'foreign_only', 'Open checkpoints belong to other sessions; never adopt them without the user naming one.')
     code = {'claimed': 'claimed_elsewhere', 'stale': 'stale_only'}.get(found['outcome'], 'no_open_handoff')
     return None, ('ask' if code == 'stale_only' else 'none', code, found['action'])

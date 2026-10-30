@@ -573,6 +573,30 @@ class TargetSelectionTests(Base):
         self.assertEqual(r['next_action']['command'], '')
         self.assertFalse(r['authorized_to_execute'])
 
+    def test_foreign_only_surfaces_this_terminals_latest_checkpoint_as_evidence(self):
+        # #180: a /clear'd tab whose own checkpoint was already resumed must see it,
+        # labelled closed, next to the foreign candidates, and never adopt either.
+        own = self.save(topic='mine', session='sess-old', terminal='term-a')
+        self.cli('resume', own, '--session', 'sess-old', terminal='term-a')
+        foreign = self.save(topic='theirs', session='sess-b', terminal='term-b')
+        self.record_hook_session('sess-a')
+        r = self.dispatch(prompt='continue the handoff', env=dict(AGENTSROOM_AGENT_ID='term-a'))
+        self.assertEqual((r['outcome'], r['code']), ('ask', 'foreign_only'))
+        self.assertFalse(r['authorized_to_execute'])
+        self.assertEqual(r['next_action']['command'], '')
+        self.assertEqual([c['path'] for c in r['target']['candidates']], [foreign])
+        latest = r['target']['terminal_latest']
+        self.assertEqual((latest['path'], latest['status']), (own, 'resumed'))
+        self.assertIn('assignments_mine', r['target']['recovery_hint'])
+
+    def test_foreign_only_without_terminal_history_adds_no_evidence(self):
+        self.save(session='sess-b', terminal='term-b')
+        self.record_hook_session('sess-a')
+        r = self.dispatch(prompt='continue the handoff')
+        self.assertEqual(r['code'], 'foreign_only')
+        self.assertNotIn('terminal_latest', r['target'])
+        self.assertNotIn('recovery_hint', r['target'])
+
     def test_many_owned_candidates_ask_with_a_deterministic_list(self):
         self.record_hook_session('sess-a')
         a = self.save(topic='alpha')

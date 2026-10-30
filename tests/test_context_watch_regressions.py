@@ -102,7 +102,8 @@ class NormalPolicyUnchanged(HookCase):
         self.assertEqual(self.run_hook(event="UserPromptSubmit", extra=extra), "")
         for tokens in (142000, 150000, 160000):
             self.write([claude_call(tokens)], "a")
-            self.assertEqual(self.run_hook(extra=extra), "", tokens)
+            # The notice never repeats; past +10k unsaved only the #184 reminder may appear.
+            self.assertNotIn("context-pressure", self.run_hook(extra=extra), tokens)
 
     def test_second_notice_and_compaction_rearm(self):
         self.write([claude_call(20000), claude_call(140000)])
@@ -122,8 +123,12 @@ class NormalPolicyUnchanged(HookCase):
         extra = {"CONTEXT_WATCH_THINKING": "0"}
         self.write([claude_call(20000), claude_call(140000)])
         self.assertIn("reason: context-pressure", self.context(self.run_hook(extra=extra)))
-        self.assertIn('"decision": "block"', self.run_hook(event="Stop", extra=extra))
-        self.assertEqual(self.run_hook(event="Stop", extra=extra), "")  # nudged once
+        out = self.run_hook(event="Stop", extra=extra)  # #186: blocks and warns
+        self.assertIn('"decision": "block"', out)
+        self.assertIn('"systemMessage"', out)
+        again = self.run_hook(event="Stop", extra=extra)  # S1: blocked once, still warns
+        self.assertIn('"systemMessage"', again)
+        self.assertNotIn('"decision"', again)
         self.write([claude_call(20000)], "a")  # compaction
         self.assertEqual(self.run_hook(extra=extra), "")  # re-armed
         self.write([claude_call(140000)], "a")

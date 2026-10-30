@@ -326,6 +326,22 @@ def scan(root, max_age_days=14, stats=None):
     return found
 
 
+def terminal_latest(root, terminal):
+    """Newest checkpoint written by this terminal, any status, or None (#180).
+
+    Recovery evidence only: callers show it and never resume it on their own."""
+    if not terminal:
+        return None
+    mine = [r for r in _records(project_root(root))
+            if r["fm"].get("checkpoint_id") and r["fm"].get("terminal") == terminal]
+    if not mine:
+        return None
+    r = max(mine, key=lambda r: (r["ended"], r["path"]))
+    return dict(path=r["path"], topic=r["topic"], ended=r["ended"][:64],
+                status=r["fm"].get("status") or "open",
+                description=(r["fm"].get("description") or "")[:240])
+
+
 def _topic_for_path(path, legacy=None):
     fm = _read_fm(path)
     _, name_topic = _name_parts(path)
