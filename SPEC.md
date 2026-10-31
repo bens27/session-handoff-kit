@@ -1122,9 +1122,11 @@ whose initial prose avoids native CLI subcommands such as Codex's `resume`; an i
 `TMUX_PANE` is ignored there, and the tmux Stop hook never types into it.
 
 Promise guard (#180), every mode, hook registration unchanged: if this
-session's threshold latch exists and no checkpoint matches its trigger, or only
-the advisory latch exists and the session has published no checkpoint since
-that latch was written, the guard reminds, blocks and warns (#186).
+session's threshold latch exists and no checkpoint matches its trigger, the
+guard reminds, blocks and warns (#186). If only the advisory latch exists and
+the session has published no checkpoint since that latch was written, the guard
+only warns: every unsaved Stop carries the user `systemMessage`, with no
+reminder and no block (#208).
 The band is the observed occupancy minus the latch's first field, divided by
 10000. Per band, one PostToolUse or UserPromptSubmit `additionalContext`
 reminder (Claude and Codex, from band 1: band 0 is the notice itself) tells the

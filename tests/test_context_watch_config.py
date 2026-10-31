@@ -230,9 +230,9 @@ class AdvisoryWindow(Case):
         self.assertIn("Early warning", first)
         self.assertIn("advisory point 100,000", first)
         self.assertNotIn("Publish with", first)
-        again = self.at(110000)  # the notice never repeats; +10k unsaved brings the #184 reminder
+        again = self.at(110000)  # the notice never repeats; #208: no save reminder after the advisory alone
         self.assertNotIn("Early warning", again, "duplicate callback")
-        self.assertIn("Save a checkpoint before", again)
+        self.assertNotIn("Save a checkpoint before", again)
         self.assertIn("handoff threshold", self.at(130000))
 
     def test_advisory_is_an_instruction_to_act_not_a_stop_signal(self):

@@ -1151,6 +1151,8 @@ def remind_unwritten_handoff(agent, evt, event_name, cwd, key, occupancy):
     agent once per further +10k-token band past it (Claude and Codex). The block
     lives in nudge_unwritten_handoff; this never blocks and reads no message text."""
     notice = unsaved_notice(cwd, key)
+    if notice and notice.endswith(".advised"):
+        return  # #208: the advisory arms the user warning only, never a save reminder
     band = nudge_band(cwd, key, notice, occupancy) if notice else 0
     # Band 0 is the notice itself: it already carries the instruction.
     if band < 1 or not claim_band(notice, "reminded", band):
@@ -1186,7 +1188,8 @@ def nudge_unwritten_handoff(evt):
         "since. Do not clear it yet: clearing now would lose this work's context. Ask the agent to "
         "save a checkpoint first; any handoff it mentions without a saved path does not exist. "
         "Searched project: %s." % handoff_identity.project_root(cwd))}
-    if not evt.get("stop_hook_active") and claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
+    advisory_only = notice.endswith(".advised")  # #208: warn only, no block, below the threshold
+    if not advisory_only and not evt.get("stop_hook_active") and claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
         out.update(decision="block", reason=(
             "[context-watch] No checkpoint has been published since this session's context-watch notice. "
             "Before ending this turn, do one of two things: really save a checkpoint now, or state plainly "

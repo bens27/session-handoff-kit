@@ -478,9 +478,10 @@ not to save yet: the threshold notice says when. The hook itself never saves or
 restarts. It fires once per window, re-arms after compaction, and `0` turns it
 off. A malformed value (negative, non-integer, boolean) disables it with one
 diagnostic; it is never a model threshold.
-Once the early warning or the threshold notice has fired, and while this
-session has published no checkpoint since that notice, the kit reminds, blocks
-and warns (#180, #186). Once per further +10k-token band past the notice, the
+Once the early warning has fired, and while this session has published no
+checkpoint since, every turn that ends unsaved only shows you a warning not to
+clear the session yet (#208). Once the threshold notice has fired, and while no
+checkpoint matches it, the kit reminds, blocks and warns (#180, #186). Once per further +10k-token band past the notice, the
 agent's next prompt or tool call carries an instruction to save a checkpoint
 before any clearing and never to claim a handoff without a saved path. Every
 turn that ends unsaved shows you a warning not to clear the session yet. Once
