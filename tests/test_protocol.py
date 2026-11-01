@@ -58,6 +58,113 @@ class ProtocolTests(unittest.TestCase):
         return self.cli('save', '.', '--session', 'one', '--request-id', request,
                         input=json.dumps(doc))
 
+    def test_prepare_reports_requested_path_and_redirect_without_changing_resolution(self):
+        first = json.loads(self.save().stdout)['path']
+        second = json.loads(self.save(request='checkpoint-2', predecessor=first).stdout)['path']
+        for target, redirected in ((first, True), (second, False), ('work', False)):
+            with self.subTest(target=target):
+                result = json.loads(self.cli('prepare', target, '--session', 'one',
+                                             '--fields', 'outcome').stdout)
+                self.assertEqual(result['outcome'], 'retrieved')
+                self.assertEqual(result['path'], second)
+                self.assertEqual(result['requested_path'], target)
+                self.assertIs(result['redirected'], redirected)
+
+    def test_prepare_exact_refuses_redirect_without_claim_or_receipt(self):
+        first = json.loads(self.save().stdout)['path']
+        head = json.loads(self.save(request='checkpoint-2', predecessor=first).stdout)['path']
+        before = {p.relative_to(self.root): p.read_bytes()
+                  for p in self.root.rglob('*') if p.is_file()}
+        for execution in ([], ['--execute']):
+            with self.subTest(execution=execution):
+                proc = self.cli('prepare', first, '--session', 'two', '--exact',
+                                '--fields', 'outcome', *execution, ok=False)
+                self.assertEqual(proc.returncode, 1)
+                result = json.loads(proc.stdout)
+                self.assertEqual(result['outcome'], 'redirected')
+                self.assertEqual(result['requested_path'], first)
+                self.assertEqual(result['path'], head)
+                self.assertIs(result['redirected'], True)
+                self.assertNotIn('delivery_receipt', result)
+                self.assertNotIn('body', result)
+                after = {p.relative_to(self.root): p.read_bytes()
+                         for p in self.root.rglob('*') if p.is_file()}
+                self.assertEqual(after, before)
+        # Refusal left the head available to another session.
+        result = json.loads(self.cli('prepare', head, '--session', 'three',
+                                     '--exact', '--execute').stdout)
+        self.assertEqual(result['outcome'], 'prepared')
+        self.assertIs(result['redirected'], False)
+
+    def test_prepare_selection_metadata_survives_absence_dependency_failure_and_closed_head(self):
+        absent = json.loads(self.cli('prepare', 'missing', '--session', 'one',
+                                     '--fields', 'outcome').stdout)
+        self.assertEqual(absent['outcome'], 'none')
+        self.assertEqual(absent['requested_path'], 'missing')
+        self.assertIs(absent['redirected'], False)
+        first = json.loads(self.save().stdout)['path']
+        head = json.loads(self.save(request='checkpoint-2', predecessor=first,
+                                    references=['missing.txt']).stdout)['path']
+        failed = json.loads(self.cli('prepare', first, '--session', 'one',
+                                     '--fields', 'outcome', ok=False).stdout)
+        self.assertEqual(failed['outcome'], 'needs-context')
+        self.assertEqual(failed['requested_path'], first)
+        self.assertIs(failed['redirected'], True)
+        self.assertEqual(failed['path'], head)
+        (self.root / 'missing.txt').write_text('Restored dependency.')
+        self.cli('resume', head, '--session', 'one')
+        closed = json.loads(self.cli('prepare', first, '--session', 'two', '--exact',
+                                     '--fields', 'outcome').stdout)
+        self.assertEqual(closed['outcome'], 'closed')
+        self.assertEqual(closed['requested_path'], first)
+        self.assertIs(closed['redirected'], True)
+        self.assertEqual(closed['path'], head)
+
+    def test_prepare_exact_accepts_topic_relative_path_and_canonical_alias(self):
+        head = json.loads(self.save().stdout)['path']
+        alias = self.root / 'alias.md'
+        alias.symlink_to(head)
+        for target in ('work', str(Path(head).relative_to(self.root.resolve())), str(alias)):
+            with self.subTest(target=target):
+                result = json.loads(self.cli('prepare', target, '--session', 'one',
+                                             '--exact', '--fields', 'outcome').stdout)
+                self.assertEqual(result['outcome'], 'retrieved')
+                self.assertEqual(result['requested_path'], target)
+                self.assertIs(result['redirected'], False)
+                self.assertEqual(result['path'], head)
+
+    def test_prepare_exact_refuses_unpublished_redirect_but_default_stays_incomplete(self):
+        first = json.loads(self.save().stdout)['path']
+        head = json.loads(self.save(request='checkpoint-2', predecessor=first).stdout)['path']
+        Path(head + '.published').unlink()
+        for options, expected in (([], 'incomplete'), (['--exact'], 'redirected')):
+            with self.subTest(options=options):
+                result = json.loads(self.cli('prepare', first, '--session', 'two',
+                                             '--fields', 'outcome', *options, ok=False).stdout)
+                self.assertEqual(result['outcome'], expected)
+                self.assertEqual(result['requested_path'], first)
+                self.assertIs(result['redirected'], True)
+                self.assertEqual(result['path'], head)
+        result = json.loads(self.cli('prepare', head, '--session', 'two', '--exact').stdout)
+        self.assertEqual(result['outcome'], 'incomplete')
+        self.assertIs(result['redirected'], False)
+
+    def test_prepare_cli_failure_still_reports_requested_target(self):
+        target = 'work'
+        result = json.loads(self.cli('prepare', target, '--session', 'one',
+                                     '--catalog', 'missing.json', '--fields', 'outcome', ok=False).stdout)
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertEqual(result['requested_path'], target)
+        self.assertIs(result['redirected'], False)
+
+    def test_prepare_without_session_still_reports_requested_target(self):
+        proc = self.cli('prepare', 'missing', '--fields', 'outcome', ok=False)
+        self.assertEqual(proc.returncode, 1)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertEqual(result['requested_path'], 'missing')
+        self.assertIs(result['redirected'], False)
+
     def test_agentsroom_resume_reads_inbox_before_saved_work(self):
         self.env['AGENTSROOM_AGENT_ID'] = 'terminal-a'
         saved = json.loads(self.save().stdout)

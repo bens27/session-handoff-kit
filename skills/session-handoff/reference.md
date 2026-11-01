@@ -125,7 +125,23 @@ previously misplaced in main are not moved: intentionally inspect/continue them
 with protocol `prepare`/`resume --session ID` and explicit `--root <main>`.
 Holds are shared controls, not isolated checkpoint state; see Dispatcher below.
 
-`prepare TOPIC --session ID` retrieves only. `--execute` claims for preparation;
+`prepare TOPIC-OR-PATH --session ID` retrieves the authoritative newest checkpoint
+for that topic, including when the input is an older checkpoint path. Every
+prepare JSON result includes `requested_path` (literal input) and boolean
+`redirected`, even with `--fields` or on failure. `redirected` is true only when
+an existing file input resolves to a different canonical checkpoint path; topic
+inputs, relative paths or symlinks naming the same checkpoint, and cases where
+no redirect has been established are false. The resolved authoritative `path`
+also survives `--fields` on refusals.
+
+Add `--exact` to refuse a redirect: outcome `redirected`, exit 1, both paths,
+no body, claim, preparation receipt or delivery cache. Inspect the reported head
+or omit `--exact` to follow it. Closed/transferred/superseded/retired heads keep
+outcome `closed` with or without `--exact`. Unpublished heads stay `incomplete`
+by default or on an exact head selection; redirects to them are refused with
+`--exact`. Topic selection still chooses the head. `adopt` behavior is unchanged.
+
+`--execute` claims for preparation;
 `verify PATH --session ID` runs the recorded check; `acknowledge PATH --session ID`
 marks transfer only after successful preparation. Required dependencies are
 fingerprinted; changed files require preparation again. `release PATH --owner ID`

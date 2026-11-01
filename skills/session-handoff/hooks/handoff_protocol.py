@@ -1386,25 +1386,31 @@ def _retired_action(path):
             'If work remains, save a new checkpoint.' % ticket)
 
 
-def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None):
+def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None, exact=False):
     import time
     root = handoff_identity.project_root(root)
+    selection = dict(requested_path=str(path), redirected=False)
     errors = []
     ledger._records(root, errors)
     if errors:
-        return dict(outcome='blocked', errors=errors[:5], action='Restore read access before preparing; authoritative state may be hidden.')
+        return dict(**selection, outcome='blocked', errors=errors[:5], action='Restore read access before preparing; authoritative state may be hidden.')
     requested = path
     resolved = ledger.resolve(path, root)
     path = resolved['authoritative']
     if not path:
-        return dict(outcome='none', action='No saved handoff matches the requested target %r. Use lookup only to select different saved work explicitly; native conversation recovery is independent.' % str(requested)[:200])
-    if resolved['chain'][-1]['status'] == 'unpublished':
+        return dict(**selection, outcome='none', action='No saved handoff matches the requested target %r. Use lookup only to select different saved work explicitly; native conversation recovery is independent.' % str(requested)[:200])
+    redirected = os.path.isfile(requested) and os.path.realpath(requested) != os.path.realpath(path)
+    selection.update(path=path, redirected=redirected)
+    status = resolved['chain'][-1]['status']
+    if status == 'retired':
+        return dict(**selection, outcome='closed', action=_retired_action(path))
+    if status not in ('open', 'unpublished'):
+        return dict(**selection, outcome='closed', action='This topic is already transferred or closed. Use history for inspection; do not adopt it.')
+    if exact and redirected:
+        return dict(**selection, outcome='redirected', action='The requested checkpoint resolves to a different authoritative checkpoint. Inspect that path or omit --exact to follow it.')
+    if status == 'unpublished':
         recovery = publication_recovery(root, path)
-        return dict(outcome='incomplete', path=path, recovery=recovery, action=recovery['text'])
-    if resolved['chain'][-1]['status'] == 'retired':
-        return dict(outcome='closed', path=path, action=_retired_action(path))
-    if resolved['chain'][-1]['status'] != 'open':
-        return dict(outcome='closed', action='This topic is already transferred or closed. Use history for inspection; do not adopt it.')
+        return dict(**selection, outcome='incomplete', recovery=recovery, action=recovery['text'])
     supplied = catalog is not None
     catalog = catalog if supplied else installed_catalog()
     if not isinstance(catalog, dict) or not isinstance(catalog.get('skills', {}), dict) or not isinstance(catalog.get('loaded', []), list):
@@ -1487,7 +1493,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                     omitted_skills += 1
                     continue
                 skills.append(dict(name=name, path=canonical, text=content))
-        result = dict(outcome='prepared' if execute else 'retrieved', path=path, body=body,
+        result = dict(**selection, outcome='prepared' if execute else 'retrieved', body=body,
                       references=refs, skills=skills,
                       action=('Run verify if requested, reconcile reported workspace changes, then acknowledge before executing next steps.' if execute else
                               'Report the objective and next step. Retrieval is complete; do not claim, verify, load execution skills or execute next steps without authorization.'),
@@ -1557,7 +1563,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
             result.pop('delivery_receipt', None)
         return result
     except (OSError, ValueError) as exc:
-        return dict(outcome='needs-context', action=str(exc)[:700] + ' Preserve the checkpoint. Resolve the named dependency; do not acknowledge or search unrelated history.')
+        return dict(**selection, outcome='needs-context', action=str(exc)[:700] + ' Preserve the checkpoint. Resolve the named dependency; do not acknowledge or search unrelated history.')
 
 
 def prepared_receipt(path, root, session):
@@ -2287,6 +2293,7 @@ def cli(argv):
     prepare_p.add_argument('--root', default='.')
     prepare_p.add_argument('--session', help='Default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     prepare_p.add_argument('--execute', action='store_true')
+    prepare_p.add_argument('--exact', action='store_true', help='Refuse a path redirect to a different authoritative checkpoint')
     prepare_p.add_argument('--reuse-receipt', help='Receipt from content still in this session context; omit after context loss')
     prepare_p.add_argument('--catalog', help='JSON installed skills mapping plus already-loaded canonical paths')
     prepare_p.add_argument('--budget-bytes', type=int, default=PACKAGE_BYTES, help='Recommended package size in bytes; advisory only')
@@ -2413,7 +2420,10 @@ def cli(argv):
             print('Using current host session %s instead of differing --session %s.' % (host, a.session), file=sys.stderr)
         a.session = chosen
         if not a.session and a.command != 'lookup':
-            emit_output(protocol_failure(a.command, dict(NO_SESSION)))
+            result = dict(NO_SESSION)
+            if a.command == 'prepare':
+                result.update(requested_path=a.path, redirected=False)
+            emit_output(protocol_failure(a.command, result))
             return 1
     if a.command == 'save':
         refused, root_note = redirect_save_root(a, explicit_root)
@@ -2433,7 +2443,7 @@ def cli(argv):
             result = verify(a.path, a.root, a.session, a.timeout, a.confirm_verify)
         elif a.command == 'prepare':
             catalog = load_state_json(a.catalog) if a.catalog else None
-            result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt)
+            result = prepare(a.path, a.root, a.session, a.execute, catalog, a.budget_bytes, a.reuse_receipt, a.exact)
         elif a.command == 'acknowledge':
             result = acknowledge(a.path, a.root, a.session)
         elif a.command == 'note':
@@ -2460,6 +2470,9 @@ def cli(argv):
             result = lookup(a.root, a.max_age_days, a.offset, a.topic, session=a.session, auto_close=True)
     except (OSError, ledger.ConflictError, ValueError, TypeError, KeyError) as exc:
         result = dict(outcome='blocked', action=str(exc)[:500] + '; preserve the draft/checkpoint and restore access or correct the input before retrying. Do not clear or adopt.')
+    if a.command == 'prepare':
+        result.setdefault('requested_path', a.path)
+        result.setdefault('redirected', False)
     result.setdefault('project', handoff_identity.project_root(getattr(a, 'root', '.')))  # shows where a 'none' looked
     protocol_failure(a.command, result)  # #173: retryable [+ report_to] on save/resume failures; drops the private cause
     if a.command == 'resume' and result['outcome'] == 'resumed':

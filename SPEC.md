@@ -592,9 +592,29 @@ client is included; #99 can call the pure ticket-snapshot/tag adapter, including
 the offline tag-only path. See [Review verdicts](docs/review-verdicts.md) for the
 native transition contract, input schema and persistence limits.
 
-`prepare TOPIC-OR-PATH --session ID` is read-only retrieval. With `--execute`
-it claims a validated, complete package and records a recoverable preparation
-receipt. Claims expire after two hours or can be released explicitly. Checkpoint
+`prepare TOPIC-OR-PATH --session ID` is read-only retrieval. By default it
+resolves to the topic's authoritative newest checkpoint, even when given an older
+checkpoint path. Every prepare JSON result retains `requested_path` (the literal
+input string) and `redirected` (a boolean), including under `--fields` and on
+failure. `redirected` is true when resolution establishes that an existing file
+input names a different canonical path from the authoritative checkpoint; topic
+selection and relative paths or symlink aliases naming the head are false. It is false
+when no redirect has been established (including no match or an earlier input or
+access failure). `path`, when resolved, names the authoritative checkpoint and
+also survives field projection on refusals.
+
+`--exact` refuses such a redirect with outcome `redirected` and exit status 1;
+it reports both paths without delivering a body, claiming work or writing either
+a preparation receipt or a delivery cache. Inspect the reported `path` or omit
+`--exact` to follow it. A closed, transferred, superseded or retired authoritative
+head still returns `closed`, even with `--exact`; an older open checkpoint never
+bypasses it. An unpublished head returns `incomplete` by default or when selected
+exactly, but a redirect to it is refused as `redirected` with `--exact`. Topic
+selection with `--exact` still selects the topic head. Default resolution and
+`adopt` behavior are unchanged.
+
+With `--execute` it claims a validated, complete package and records a recoverable
+preparation receipt. Claims expire after two hours or can be released explicitly. Checkpoint
 and dependency fingerprints bind preparation to the material actually delivered.
 `verify PATH --session ID` preserves pipeline failure, stores complete output in
 a log, and returns a bounded excerpt. A `verify_baseline` match is accepted only when pytest printed its

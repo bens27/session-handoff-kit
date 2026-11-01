@@ -25,7 +25,7 @@ DIAGNOSTIC_FIELDS = frozenset({
     'outcome', 'action', 'stage', 'warnings', 'errors', 'problems',
     'withheld_references', 'exit_code', 'log', 'excerpt', 'verify',
     'baseline_failures', 'new_failures', 'fixed', 'candidates', 'holder', 'note_problems',
-    'retryable', 'report_to',
+    'retryable', 'report_to', 'requested_path', 'redirected',
 })
 
 
@@ -33,6 +33,8 @@ def project_output(result, fields=None):
     """Select optional output without discarding a successful transfer's context."""
     if fields:
         keep = DIAGNOSTIC_FIELDS | {field.strip() for field in fields.split(',')}
+        if 'requested_path' in result:
+            keep |= {'path'}  # prepare selection remains inspectable on refusals too
         if result.get('outcome') in ('prepared', 'retrieved', 'resumed'):
             keep |= DELIVERY_FIELDS
         result = {key: value for key, value in result.items() if key in keep}
@@ -218,7 +220,7 @@ PROTOCOL_CODES = {
     'publication_interrupted': True,
     'blocked': False, 'conflict': False, 'invalid': False, 'incomplete': False, 'error': False,
     'needs-context': False, 'needs-original-draft': False, 'needs-confirmation': False,
-    'verification-failed': False, 'verification-timeout': False, 'timeout': False,
+    'verification-failed': False, 'verification-timeout': False, 'timeout': False, 'redirected': False,
 }
 assert not set(PROTOCOL_CODES) & set(DISPATCH_CODES)
 # Non-retryable outcomes the kit project should hear about; the rest instruct the caller.
@@ -279,7 +281,7 @@ def blocked_result(request, code, text, retryable=False, **extra):
 _EXIT_FAILURES = {
     'protocol': frozenset(('error', 'blocked', 'invalid', 'conflict', 'needs-context',
                           'needs-original-draft', 'verification-failed',
-                          'verification-timeout', 'timeout', 'needs-confirmation')),
+                          'verification-timeout', 'timeout', 'needs-confirmation', 'redirected')),
     'report': frozenset(('unavailable',)),
     'dispatch': frozenset(('blocked',)),
 }
