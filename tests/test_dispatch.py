@@ -30,6 +30,7 @@ class Base(unittest.TestCase):
         (self.root / '.handoffs').mkdir(parents=True)
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID',
+                                 'HERDR_ENV', 'HERDR_PANE_ID',
                                  'HANDOFF_SKILL_ROOTS', 'CODEX_HOME', 'HANDOFF_AUTO', 'HANDOFF_RUN_ID',
                                  'CONTEXT_WATCH_AUTORESUME', 'CONTEXT_WATCH_AUTO')}
         self.env.update(HOME=str(base), TMPDIR=str(base), CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0',

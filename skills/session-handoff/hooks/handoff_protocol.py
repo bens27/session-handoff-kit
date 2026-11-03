@@ -619,6 +619,8 @@ def _transition(root, guard=None, path=None, session=None):
                os.environ['AGENTSROOM_AGENT_ID'].strip(), AGENTSROOM_RESTART_PROMPT))
     if auto and os.environ.get('HANDOFF_RUN_ID'):
         return dict(kind='runner', action='Stop now; the auto runner starts the next session and resumes.')
+    if auto and handoff_identity.herdr_pane():
+        return dict(kind='herdr', action='Stop now; the Stop hook types /clear and resume into this Herdr pane.')
     if auto and os.environ.get('TMUX_PANE'):
         return dict(kind='tmux', action='Stop now; the Stop hook types /clear and resume into this pane.')
     if auto:

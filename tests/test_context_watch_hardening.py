@@ -87,6 +87,22 @@ class PlantedSymlinks(unittest.TestCase):
         # 310304b8 item 5: reading the counter leaves no file handle open
         self.assertEqual([str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], [])
 
+    def test_stop_types_clear_and_resume_into_the_herdr_pane(self):
+        open(self.cw.latch_path("herdr-stop"), "w").close()
+        env = {"HANDOFF_AUTO": "1", "HERDR_ENV": "1", "HERDR_PANE_ID": "w2:p3", "HERDR_BIN_PATH": "/opt/herdr",
+               "TMUX_PANE": "%inherited", "AGENTSROOM_AGENT_ID": "", "HANDOFF_AUTO_RUNNER": "",
+               "HANDOFF_TERMINAL_ID": ""}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(self.cw, "handoff_written_since", lambda *a, **k: True), \
+                mock.patch.object(self.cw.subprocess, "Popen") as popen, \
+                self.assertRaises(SystemExit):
+            self.cw.handle_stop({"session_id": "herdr-stop", "cwd": self.tmp})
+        (argv,), kwargs = popen.call_args
+        self.assertEqual((kwargs["env"]["P"], kwargs["env"]["H"]), ("w2:p3", "/opt/herdr"))
+        self.assertIn('"$H" pane send-text "$P" /clear', argv[2])
+        self.assertIn('"$H" pane send-text "$P" resume', argv[2])
+        self.assertNotIn("tmux", argv[2])
+
     def test_auto_count_path_is_collision_free_sha1(self):
         a = os.path.join(self.tmp, "a_b")
         b = os.path.join(self.tmp, "a", "b")

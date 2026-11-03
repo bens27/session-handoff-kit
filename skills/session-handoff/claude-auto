@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Claude Code with automatic checkpoint, clear, and resume in tmux."""
+"""Launch Claude Code with automatic checkpoint, clear, and resume in tmux or Herdr."""
 import argparse
 import json
 import os
@@ -28,9 +28,12 @@ def main():
     forwarded = args.claude_args
     if forwarded[:1] == ['--']:
         forwarded = forwarded[1:]
-    # AgentsRoom hosts the terminal itself; tmux is only for standalone use.
+    # AgentsRoom and Herdr host the terminal themselves; tmux is only for standalone use.
     in_agentsroom = bool(os.environ.get('AGENTSROOM_AGENT_ID'))
-    for dependency in ('claude',) if in_agentsroom else ('claude', 'tmux'):
+    in_herdr = os.environ.get('HERDR_ENV', '').strip().lower() in ('1', 'true', 'yes', 'on') \
+        and bool(os.environ.get('HERDR_PANE_ID', '').strip())
+    hosted = in_agentsroom or in_herdr
+    for dependency in ('claude',) if hosted else ('claude', 'tmux'):
         if not shutil.which(dependency):
             parser.exit(1, 'Install %s and ensure it is on PATH, then rerun claude-auto.\n' % dependency)
     skill = Path(__file__).resolve().parent
@@ -54,11 +57,11 @@ def main():
     if args.at:
         env['HANDOFF_AT'] = str(args.at)
     # Survives /clear, so the cleared session resumes this terminal's own handoff.
-    if not env.get('HANDOFF_TERMINAL_ID') and not in_agentsroom:
+    if not env.get('HANDOFF_TERMINAL_ID') and not hosted:
         env['HANDOFF_TERMINAL_ID'] = 'tmux-' + uuid.uuid4().hex
     command = [shutil.which('claude')] + forwarded
     print('Auto handoff enabled: save → clear → resume; limit %d consecutive clears. Claude permissions still apply.' % args.max_clears, flush=True)
-    if not os.environ.get('TMUX_PANE') and not in_agentsroom:
+    if not os.environ.get('TMUX_PANE') and not hosted:
         # Explicit environment survives an already-running tmux server.
         assignments = ['%s=%s' % (key, env[key]) for key in
                        ('HANDOFF_AUTO', 'HANDOFF_AUTO_MAX', 'CLAUDE_CONFIG_DIR')]
