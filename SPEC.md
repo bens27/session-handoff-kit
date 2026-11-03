@@ -2071,7 +2071,7 @@ resume --session ID [topic]. Save with --input draft.json (or --input - for stdi
 
 Oz / cloud harnesses: commit the repo-local form of everything (project
 `.claude/` hooks config, the complete hooks directory, `.context-watch.json`,
-`.handoffs/`) — a fresh managed environment has no user-level config; verify
+`.handoffs/`, after emptying `.handoffs/.gitignore`) — a fresh managed environment has no user-level config; verify
 hooks fire before trusting the threshold there.
 
 ## 13. Installation summary
@@ -2160,6 +2160,10 @@ the publication ID to its content fingerprint. Until that receipt is durable,
 lookup reports `incomplete` and automatic clearing is blocked. Retrying the same
 request completes an interrupted receipt. Legacy checkpoints without publication
 IDs remain readable. Keep receipt sidecars with generated checkpoint files.
+
+Git exclusion: publishing into a folder named `.handoffs` first creates
+`.handoffs/.gitignore` containing `*` when no such file exists (`O_EXCL`, never
+overwritten, failure ignored). Emptying the file is the durable opt-out.
 
 ### Integrity and cost safeguards (0.14.0)
 
