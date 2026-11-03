@@ -656,10 +656,26 @@ def predecessor_project(predecessor):
     return Record(predecessor, text).get('project', '')
 
 
+def keep_out_of_git(directory):
+    """Checkpoints stay out of Git by default: a .handoffs folder gets a
+    .gitignore of '*'. An existing one is never touched, so emptying it is the
+    durable opt-out; a deleted one returns on the next save. Best effort."""
+    if os.path.basename(os.path.normpath(directory)) != '.handoffs':
+        return
+    try:
+        fd = os.open(os.path.join(directory, '.gitignore'),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o644)
+    except OSError:
+        return
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write('*\n')
+
+
 def publish(path, text):
     """Exclusive atomic publication; a crash never leaves a partial .md file."""
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
+    keep_out_of_git(directory)
     fd, temporary = tempfile.mkstemp(prefix='.checkpoint-', dir=directory)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:

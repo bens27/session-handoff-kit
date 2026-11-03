@@ -920,8 +920,10 @@ closed) and continuation is authorized in user scope (`AUTORESUME` /
 project config never authorizes). Anything else is a diagnostic whose recovery
 is explicit `adopt`. Retrieved intents list only for their recorded successor
 (`mode: replay`); settled pointers are skipped silently and pruned with their
-intents. `.handoffs/` is not gitignored: committing it (for example with
-`git add -A`) makes every candidate ineligible as `git-tracked`. Startup
+intents. Each save into a `.handoffs/` folder keeps a `.handoffs/.gitignore` of `*` there, so
+checkpoints stay out of Git by default; a tracked checkpoint would be ineligible as
+`git-tracked`. To commit handoffs anyway, empty that file rather than deleting it:
+an existing file is never touched, and a missing one returns on the next save. Startup
 selection is a later slice.
 
 The agent calls the supported host tool only for `dispatch: true`, using the
