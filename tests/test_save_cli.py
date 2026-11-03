@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 LEDGER = REPO / 'skills/session-handoff/hooks/handoff_ledger.py'
 BODY = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun the parser checks.\n'
 CLEARED = ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID', 'HANDOFF_AUTO', 'HANDOFF_RUN_ID',
-           'TMUX_PANE', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME')
+           'TMUX_PANE', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME', 'HERDR_ENV', 'HERDR_PANE_ID')
 
 
 class SaveCliTests(unittest.TestCase):
@@ -180,6 +180,7 @@ class SaveCliTests(unittest.TestCase):
     def test_transition_reflects_environment(self):
         cases = [({}, 'new-session'), ({'AUTORESUME': '1'}, 'clear'),
                  ({'HANDOFF_AUTO': '1', 'TMUX_PANE': '%1'}, 'tmux'),
+                 ({'HANDOFF_AUTO': '1', 'TMUX_PANE': '%1', 'HERDR_ENV': '1', 'HERDR_PANE_ID': 'w1:p1'}, 'herdr'),
                  ({'HANDOFF_AUTO': '1', 'AGENTSROOM_AGENT_ID': 'a1'}, 'agents_restart'),
                  # AgentsRoom defaults to automatic handoff; only an explicit off disables it.
                  ({'AGENTSROOM_AGENT_ID': 'a1'}, 'agents_restart'),

@@ -12,7 +12,7 @@ not the objective.
 Hook events: PostToolUse + UserPromptSubmit (threshold watch), SessionStart
 (open-handoff announcer, see handoff_ledger.py), Stop (every mode: blocks a turn
 once when a context-watch notice, advisory included, fired and this session has
-no published checkpoint (#180); fully-automatic mode only: clears a tmux-hosted
+no published checkpoint (#180); fully-automatic mode only: clears a tmux- or Herdr-hosted
 session once its handoff is written).
 
 Occupancy measure (what the window holds heading into the NEXT call):
@@ -26,7 +26,8 @@ Occupancy measure (what the window holds heading into the NEXT call):
 
 Threshold resolution (first match wins; model id matched by longest substring):
   1. HANDOFF_AT                 global absolute, highest-precedence override
-                                (else the "at" config key, see below)
+                                (else this terminal's "at" override from the Herdr
+                                plugin, else the "at" config key, see below)
   2. CONTEXT_WATCH_TOKENS_MAP   e.g. "opus=120000,sonnet=140000,gpt-5.5=180000"
   3. ./.context-watch.json      per-model keys (project-local)
   4. ~/.context-watch/thresholds.json   per-model keys (user-global)
@@ -790,7 +791,8 @@ WARNING_WINDOW_KEY = "warning_window_tokens"  # advisory lead (23079574), never 
 def warning_window_candidates(cwd):
     """[(source, raw)] for warning_window_tokens, highest precedence first; raw None if absent."""
     raw = env("CONTEXT_WATCH_WARNING_WINDOW").strip()
-    out = [("env CONTEXT_WATCH_WARNING_WINDOW", raw or None)]
+    out = [("env CONTEXT_WATCH_WARNING_WINDOW", raw or None),
+           ("terminal override", handoff_identity.terminal_settings().get(WARNING_WINDOW_KEY))]
     for path in (os.path.join(cwd or os.getcwd(), ".context-watch.json"),
                  os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json")):
         value = None
@@ -865,6 +867,9 @@ def resolve_threshold(model, window, cwd):
     handoff_at = env("HANDOFF_AT").strip()
     if handoff_at.isdigit():
         return int(handoff_at), "HANDOFF_AT"
+    at = None if handoff_at else handoff_identity.terminal_settings().get("at")
+    if type(at) is int and at > 0:
+        return at, "terminal:at"
     at = None if handoff_at else _load_config_files(cwd, settings=True).get("at")
     if at is not None and at > 0:
         return at, "config:at"
@@ -1310,13 +1315,25 @@ def announce_manual_clear(evt):
         "/clear, then resume (no tmux pane to clear automatically). Hook session id: %s" % key)})
 
 
+def typing_target():
+    """("herdr" | "tmux", pane) the Stop hook types /clear and resume into, or ("", "").
+
+    An AgentsRoom tab restarts itself. A TMUX_PANE inherited by AgentsRoom or
+    Herdr (launched from inside tmux) belongs to another terminal, so never type there."""
+    if env("AGENTSROOM_AGENT_ID"):
+        return "", ""
+    pane = handoff_identity.herdr_pane()
+    if pane:
+        return "herdr", pane
+    pane = env("TMUX_PANE")
+    return ("tmux", pane) if pane else ("", "")
+
+
 def handle_stop(evt):
-    """Fully automatic mode, interactive session inside tmux: once this session's
+    """Fully automatic mode, interactive session inside tmux or Herdr: once this session's
     trigger has fired and a handoff was written after it, type /clear and then
     "resume" into the pane, so the cleared session picks the handoff up."""
-    # An AgentsRoom tab restarts itself; a TMUX_PANE it inherited (the app was
-    # launched from inside tmux) belongs to another terminal, so never type there.
-    pane = "" if env("AGENTSROOM_AGENT_ID") else env("TMUX_PANE")
+    multiplexer, pane = typing_target()
     cwd = evt.get('cwd') or os.getcwd()
     key = session_key(evt)
     if auto_mode_on():
@@ -1369,9 +1386,13 @@ def handle_stop(evt):
     except OSError:
         pass
     # Detached, so this hook returns and the TUI goes idle before the keys arrive.
-    script = ("sleep 2; tmux send-keys -t \"$P\" -l /clear; tmux send-keys -t \"$P\" Enter; "
-              "sleep 4; tmux send-keys -t \"$P\" -l resume; tmux send-keys -t \"$P\" Enter")
-    subprocess.Popen(["sh", "-c", script], env=dict(os.environ, P=pane),
+    if multiplexer == "herdr":
+        script = ('sleep 2; "$H" pane send-text "$P" /clear; "$H" pane send-keys "$P" Enter; '
+                  'sleep 4; "$H" pane send-text "$P" resume; "$H" pane send-keys "$P" Enter')
+    else:
+        script = ("sleep 2; tmux send-keys -t \"$P\" -l /clear; tmux send-keys -t \"$P\" Enter; "
+                  "sleep 4; tmux send-keys -t \"$P\" -l resume; tmux send-keys -t \"$P\" Enter")
+    subprocess.Popen(["sh", "-c", script], env=dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr"),
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
     sys.exit(0)

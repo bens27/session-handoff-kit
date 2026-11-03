@@ -25,7 +25,7 @@ class LauncherTests(unittest.TestCase):
             env = dict(os.environ, HOME=str(root / 'home'), USERPROFILE=str(root / 'home'), CLAUDE_CONFIG_DIR=str(config), CAPTURE=str(root / 'capture'),
                        PATH=str(binary)+os.pathsep+os.environ['PATH'], TMUX_PANE='%99')
             # Host identities would suppress the launcher's own terminal ID.
-            for key in ('AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID'):
+            for key in ('AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HERDR_ENV', 'HERDR_PANE_ID'):
                 env.pop(key, None)
             result = subprocess.run([str(CLI), '--max-clears', '3', '--', 'literal $(touch NEVER)'],
                                     cwd=root, env=env, capture_output=True, text=True)
@@ -78,6 +78,22 @@ class LauncherTests(unittest.TestCase):
             data = json.loads((root / 'capture').read_text())
             self.assertEqual((data['exe'], data['args'][1:]), ('claude', ['hello']))
             self.assertIsNone(data['tid'])
+
+    def test_herdr_execs_claude_directly_without_tmux(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = self._fake_bin(root, ('claude',))  # no tmux anywhere on PATH
+            env = dict(os.environ, HOME=str(root / 'home'), CLAUDE_CONFIG_DIR=str(root / 'claude'),
+                       CAPTURE=str(root / 'capture'), HERDR_ENV='1', HERDR_PANE_ID='w1:p1',
+                       PATH=str(binary) + os.pathsep + '/usr/bin:/bin')
+            for key in ('TMUX_PANE', 'HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
+                env.pop(key, None)
+            result = subprocess.run([str(CLI), '--', 'hello'], cwd=root, env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads((root / 'capture').read_text())
+            self.assertEqual((data['exe'], data['args'][1:]), ('claude', ['hello']))
+            self.assertIsNone(data['tid'])  # the Herdr pane names the terminal
 
     def test_empty_config_dir_falls_back_to_home_claude(self):
         with tempfile.TemporaryDirectory() as tmp:

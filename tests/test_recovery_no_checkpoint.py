@@ -45,7 +45,7 @@ class RecoveryFixture:
         self.transcript.write_text(history)
         self.history_hash = self.fingerprint(self.transcript)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(
-            ('HANDOFF_', 'CONTEXT_WATCH_', 'AGENTSROOM_', 'AUTORESUME', 'TYPESAFE_'))
+            ('HANDOFF_', 'CONTEXT_WATCH_', 'AGENTSROOM_', 'HERDR_', 'AUTORESUME', 'TYPESAFE_'))
             and k not in ('CODEX_THREAD_ID', 'TMUX_PANE')}
         self.env.update(HOME=str(self.home), USERPROFILE=str(self.home), TMPDIR=str(self.tmp),
             HANDOFF_TERMINAL_ID='terminal-a', HANDOFF_AUTO='0', CONTEXT_WATCH_AGENT=adapter,

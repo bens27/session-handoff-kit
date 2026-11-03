@@ -26,7 +26,7 @@ class SessionBloatTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('source line\n' * lines)
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(('CODEX_THREAD_ID', 'HANDOFF_', 'CONTEXT_WATCH_', 'AUTORESUME', 'AGENTSROOM_'))}
+                    if not k.startswith(('CODEX_THREAD_ID', 'HANDOFF_', 'CONTEXT_WATCH_', 'AUTORESUME', 'AGENTSROOM_', 'HERDR_'))}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, AGENTSROOM_AGENT_ID='terminal-a',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', CONTEXT_WATCH_THINKING='0')
         self.clock = None

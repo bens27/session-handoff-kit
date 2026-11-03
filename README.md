@@ -346,6 +346,30 @@ rather than Codex's `exec resume` subcommand:
 python3 skills/session-handoff/hooks/context_watch.py auto --max 2 --prompt "build X" -- codex exec --sandbox workspace-write --
 ```
 
+### Herdr
+
+Inside a [Herdr](https://herdr.dev) pane (`HERDR_ENV` set), the terminal id is
+`herdr-<socket digest>-<pane id>`, and the `Stop` fallback types `/clear` and
+`resume` with `herdr pane send-text` and `send-keys Enter` instead of tmux.
+`claude-auto` runs `claude` directly there. Herdr renumbers a pane that moves to
+another workspace, so its terminal id and any override change with it.
+
+The `herdr-plugin/` folder is a Herdr plugin that shows a pane's context use
+against its warning and handoff thresholds, and edits them:
+
+```sh
+herdr plugin link ~/Development/session-handoff-kit/herdr-plugin
+herdr plugin action invoke toggle --plugin session-handoff.thresholds  # with an agent pane focused
+```
+
+`w`/`W` and `h`/`H` move the warning and handoff points by 5k, `tab` switches
+between this pane and all agents, `s` saves and `c` clears the pane override.
+A pane override lives in `~/.context-watch/terminals/<digest>.json` and sits
+below `HANDOFF_AT` and `CONTEXT_WATCH_WARNING_WINDOW` but above the config
+files. "All agents" sets `at` and `warning_window_tokens` in
+`~/.context-watch/thresholds.json` and keeps its other keys. The plugin imports
+the hooks beside it, so link it from a checkout that has them.
+
 If the first notice is ignored, a SECOND NOTICE fires. It waits until the
 model has taken a turn since the first notice, and until occupancy is a
 further quarter of the threshold past where the first fired (and at least
@@ -451,6 +475,7 @@ Threshold resolution — first match wins; model ids matched by longest
 case-insensitive substring:
 
 1. `HANDOFF_AT` — per-launch global absolute, highest precedence (`HANDOFF_AT=20000 claude`)
+   - Herdr pane override `at` (see [Herdr](#herdr)), then `"at"` in the config files
 2. `CONTEXT_WATCH_TOKENS_MAP` — e.g. `opus=120000,sonnet=140000,gpt-5.5=160000`
 3. `./.context-watch.json` — project-local per-model config
 4. `~/.context-watch/thresholds.json` — user-global per-model config
@@ -1024,6 +1049,7 @@ session-handoff-kit/
 │       ├── handoff_protocol.py          # deterministic save/prepare/verify/acknowledge protocol
 │       ├── handoff_dispatch.py          # one validated lifecycle decision per request (dispatch/hold/release)
 │       └── thresholds.example.json      # sample per-model threshold config
+├── herdr-plugin/                        # Herdr popup: view and edit a pane's thresholds
 ├── plugins/session-handoff/             # Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop

@@ -3,7 +3,7 @@
 A leaf module (standard library only, no kit imports) that owns:
 
 - session identity (terminal pointer -> CODEX_THREAD_ID -> HANDOFF_SESSION_ID),
-  terminal identity (HANDOFF_TERMINAL_ID -> AGENTSROOM_AGENT_ID) and the latch
+  terminal identity (HANDOFF_TERMINAL_ID -> AGENTSROOM_AGENT_ID -> Herdr pane) and the latch
   key fallback ``t-`` + sha1(transcript)[:16];
 - the canonical project root (handoff convention discovery, linked-worktree
   boundary);
@@ -232,9 +232,9 @@ def canonical_root(start):
 def terminal_id():
     """Wrapper identity that survives /clear: one terminal, one current handoff.
 
-    A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID. Ids over
-    120 characters keep a readable prefix plus a digest of the whole value, so
-    two long ids sharing a prefix never name the same terminal."""
+    A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID, then to the
+    Herdr pane. Ids over 120 characters keep a readable prefix plus a digest of
+    the whole value, so two long ids sharing a prefix never name the same terminal."""
     for name in ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
         value = (os.environ.get(name) or '').strip()
         if value:
@@ -242,7 +242,43 @@ def terminal_id():
             if len(value) > 120:
                 value = value[:100] + '-' + hashlib.sha256(value.encode('utf-8', 'replace')).hexdigest()[:16]
             return value
-    return ''
+    return herdr_terminal_id(herdr_pane(), os.environ.get('HERDR_SOCKET_PATH'))
+
+
+def herdr_pane():
+    """This process's Herdr pane id, or '' outside Herdr."""
+    if not truthy(os.environ.get('HERDR_ENV')):
+        return ''
+    return (os.environ.get('HERDR_PANE_ID') or '').strip()
+
+
+def herdr_terminal_id(pane, socket):
+    """Terminal id of a Herdr pane. The socket digest separates Herdr servers.
+    Herdr renumbers a pane that moves to another workspace, so the id changes then."""
+    pane = (pane or '').strip()
+    if not pane:
+        return ''
+    server = os.path.realpath(socket) if socket else ''
+    return 'herdr-%s-%s' % (_sha1(server, 8), pane)
+
+
+def terminal_settings_path(terminal):
+    """Per-terminal threshold overrides ("at", "warning_window_tokens"), set from the Herdr plugin."""
+    return os.path.join(os.path.expanduser('~'), '.context-watch', 'terminals',
+                        '%s.json' % _sha1(terminal, 20))
+
+
+def terminal_settings(terminal=None):
+    """This terminal's override object, or {} when there is none."""
+    terminal = terminal_id() if terminal is None else terminal
+    if not terminal:
+        return {}
+    try:
+        with open(terminal_settings_path(terminal), encoding='utf-8') as stream:
+            data = json.load(stream)
+    except (OSError, ValueError):
+        return {}  # same as the threshold files: unreadable means unset
+    return data if isinstance(data, dict) else {}
 
 
 def host_session():

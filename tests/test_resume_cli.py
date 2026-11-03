@@ -23,7 +23,7 @@ class ResumeCliTests(unittest.TestCase):
         (self.root / '.handoffs').mkdir()
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID',
-                                 'HANDOFF_SKILL_ROOTS', 'CODEX_HOME', 'HANDOFF_AUTO')}
+                                 'HANDOFF_SKILL_ROOTS', 'CODEX_HOME', 'HANDOFF_AUTO', 'HERDR_ENV', 'HERDR_PANE_ID')}
         self.env.update(HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
 
