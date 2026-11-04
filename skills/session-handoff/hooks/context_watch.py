@@ -13,7 +13,8 @@ Hook events: PostToolUse + UserPromptSubmit (threshold watch), SessionStart
 (open-handoff announcer, see handoff_ledger.py), Stop (every mode: blocks a turn
 once when a context-watch notice, advisory included, fired and this session has
 no published checkpoint (#180); fully-automatic mode only: clears a tmux- or Herdr-hosted
-session once its handoff is written).
+session once its handoff is written, whether the threshold notice or a user-parked save
+armed the trigger).
 
 Occupancy measure (what the window holds heading into the NEXT call):
   Claude Code: last main-chain usage -> input_tokens + cache_creation_input_tokens
@@ -305,6 +306,32 @@ def write_session_note(cwd, evt, fired, context=None):
         write_project_pointer(cwd, sid)
     except Exception:
         pass
+
+
+def arm_parked_trigger(cwd, sid):
+    """A user-parked save in fully automatic mode fires this session's trigger on the
+    user's behalf ("session handoff to yourself"): the checkpoint is already written,
+    so the next Stop types /clear and resume exactly as after the threshold notice.
+    Returns the trigger id the checkpoint must carry, or '' when nothing was armed."""
+    if not sid:
+        return ''
+    latch = latch_path(sid)
+    try:
+        try:
+            os.close(os.open(latch, os.O_CREAT | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            pass
+        trigger = str(os.stat(latch).st_mtime_ns)
+        note = _ledger().read_session_note(cwd, session=sid) or {}
+        note.update(trigger_id=trigger, fired=True, ts=time.time())
+        path = handoff_identity.session_note_path(cwd, sid)
+        tmp = "%s.%d" % (path, os.getpid())
+        with open_private(tmp, temp=True) as f:
+            json.dump(note, f)
+        os.replace(tmp, path)
+        return trigger
+    except (OSError, ValueError):
+        return ''
 
 
 def write_project_pointer(cwd, sid):
@@ -1323,8 +1350,8 @@ def typing_target():
     if env("AGENTSROOM_AGENT_ID"):
         return "", ""
     pane = handoff_identity.herdr_pane()
-    if pane:
-        return "herdr", pane
+    if pane:  # a pane moved to another workspace has a new id; type into that one
+        return "herdr", handoff_identity.herdr_pane_info(pane).get("pane_id") or pane
     pane = env("TMUX_PANE")
     return ("tmux", pane) if pane else ("", "")
 

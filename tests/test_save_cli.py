@@ -5,10 +5,12 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
 LEDGER = REPO / 'skills/session-handoff/hooks/handoff_ledger.py'
+HOOK = REPO / 'skills/session-handoff/hooks/context_watch.py'
 BODY = '## Objective\nFix it.\n## Current state\nUnchanged.\n## Next steps\nRun the parser checks.\n'
 CLEARED = ('CODEX_THREAD_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_TERMINAL_ID', 'HANDOFF_SESSION_ID', 'HANDOFF_AUTO', 'HANDOFF_RUN_ID',
            'TMUX_PANE', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME', 'HERDR_ENV', 'HERDR_PANE_ID')
@@ -38,6 +40,37 @@ class SaveCliTests(unittest.TestCase):
     def frontmatter(self, path):
         head = Path(path).read_text().split('\n---\n', 1)[0]
         return dict(line.split(': ', 1) for line in head.splitlines()[1:] if ': ' in line)
+
+    def test_user_parked_save_in_auto_mode_arms_the_stop_clear(self):
+        """"Session handoff to yourself": the checkpoint is written first, then the Stop
+        hook types /clear and resume as it does after the threshold notice (#herdr)."""
+        record = Path(self.tmp.name) / 'herdr-calls'
+        fake = Path(self.tmp.name) / 'herdr'
+        fake.write_text('#!/bin/sh\necho "$@" >> "$HERDR_RECORD"\n')
+        fake.chmod(0o755)
+        env = dict(HANDOFF_AUTO='1', HERDR_ENV='1', HERDR_PANE_ID='w1:p1', HERDR_BIN_PATH=str(fake),
+                   HERDR_SOCKET_PATH=str(Path(self.tmp.name) / 'missing.sock'), HERDR_RECORD=str(record))
+        rc, out = self.save(session='s1', env=env)
+        self.assertEqual((rc, out['outcome']), (0, 'saved'), out)
+        fm = self.frontmatter(out['path'])
+        self.assertEqual(fm['reason'], 'user-parked')
+        self.assertTrue(fm.get('trigger_id'), fm)  # the save fired the trigger on the user's behalf
+        self.assertEqual(out['transition']['kind'], 'herdr')
+        stop = subprocess.run([sys.executable, str(HOOK)], cwd=self.root, env={**self.env, **env},
+                              input=json.dumps({'hook_event_name': 'Stop', 'session_id': 's1', 'cwd': str(self.root)}),
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(stop.returncode, 0, stop.stderr)
+        deadline = time.time() + 12
+        while time.time() < deadline and 'resume' not in (record.read_text() if record.exists() else ''):
+            time.sleep(0.5)
+        calls = record.read_text().splitlines() if record.exists() else []
+        self.assertEqual(calls, ['pane send-text w1:p1 /clear', 'pane send-keys w1:p1 Enter',
+                                 'pane send-text w1:p1 resume', 'pane send-keys w1:p1 Enter'])
+
+    def test_user_parked_save_without_a_pane_does_not_arm(self):
+        rc, out = self.save(session='s2', env=dict(HANDOFF_AUTO='1'))
+        self.assertEqual(out['outcome'], 'saved', out)
+        self.assertEqual(self.frontmatter(out['path']).get('trigger_id', ''), '')
 
     def test_explicit_stdin_matches_file_save(self):
         draft = dict(topic='work', description='About work', body=BODY)

@@ -92,13 +92,15 @@ class PlantedSymlinks(unittest.TestCase):
         env = {"HANDOFF_AUTO": "1", "HERDR_ENV": "1", "HERDR_PANE_ID": "w2:p3", "HERDR_BIN_PATH": "/opt/herdr",
                "TMUX_PANE": "%inherited", "AGENTSROOM_AGENT_ID": "", "HANDOFF_AUTO_RUNNER": "",
                "HANDOFF_TERMINAL_ID": ""}
+        moved = {"pane_id": "w7:p1", "terminal_id": "term_abc"}  # the pane moved workspaces since launch
         with mock.patch.dict(os.environ, env), \
+                mock.patch.object(self.cw.handoff_identity, "herdr_pane_info", lambda pane: dict(moved)), \
                 mock.patch.object(self.cw, "handoff_written_since", lambda *a, **k: True), \
                 mock.patch.object(self.cw.subprocess, "Popen") as popen, \
                 self.assertRaises(SystemExit):
             self.cw.handle_stop({"session_id": "herdr-stop", "cwd": self.tmp})
         (argv,), kwargs = popen.call_args
-        self.assertEqual((kwargs["env"]["P"], kwargs["env"]["H"]), ("w2:p3", "/opt/herdr"))
+        self.assertEqual((kwargs["env"]["P"], kwargs["env"]["H"]), ("w7:p1", "/opt/herdr"))
         self.assertIn('"$H" pane send-text "$P" /clear', argv[2])
         self.assertIn('"$H" pane send-text "$P" resume', argv[2])
         self.assertNotIn("tmux", argv[2])
