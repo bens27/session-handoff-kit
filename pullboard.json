@@ -15,6 +15,11 @@
     "review": {
       "owns": [],
       "starts": "any time: verifiers check submitted work and own no folders"
+    },
+    "hooks": {
+      "owns": [
+        "skills/session-handoff/hooks/"
+      ]
     }
   },
   "shared": [],
