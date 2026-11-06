@@ -13,7 +13,8 @@ Hook events: PostToolUse + UserPromptSubmit (threshold watch), SessionStart
 (open-handoff announcer, see handoff_ledger.py), Stop (every mode: blocks a turn
 once when a context-watch notice, advisory included, fired and this session has
 no published checkpoint (#180); fully-automatic mode only: clears a tmux- or Herdr-hosted
-session once its handoff is written).
+session once its handoff is written, whether the threshold notice or a user-parked save
+armed the trigger).
 
 Occupancy measure (what the window holds heading into the NEXT call):
   Claude Code: last main-chain usage -> input_tokens + cache_creation_input_tokens
@@ -43,6 +44,14 @@ Optional auto-mode keys in the same files (never model thresholds):
   "auto" (bool), "at" (int), "auto_max" (int) = HANDOFF_AUTO, HANDOFF_AT,
   HANDOFF_AUTO_MAX; a non-empty environment variable wins, then the project
   file, then the user file.
+  "subagent_at" (int, default 100000): Agent-tool subagents (hook events that
+  carry `agent_id`) get their own watch, measured from the subagent's own
+  transcript (.../<session_id>/subagents/agent-<agent_id>.jsonl). At that
+  occupancy the hook tells the subagent once to stop, commit WIP and hand back
+  a ~15-line resumable report; one firmer repeat follows about 20k later, then
+  nothing. State is keyed by agent_id under ~/.context-watch/subagents. The
+  subagent watch never types /clear and never touches the parent's checkpoint,
+  latch or notice; no environment override (the Agent tool passes no env).
 
 Other environment variables:
   CONTEXT_WATCH_WINDOW        window size for the PERCENT path (default 200000;
@@ -307,6 +316,32 @@ def write_session_note(cwd, evt, fired, context=None):
         pass
 
 
+def arm_parked_trigger(cwd, sid):
+    """A user-parked save in fully automatic mode fires this session's trigger on the
+    user's behalf ("session handoff to yourself"): the checkpoint is already written,
+    so the next Stop types /clear and resume exactly as after the threshold notice.
+    Returns the trigger id the checkpoint must carry, or '' when nothing was armed."""
+    if not sid:
+        return ''
+    latch = latch_path(sid)
+    try:
+        try:
+            os.close(os.open(latch, os.O_CREAT | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            pass
+        trigger = str(os.stat(latch).st_mtime_ns)
+        note = _ledger().read_session_note(cwd, session=sid) or {}
+        note.update(trigger_id=trigger, fired=True, ts=time.time())
+        path = handoff_identity.session_note_path(cwd, sid)
+        tmp = "%s.%d" % (path, os.getpid())
+        with open_private(tmp, temp=True) as f:
+            json.dump(note, f)
+        os.replace(tmp, path)
+        return trigger
+    except (OSError, ValueError):
+        return ''
+
+
 def write_project_pointer(cwd, sid):
     """Record this session's project for saves run from a temp cwd. A temp project is
     never recorded (save ignores one), and an unchanged pointer under an hour old is
@@ -530,11 +565,12 @@ def detect_agent(evt, entries):
     return "claude"
 
 
-def claude_usage(entries):
-    """(breakdown, model) from the last main-chain API call."""
+def claude_usage(entries, sidechain=False):
+    """(breakdown, model) from the last main-chain API call. A subagent's own
+    transcript marks every entry isSidechain; sidechain=True reads those."""
     last, model, max_output = None, None, 0
     for e in entries:
-        if e.get("isSidechain"):
+        if e.get("isSidechain") and not sidechain:
             continue
         if (e.get("type") == "system" and e.get("subtype") == "compact_boundary") \
                 or e.get("isCompactSummary"):
@@ -783,7 +819,8 @@ def _parse_map(raw):
     return out
 
 
-SETTING_KEYS = {"auto": bool, "at": int, "auto_max": int}  # not model thresholds
+SETTING_KEYS = {"auto": bool, "at": int, "auto_max": int,
+                "subagent_at": int}  # not model thresholds
 PROJECT_DISABLE_ONLY_KEYS = ("auto",)  # a project may disable, never enable (mandatory_gate.auto_setting)
 WARNING_WINDOW_KEY = "warning_window_tokens"  # advisory lead (23079574), never a model threshold
 
@@ -1323,8 +1360,8 @@ def typing_target():
     if env("AGENTSROOM_AGENT_ID"):
         return "", ""
     pane = handoff_identity.herdr_pane()
-    if pane:
-        return "herdr", pane
+    if pane:  # a pane moved to another workspace has a new id; type into that one
+        return "herdr", handoff_identity.herdr_pane_info(pane).get("pane_id") or pane
     pane = env("TMUX_PANE")
     return ("tmux", pane) if pane else ("", "")
 
@@ -1702,6 +1739,93 @@ def emit(agent, event_name, message, mode):
     sys.exit(0)
 
 
+# ---------------------------------------------------------------- subagents
+
+SUBAGENT_AT_KEY = "subagent_at"       # config key: subagent stop-and-report point
+SUBAGENT_AT_DEFAULT = 100000
+SUBAGENT_REPEAT_LEAD = 20000          # the one firmer repeat fires this far past it
+
+SUBAGENT_REPORT_FIELDS = (
+    "item id; worktree path; lane and seat; claim state (claimed / submitted / commit under "
+    "verification); branch and last commit; tree clean or WIP listed; done and verified; "
+    "remaining; last test command and result; background processes you started (pid, what); "
+    "open shout or decision id awaited; next command to run")
+
+
+def subagent_transcript_path(evt):
+    """The subagent's own transcript: the event's transcript_path when it already
+    sits under .../subagents/, else Claude Code's layout beside the parent's
+    transcript, <parent dir>/<session_id>/subagents/agent-<agent_id>.jsonl."""
+    own = evt.get("transcript_path") or ""
+    if "subagents" in own.replace("\\", "/").split("/"):
+        return own
+    agent_id, parent = str(evt.get("agent_id") or ""), own
+    if not agent_id or not parent or not evt.get("session_id"):
+        return None
+    name = agent_id if agent_id.startswith("agent-") else "agent-" + agent_id
+    return os.path.join(os.path.dirname(parent), str(evt["session_id"]), "subagents", name + ".jsonl")
+
+
+def subagent_threshold(cwd):
+    """subagent_at from the thresholds files (project over user), default 100000.
+    No environment override: the Agent tool cannot pass a subagent its own env."""
+    value = _load_config_files(cwd, settings=True).get(SUBAGENT_AT_KEY)
+    return value if isinstance(value, int) and value > 0 else SUBAGENT_AT_DEFAULT
+
+
+def subagent_state_path(agent_id, stage=1):
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(agent_id))
+    return os.path.join(os.path.expanduser("~"), ".context-watch", "subagents",
+                        "%s.notice%s" % (safe, "" if stage == 1 else stage))
+
+
+def claim_subagent_once(agent_id, stage):
+    """True the first time this subagent reaches `stage` (O_EXCL latch under
+    ~/.context-watch/subagents, keyed by agent_id, never by the parent session)."""
+    path = subagent_state_path(agent_id, stage)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return True
+    except OSError:
+        return False  # already claimed, or the state dir is unwritable: stay quiet
+
+
+def subagent_message(stage, occupancy, limit):
+    if stage == 1:
+        return ("[context-watch] Subagent context ~%s tokens, at the subagent stop point %s. "
+                "Stop taking new work: finish the atomic action in hand, commit WIP on your branch, "
+                "and end your turn with a resumable report of about 15 lines for your parent, "
+                "which restarts a fresh agent from it. Report fields: %s. Do not clear your context "
+                "and do not save a checkpoint: the parent session owns both." % (occupancy, limit, SUBAGENT_REPORT_FIELDS))
+    return ("[context-watch] Stop now: subagent context ~%s tokens, %s past the stop point %s. "
+            "Commit WIP and return your report this turn (%s). No further notices follow."
+            % (occupancy, occupancy - limit, limit, SUBAGENT_REPORT_FIELDS))
+
+
+def handle_subagent(evt):
+    """Stop-and-report watch for an Agent-tool subagent (PostToolUse only).
+    Occupancy comes from the subagent's own transcript, as the parent watch
+    measures its own; the harness's per-run token figure is not window occupancy.
+    One notice at subagent_at, one firmer repeat ~20k later, nothing after.
+    Never /clear, never the parent's checkpoint, latch or session note."""
+    agent_id = evt.get("agent_id")
+    if evt.get("hook_event_name") != "PostToolUse" or not agent_id:
+        return
+    path = subagent_transcript_path(evt)
+    if not path or not os.path.isfile(path):
+        return
+    breakdown = claude_usage(load_transcript_tail(path), sidechain=True)[0]
+    occupancy = (breakdown or {}).get("occupancy") or 0
+    limit = subagent_threshold(evt.get("cwd") or os.getcwd())
+    if occupancy < limit:
+        return
+    if claim_subagent_once(agent_id, 1):
+        emit("claude", "PostToolUse", subagent_message(1, occupancy, limit), "warn")
+    if occupancy >= limit + SUBAGENT_REPEAT_LEAD and claim_subagent_once(agent_id, 2):
+        emit("claude", "PostToolUse", subagent_message(2, occupancy, limit), "warn")
+
+
 # ---------------------------------------------------------------- main
 
 _AGENT, _EVT = "claude", {}
@@ -1714,6 +1838,7 @@ def main():
     global _DIAG, _AGENT, _EVT, _OPENING_NOTE
     evt = _EVT = read_event()
     if in_subagent(evt):
+        handle_subagent(evt)  # its own stop-and-report watch; the parent's state stays untouched
         sys.exit(0)
     event_name = evt.get("hook_event_name") or ""
     if event_name == "Stop":

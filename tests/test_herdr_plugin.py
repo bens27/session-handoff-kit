@@ -37,6 +37,16 @@ class ThresholdsPluginTests(unittest.TestCase):
         thresholds.target_identity(pane)
         return thresholds.resolve(str(self.project), 'claude-test', 200000)
 
+    def test_pane_override_follows_the_terminal_across_a_move(self):
+        panes = {'w1:p1': {'pane_id': 'w9:p2', 'terminal_id': 'term_one'},
+                 'w9:p2': {'pane_id': 'w9:p2', 'terminal_id': 'term_one'},
+                 'w1:p3': {'pane_id': 'w1:p3', 'terminal_id': 'term_two'}}
+        with mock.patch.object(thresholds.handoff_identity, 'herdr_pane_info', lambda pane: dict(panes.get(pane, {}))):
+            terminal = thresholds.target_identity('w1:p1')
+            thresholds.save_pane(terminal, 'w1:p1', 80000, 90000)
+            self.assertEqual(self.resolve('w9:p2'), (80000, 90000, 'terminal:at'))
+            self.assertEqual(self.resolve('w1:p3'), (150000, 180000, 'config:claude'))
+
     def test_save_global_keeps_other_keys(self):
         thresholds.save_global(100000, 140000)
         self.assertEqual(json.loads(self.user.read_text()),

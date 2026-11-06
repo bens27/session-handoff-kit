@@ -38,14 +38,33 @@ class TerminalIdentityTests(unittest.TestCase):
         with environment(HANDOFF_TERMINAL_ID=' ', AGENTSROOM_AGENT_ID=''):
             self.assertEqual(handoff_protocol.terminal_id(), '')
 
-    def test_herdr_pane_names_the_terminal_per_server(self):
-        with environment(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/a/herdr.sock'):
-            one = handoff_protocol.terminal_id()
-        with environment(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/b/herdr.sock'):
-            other_server = handoff_protocol.terminal_id()
+    def test_herdr_terminal_id_survives_a_pane_move(self):
+        # Herdr renumbers a moved pane (w5:p7 -> w9:p2) but keeps its terminal id,
+        # and the moved process still asks for its pane by the id it inherited.
+        panes = {'w5:p7': {'pane_id': 'w9:p2', 'terminal_id': 'term_abc'},
+                 'w9:p2': {'pane_id': 'w9:p2', 'terminal_id': 'term_abc'}}
+        with mock.patch.object(handoff_identity, 'herdr_pane_info', lambda pane: dict(panes.get(pane, {}))):
+            with environment(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/a/herdr.sock'):
+                before = handoff_protocol.terminal_id()
+            with environment(HERDR_ENV='1', HERDR_PANE_ID='w9:p2', HERDR_SOCKET_PATH='/a/herdr.sock'):
+                after = handoff_protocol.terminal_id()
+            with environment(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/b/herdr.sock'):
+                other_server = handoff_protocol.terminal_id()
+        self.assertRegex(before, r'^herdr-[0-9a-f]{8}-term_abc$')
+        self.assertEqual(before, after)
+        self.assertNotEqual(before, other_server)
+
+    def test_herdr_pane_id_names_the_terminal_when_herdr_cannot_be_asked(self):
+        with mock.patch.object(handoff_identity, 'herdr_pane_info', lambda pane: {}):
+            with environment(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/a/herdr.sock'):
+                one = handoff_protocol.terminal_id()
         self.assertRegex(one, r'^herdr-[0-9a-f]{8}-w5:p7$')
-        self.assertNotEqual(one, other_server)
         self.assertEqual(one, handoff_identity.herdr_terminal_id('w5:p7', '/a/herdr.sock'))
+
+    def test_herdr_lookup_is_skipped_when_the_socket_is_gone(self):
+        with environment(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/nonexistent/herdr.sock'), \
+                mock.patch.object(handoff_identity.subprocess, 'run', side_effect=AssertionError('must not run herdr')):
+            self.assertEqual(handoff_identity.herdr_pane_info('w5:p7'), {})
 
     def test_herdr_pane_ranks_below_explicit_and_agentsroom_ids(self):
         herdr = dict(HERDR_ENV='1', HERDR_PANE_ID='w5:p7', HERDR_SOCKET_PATH='/a/herdr.sock')
@@ -107,9 +126,8 @@ class TerminalOverrideTests(unittest.TestCase):
                           HERDR_SOCKET_PATH='/a/herdr.sock', HANDOFF_AT='', CONTEXT_WATCH_WARNING_WINDOW='')
 
     def override(self, **values):
-        with environment(HOME=str(self.home)):
-            path = Path(handoff_identity.terminal_settings_path(
-                handoff_identity.herdr_terminal_id('w1:p1', '/a/herdr.sock')))
+        with environment(**self.herdr):
+            path = Path(handoff_identity.terminal_settings_path(handoff_identity.terminal_id()))
         self.assertTrue(path.is_relative_to(self.home))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(values))

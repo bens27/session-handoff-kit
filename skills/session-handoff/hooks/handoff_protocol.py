@@ -1033,6 +1033,11 @@ def save(root, session, request_id, document):
         guard = restart_guard(root, session, topic, records, pressure=fields['reason'] == 'context-pressure', progress=progress)
         next_transition = transition(root, guard, session=session)
         fields['restart_intent'] = next_transition['kind']
+        if fields['reason'] == 'user-parked' and not fields['trigger_id'] and next_transition['kind'] in ('tmux', 'herdr'):
+            # "Session handoff to yourself": the Stop hook clears only after this session's
+            # trigger, so a user-parked save in automatic mode fires it on the user's behalf.
+            import context_watch
+            fields['trigger_id'] = context_watch.arm_parked_trigger(root, session)
         if next_transition['kind'] == 'paused':
             fields['automatic_paused'] = ', '.join(guard['pause_reasons'])
         if guard['reasons']:

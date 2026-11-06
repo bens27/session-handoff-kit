@@ -349,10 +349,16 @@ python3 skills/session-handoff/hooks/context_watch.py auto --max 2 --prompt "bui
 ### Herdr
 
 Inside a [Herdr](https://herdr.dev) pane (`HERDR_ENV` set), the terminal id is
-`herdr-<socket digest>-<pane id>`, and the `Stop` fallback types `/clear` and
-`resume` with `herdr pane send-text` and `send-keys Enter` instead of tmux.
-`claude-auto` runs `claude` directly there. Herdr renumbers a pane that moves to
-another workspace, so its terminal id and any override change with it.
+`herdr-<socket digest>-<Herdr terminal id>` (`herdr pane get` reports it as
+`terminal_id`), and the `Stop` fallback types `/clear` and `resume` with
+`herdr pane send-text` and `send-keys Enter` instead of tmux. `claude-auto` runs
+`claude` directly there. A user-parked save in automatic mode inside tmux or
+Herdr ("session handoff to yourself") arms that same trigger after the
+checkpoint is written, so the next `Stop` clears and resumes without waiting
+for the threshold. Herdr renumbers a pane that moves to another workspace
+but keeps its terminal id, so the open handoff and any pane override follow the
+move, and the `Stop` hook types into the pane's current id. When Herdr cannot be
+asked (no server at `HERDR_SOCKET_PATH`), the pane id names the terminal instead.
 
 The `herdr-plugin/` folder is a Herdr plugin that shows a pane's context use
 against its warning and handoff thresholds, and edits them:
@@ -515,6 +521,22 @@ really saves or states plainly that nothing was saved and why. The agent's state
 again. A checkpoint saved since the notice silences all three. Codex gets the
 reminder only (it has no Stop hook).
 
+`"subagent_at"` (int, default `100000`) is the stop point for Agent-tool
+subagents. Their hook events carry `agent_id`, and the watcher measures each
+one from the subagent's own transcript
+(`.../<session_id>/subagents/agent-<agent_id>.jsonl`), not from the parent's.
+At that occupancy the subagent gets one notice to stop taking new work, commit
+WIP and end its turn with a resumable report of about 15 lines (item id,
+worktree, lane and seat, claim state, branch and last commit, tree state, done
+and verified, remaining, last test command and result, background processes,
+awaited shout or decision, next command); the parent restarts a fresh agent
+from that report. One firmer repeat follows about 20k tokens later, then
+nothing. State is keyed by `agent_id` under `~/.context-watch/subagents/`. The
+subagent watch never types `/clear` and never saves or touches the parent's
+checkpoint or notice; parent events are unchanged. The project file overrides
+the user file; there is no environment override, because the Agent tool cannot
+pass a subagent its own environment.
+
 `"resume_pointer_policy"` (`"ask"` default, `"latest-owned"` or `"manual"`) decides
 what a fresh session does when several restart checkpoints for its terminal
 are pending: `ask` and `manual` list them with their adopt commands and adopt
@@ -599,8 +621,8 @@ Other variables:
 | `CONTEXT_WATCH_DISABLE` | — | Set `1` to disable without uninstalling |
 | `CONTEXT_WATCH_MAX_AGE_DAYS` | `14` | Open handoffs older than this are not announced |
 | `CONTEXT_WATCH_AUTORESUME` | — | Set `1` to resume a single open handoff at session start without asking |
-| `HANDOFF_AUTO` | on in AgentsRoom, else off | Requests automatic transition (`0` opts out). AgentsRoom requires authoritative preflight and falls back to manual continuation when unavailable; outside AgentsRoom, tmux Stop or the headless runner performs the configured transition. |
-| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`; `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only); the `context_watch.py auto` runner assigns each runner's children a fresh `runner-<uuid>`, replacing any inherited value | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked). A blank value falls through to the next; ids over 120 characters keep 100 plus a 16-hex SHA-256 suffix |
+| `HANDOFF_AUTO` | on in AgentsRoom, else off | Requests automatic transition (`0` opts out). AgentsRoom requires authoritative preflight and falls back to manual continuation when unavailable; outside AgentsRoom, tmux Stop or the headless runner performs the configured transition. In tmux or Herdr, a user-parked save fires the trigger too, so the Stop hook clears and resumes right after a "session handoff to yourself". |
+| `HANDOFF_TERMINAL_ID` | `AGENTSROOM_AGENT_ID`, then the Herdr pane's terminal (see [Herdr](#herdr)); `claude-auto` generates `tmux-<uuid>` (outside AgentsRoom only); the `context_watch.py auto` runner assigns each runner's children a fresh `runner-<uuid>`, replacing any inherited value | Terminal identity recorded on each save; in fully automatic mode the cleared session resumes only that terminal's newest open handoff (legacy handoffs without a terminal are not auto-picked). A blank value falls through to the next; ids over 120 characters keep 100 plus a 16-hex SHA-256 suffix |
 | `HANDOFF_AUTO_MAX` | `10` | Fully automatic mode: automatic clears in a row per project before the Stop hook stops and tells you (a session that starts near the threshold would otherwise loop); a turn that ends without the trigger resets the count |
 | `HANDOFF_STATE_DIR` | system temp dir (`$TMPDIR`) | Absolute path of the directory for per-session temp state (latches, session notes, receipts, pointers, auto counts, the publisher lock). A blank or relative value falls back to the system temp dir; file names are unchanged. Set it in the environment that hooks and your shell share, or publication serialisation is lost |
 
@@ -786,9 +808,10 @@ would discard it. For long-running parallel lanes prefer AgentsRoom workers
 (`agents_spawn`, reported back through the mailbox): they outlive the
 coordinator. Workers report with `agents_send`, not `backlog_comment`, which
 only works on user-feedback backlog items; the coordinator records each report
-on the backlog item with a `descriptionAppend` update. The context watcher stays silent inside subagents (it
-detects them by the `agent_id` field Claude Code adds to their hook events), so
-a subagent never receives the parent's handoff notice.
+on the backlog item with a `descriptionAppend` update. The context watcher never gives a subagent the parent's
+handoff notice (it detects them by the `agent_id` field Claude Code adds to
+their hook events); past `subagent_at` it tells the subagent to stop, commit and
+report instead (see the thresholds keys above).
 
 ### Deterministic restart preflight
 
