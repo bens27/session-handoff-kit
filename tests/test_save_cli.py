@@ -49,7 +49,8 @@ class SaveCliTests(unittest.TestCase):
         fake.write_text('#!/bin/sh\necho "$@" >> "$HERDR_RECORD"\n')
         fake.chmod(0o755)
         env = dict(HANDOFF_AUTO='1', HERDR_ENV='1', HERDR_PANE_ID='w1:p1', HERDR_BIN_PATH=str(fake),
-                   HERDR_SOCKET_PATH=str(Path(self.tmp.name) / 'missing.sock'), HERDR_RECORD=str(record))
+                   HERDR_SOCKET_PATH=str(Path(self.tmp.name) / 'missing.sock'), HERDR_RECORD=str(record),
+                   CONTEXT_WATCH_RESUME_LOG='0')  # no resume ledger: the typer types once and stops
         rc, out = self.save(session='s1', env=env)
         self.assertEqual((rc, out['outcome']), (0, 'saved'), out)
         fm = self.frontmatter(out['path'])
@@ -60,12 +61,14 @@ class SaveCliTests(unittest.TestCase):
                               input=json.dumps({'hook_event_name': 'Stop', 'session_id': 's1', 'cwd': str(self.root)}),
                               capture_output=True, text=True, timeout=30)
         self.assertEqual(stop.returncode, 0, stop.stderr)
+        expected = ['pane send-keys w1:p1 Escape', 'pane send-text w1:p1 /clear', 'pane send-keys w1:p1 Enter',
+                    'pane send-keys w1:p1 Escape', 'pane send-text w1:p1 resume', 'pane send-keys w1:p1 Enter']
         deadline = time.time() + 12
-        while time.time() < deadline and 'resume' not in (record.read_text() if record.exists() else ''):
+        calls = []
+        while time.time() < deadline and len(calls) < len(expected):
             time.sleep(0.5)
-        calls = record.read_text().splitlines() if record.exists() else []
-        self.assertEqual(calls, ['pane send-text w1:p1 /clear', 'pane send-keys w1:p1 Enter',
-                                 'pane send-text w1:p1 resume', 'pane send-keys w1:p1 Enter'])
+            calls = record.read_text().splitlines() if record.exists() else []
+        self.assertEqual(calls, expected)  # Escape first: a focused subagent view must not take the keys
 
     def test_user_parked_save_without_a_pane_does_not_arm(self):
         rc, out = self.save(session='s2', env=dict(HANDOFF_AUTO='1'))

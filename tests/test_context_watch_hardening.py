@@ -101,8 +101,9 @@ class PlantedSymlinks(unittest.TestCase):
             self.cw.handle_stop({"session_id": "herdr-stop", "cwd": self.tmp})
         (argv,), kwargs = popen.call_args
         self.assertEqual((kwargs["env"]["P"], kwargs["env"]["H"]), ("w7:p1", "/opt/herdr"))
-        self.assertIn('"$H" pane send-text "$P" /clear', argv[2])
-        self.assertIn('"$H" pane send-text "$P" resume', argv[2])
+        self.assertIn('"$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"', argv[2])
+        self.assertIn("send /clear", argv[2])
+        self.assertIn("send resume", argv[2])
         self.assertNotIn("tmux", argv[2])
 
     def test_auto_count_path_is_collision_free_sha1(self):
@@ -113,6 +114,100 @@ class PlantedSymlinks(unittest.TestCase):
         self.assertNotEqual(self.cw.auto_count_path(a), self.cw.auto_count_path(b))
         digest = hashlib.sha1(os.path.realpath(self.cw._ledger().project_root(a)).encode()).hexdigest()[:20]
         self.assertTrue(self.cw.auto_count_path(a).endswith("context-watch-auto-%s.count" % digest))
+
+
+class StopTyperEscapesSubagentView(unittest.TestCase):
+    """pullboard #2: the detached Stop typer presses Escape before each typed
+    command (a focused subagent view in Claude's TUI would otherwise swallow
+    /clear or resume), waits for the successor's resume event in the context-watch
+    ledger, retries Escape+resume once, and leaves a visible notice if it never comes."""
+
+    FAST = "0,0,0.05,4"  # clear delay, resume delay, poll interval, polls (test-only knob)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = os.path.realpath(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.log = os.path.join(self.tmp, "resumes.jsonl")
+        self.keys = os.path.join(self.tmp, "keys.txt")
+        patcher = mock.patch.dict(os.environ, {
+            "HOME": self.tmp, "TMPDIR": self.tmp, "CONTEXT_WATCH_LOG": "0", "CONTEXT_WATCH_JEV": "0",
+            "CONTEXT_WATCH_RESUME_LOG": self.log, "CONTEXT_WATCH_TYPER_TIMING": self.FAST,
+            "HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "", "HANDOFF_AUTO_RUNNER": "",
+            "HANDOFF_TERMINAL_ID": "", "HERDR_ENV": "", "HERDR_PANE_ID": "", "TMUX_PANE": ""})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cw = load_hook(self.tmp)
+        self.addCleanup(setattr, tempfile, "tempdir", None)
+
+    def fake(self, name, resume_succeeds):
+        """A recording herdr/tmux stand-in; optionally logs a resume event when 'resume' is typed."""
+        path = os.path.join(self.tmp, name)
+        record = ""
+        if resume_succeeds:
+            record = ("case \"$*\" in *resume*) printf '%%s\\n' '{\"operation\": \"resume\", \"project_id\": \"%s\"}' "
+                      ">> \"%s\";; esac\n" % (self.cw.resume_project_id(self.tmp), self.log))
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> \"%s\"\n%s" % (self.keys, record))
+        os.chmod(path, 0o755)
+        return path
+
+    def typer(self, env):
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(self.cw.handoff_identity, "herdr_pane_info", lambda pane: {}), \
+                mock.patch.object(self.cw, "handoff_written_since", lambda *a, **k: True), \
+                mock.patch.object(self.cw.subprocess, "Popen") as popen, \
+                self.assertRaises(SystemExit):
+            open(self.cw.latch_path("typer"), "w").close()
+            self.cw.handle_stop({"session_id": "typer", "cwd": self.tmp})
+        (argv,), kwargs = popen.call_args
+        return argv, kwargs["env"]
+
+    def run_typer(self, argv, env, path_dir=None):
+        if path_dir:
+            env = dict(env, PATH=path_dir + os.pathsep + env.get("PATH", ""))
+        subprocess.run(argv, env=env, timeout=30, check=True)
+        with open(self.keys) as f:
+            return f.read().splitlines()
+
+    def test_herdr_escape_before_each_command_and_no_retry_when_resume_recorded(self):
+        herdr = self.fake("herdr", resume_succeeds=True)
+        argv, env = self.typer({"HERDR_ENV": "1", "HERDR_PANE_ID": "w2:p3", "HERDR_BIN_PATH": herdr})
+        keys = self.run_typer(argv, env)
+        self.assertEqual(keys, [
+            "pane send-keys w2:p3 Escape", "pane send-text w2:p3 /clear", "pane send-keys w2:p3 Enter",
+            "pane send-keys w2:p3 Escape", "pane send-text w2:p3 resume", "pane send-keys w2:p3 Enter"])
+        self.assertFalse(os.path.exists(self.cw.resume_missed_path(self.tmp)))
+
+    def test_herdr_retries_escape_resume_once_then_leaves_a_notice(self):
+        herdr = self.fake("herdr", resume_succeeds=False)
+        argv, env = self.typer({"HERDR_ENV": "1", "HERDR_PANE_ID": "w2:p3", "HERDR_BIN_PATH": herdr})
+        keys = self.run_typer(argv, env)
+        self.assertEqual(keys, [
+            "pane send-keys w2:p3 Escape", "pane send-text w2:p3 /clear", "pane send-keys w2:p3 Enter",
+            "pane send-keys w2:p3 Escape", "pane send-text w2:p3 resume", "pane send-keys w2:p3 Enter",
+            "pane send-keys w2:p3 Escape", "pane send-text w2:p3 resume", "pane send-keys w2:p3 Enter"])
+        notice = self.cw.resume_missed_path(self.tmp)
+        self.assertTrue(os.path.exists(notice))
+        # The next prompt in this project shows the notice once, from any session.
+        evt = {"hook_event_name": "UserPromptSubmit", "session_id": "successor", "cwd": self.tmp,
+               "transcript_path": os.path.join(self.tmp, "none.jsonl"), "prompt": "hello"}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=dict(os.environ, PYTHONPATH=""),
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("resume", p.stdout)
+        self.assertIn("Escape", p.stdout)
+        self.assertFalse(os.path.exists(notice))
+
+    def test_tmux_escape_before_each_command(self):
+        bindir = os.path.join(self.tmp, "bin")
+        os.makedirs(bindir)
+        self.fake(os.path.join("bin", "tmux"), resume_succeeds=True)
+        argv, env = self.typer({"TMUX_PANE": "%5"})
+        keys = self.run_typer(argv, env, path_dir=bindir)
+        self.assertEqual(keys, [
+            "send-keys -t %5 Escape", "send-keys -t %5 -l /clear", "send-keys -t %5 Enter",
+            "send-keys -t %5 Escape", "send-keys -t %5 -l resume", "send-keys -t %5 Enter"])
 
 
 class FloorLatchSymlink(HookCase):

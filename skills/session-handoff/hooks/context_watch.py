@@ -81,7 +81,13 @@ Other environment variables:
                               off): implies AUTORESUME, the newest open
                               handoff wins without asking, the agent ends its turn
                               after writing the handoff, and the Stop hook types
-                              /clear + "resume" into the session's tmux pane
+                              /clear + "resume" into the session's tmux or Herdr
+                              pane, Escape before each so a focused subagent view
+                              cannot swallow them; it then waits ~20 s for the
+                              successor's resume event in resumes.jsonl, retries
+                              Escape+resume once, else leaves a notice the next
+                              prompt shows (CONTEXT_WATCH_TYPER_TIMING="2,4,1,20"
+                              tunes clear delay, resume delay, poll, polls; tests)
                               (or use the `auto` runner below for headless runs)
   HANDOFF_AUTO_MAX            automatic clears in a row per project before the
                               Stop hook stops and tells the user (default 10);
@@ -1423,16 +1429,98 @@ def handle_stop(evt):
     except OSError:
         pass
     # Detached, so this hook returns and the TUI goes idle before the keys arrive.
-    if multiplexer == "herdr":
-        script = ('sleep 2; "$H" pane send-text "$P" /clear; "$H" pane send-keys "$P" Enter; '
-                  'sleep 4; "$H" pane send-text "$P" resume; "$H" pane send-keys "$P" Enter')
-    else:
-        script = ("sleep 2; tmux send-keys -t \"$P\" -l /clear; tmux send-keys -t \"$P\" Enter; "
-                  "sleep 4; tmux send-keys -t \"$P\" -l resume; tmux send-keys -t \"$P\" Enter")
-    subprocess.Popen(["sh", "-c", script], env=dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr"),
+    t_clear, t_resume, t_poll, polls = typer_timing()
+    typer_env = dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr",
+                     R=resume_log_path() or "", D=resume_project_id(cwd), N=resume_missed_path(cwd),
+                     M=RESUME_MISSED_NOTICE % (polls * t_poll),
+                     T1=str(t_clear), T2=str(t_resume), T3=str(t_poll), T4=str(polls))
+    subprocess.Popen(["sh", "-c", typer_script(multiplexer)], env=typer_env,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
     sys.exit(0)
+
+
+RESUME_MISSED_NOTICE = ("[context-watch] Automatic restart typed /clear and resume into this terminal, but no "
+                        "resume event reached the context-watch ledger within about %g s, even after a second "
+                        "Escape+resume: the keys may have gone to a focused subagent view. Press Escape, then "
+                        "type resume to pick up the open handoff.")
+
+# Herdr and tmux typers share one shape: Escape first (a focused subagent view in
+# Claude's TUI would otherwise take the keys; Escape leaves it), then the text,
+# then Enter. `seen` counts this project's resume events in the ledger ($R; empty
+# when telemetry is off, which skips the check); the successor's resume adds one.
+_TYPER_BODY = """
+seen() { if [ -n "$R" ] && [ -f "$R" ]; then grep -E '"operation": "(auto)?resume"' "$R" | grep -c "\\"project_id\\": \\"$D\\""; else echo 0; fi; }
+wait_resume() { i=0; while [ "$i" -lt "$T4" ]; do if [ "$(seen)" -gt "$N0" ]; then return 0; fi; sleep "$T3"; i=$((i+1)); done; return 1; }
+N0=$(seen); sleep "$T1"; send /clear; sleep "$T2"; send resume
+[ -z "$R" ] && exit 0
+wait_resume && exit 0
+send resume
+wait_resume && exit 0
+printf '%s\\n' "$M" > "$N"
+"""
+
+
+def typer_script(multiplexer):
+    """Shell for the detached Stop typer: Escape, /clear, Enter; Escape, resume, Enter;
+    then wait for the resume event, retry Escape+resume once, else leave the notice."""
+    if multiplexer == "herdr":
+        send = 'send() { "$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"; "$H" pane send-keys "$P" Enter; }'
+    else:
+        send = 'send() { tmux send-keys -t "$P" Escape; tmux send-keys -t "$P" -l "$1"; tmux send-keys -t "$P" Enter; }'
+    return send + _TYPER_BODY
+
+
+def typer_timing():
+    """(clear delay, resume delay, poll interval, polls) in seconds; default 2, 4, 1, 20.
+    CONTEXT_WATCH_TYPER_TIMING="2,4,1,20" overrides, for tests."""
+    default = (2, 4, 1, 20)
+    raw = env("CONTEXT_WATCH_TYPER_TIMING").strip()
+    if not raw:
+        return default
+    try:
+        parts = [float(x) for x in raw.split(",")]
+    except ValueError:
+        return default
+    if len(parts) != 4 or any(x < 0 for x in parts):
+        return default
+    return parts[0], parts[1], parts[2], int(parts[3])
+
+
+def resume_log_path():
+    """Where handoff_protocol's telemetry appends resume events, or None when it is off."""
+    raw = env("CONTEXT_WATCH_RESUME_LOG").strip()
+    if raw == "0" or (not raw and env("CONTEXT_WATCH_LOG") == "0"):
+        return None
+    return os.path.expanduser(raw or "~/.context-watch/resumes.jsonl")
+
+
+def resume_project_id(cwd):
+    """The project_id handoff_protocol.telemetry records: sha256 of the project root, 16 hex."""
+    import hashlib
+    try:
+        root = handoff_identity.project_root(cwd)
+    except Exception:
+        root = cwd
+    return hashlib.sha256(root.encode()).hexdigest()[:16]
+
+
+def resume_missed_path(cwd):
+    """Notice left by the typer when no resume event followed; the next prompt shows it."""
+    base = auto_count_path(cwd)
+    return base[:-len(".count")] + ".resume-missed" if base.endswith(".count") else base + ".resume-missed"
+
+
+def take_resume_missed_notice(cwd):
+    """The typer's notice for this project, removed so it shows once; '' if none."""
+    try:  # an odd cwd or a broken state dir must never block a prompt
+        path = resume_missed_path(cwd)
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+        os.remove(path)
+        return text
+    except Exception:
+        return ""
 
 
 def auto_cli(argv):
@@ -1862,6 +1950,11 @@ def main():
             and claim_once(evt, ".telemetry")):
         _DIAG = (event_name, "handoff-status: Context telemetry unavailable (transcript %s); context-pressure "
                  "warnings are off for this session until it is readable. Continue the current task." % TAIL_STATUS)
+
+    if event_name == "UserPromptSubmit" and not _DIAG:
+        missed = take_resume_missed_notice(evt.get("cwd") or os.getcwd())
+        if missed:
+            _DIAG = (event_name, missed)
 
     if event_name in ("PostToolUse", "UserPromptSubmit") and not _DIAG:
         ignored = project_enables_disable_only_key(evt.get("cwd") or os.getcwd())

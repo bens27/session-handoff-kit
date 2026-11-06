@@ -351,7 +351,17 @@ python3 skills/session-handoff/hooks/context_watch.py auto --max 2 --prompt "bui
 Inside a [Herdr](https://herdr.dev) pane (`HERDR_ENV` set), the terminal id is
 `herdr-<socket digest>-<Herdr terminal id>` (`herdr pane get` reports it as
 `terminal_id`), and the `Stop` fallback types `/clear` and `resume` with
-`herdr pane send-text` and `send-keys Enter` instead of tmux. `claude-auto` runs
+`herdr pane send-text` and `send-keys Enter` instead of tmux. On both paths the
+detached typer presses Escape before each typed command, because a subagent view
+focused inside Claude's TUI would otherwise take the keys and the miss would be
+silent; Escape leaves that view. After typing `resume` it waits up to about 20 s
+for the successor's resume event in `~/.context-watch/resumes.jsonl` (same
+project id), retries Escape and `resume` once, and if still nothing arrives it
+leaves a notice that the next prompt in that project shows: press Escape and type
+`resume`. With resume telemetry off (`CONTEXT_WATCH_RESUME_LOG=0` or
+`CONTEXT_WATCH_LOG=0` without a resume log) the check cannot run, so it types
+once and stops. `CONTEXT_WATCH_TYPER_TIMING="2,4,1,20"` (clear delay, resume
+delay, poll interval, polls) exists for tests. `claude-auto` runs
 `claude` directly there. A user-parked save in automatic mode inside tmux or
 Herdr ("session handoff to yourself") arms that same trigger after the
 checkpoint is written, so the next `Stop` clears and resumes without waiting
