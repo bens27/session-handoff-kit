@@ -2,7 +2,7 @@
   "relay": {
     "board": "d0f0d250fcc4041f4af560edb700ccac"
   },
-  "gate": "",
+  "gate": "pullboard spec check",
   "spec": "SPEC.md",
   "practice": "DOCTRINE.md",
   "worktrees": "inside",
