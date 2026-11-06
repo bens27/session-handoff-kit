@@ -22,6 +22,7 @@
     "hooks": {
       "owns": [
         "skills/session-handoff/hooks/",
+        "herdr-plugin/",
         "tests/",
         "README.md"
       ]
