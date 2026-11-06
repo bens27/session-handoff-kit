@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import time
 
@@ -233,8 +234,8 @@ def terminal_id():
     """Wrapper identity that survives /clear: one terminal, one current handoff.
 
     A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID, then to the
-    Herdr pane. Ids over 120 characters keep a readable prefix plus a digest of
-    the whole value, so two long ids sharing a prefix never name the same terminal."""
+    Herdr pane's terminal. Ids over 120 characters keep a readable prefix plus a digest
+    of the whole value, so two long ids sharing a prefix never name the same terminal."""
     for name in ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
         value = (os.environ.get(name) or '').strip()
         if value:
@@ -242,24 +243,54 @@ def terminal_id():
             if len(value) > 120:
                 value = value[:100] + '-' + hashlib.sha256(value.encode('utf-8', 'replace')).hexdigest()[:16]
             return value
-    return herdr_terminal_id(herdr_pane(), os.environ.get('HERDR_SOCKET_PATH'))
+    pane = herdr_pane()
+    if not pane:
+        return ''
+    return herdr_terminal_id(pane, os.environ.get('HERDR_SOCKET_PATH'), herdr_pane_info(pane).get('terminal_id'))
 
 
 def herdr_pane():
-    """This process's Herdr pane id, or '' outside Herdr."""
+    """The Herdr pane id this process inherited at launch, or '' outside Herdr."""
     if not truthy(os.environ.get('HERDR_ENV')):
         return ''
     return (os.environ.get('HERDR_PANE_ID') or '').strip()
 
 
-def herdr_terminal_id(pane, socket):
-    """Terminal id of a Herdr pane. The socket digest separates Herdr servers.
-    Herdr renumbers a pane that moves to another workspace, so the id changes then."""
-    pane = (pane or '').strip()
-    if not pane:
+_HERDR_PANES = {}  # (pane, socket) -> info; one `herdr pane get` per process
+
+
+def herdr_pane_info(pane):
+    """Herdr's record of `pane`: "pane_id" (its current id) and "terminal_id" (survives
+    a move to another workspace), or {} when Herdr cannot be asked.
+
+    Herdr renumbers a pane that moves between workspaces but keeps resolving the
+    id the moved process inherited, so the launch-time HERDR_PANE_ID stays a valid
+    question. A socket path that no longer exists means no live server: skip."""
+    socket = os.environ.get('HERDR_SOCKET_PATH') or ''
+    key = (pane, socket)
+    if key not in _HERDR_PANES:
+        info = {}
+        if not (socket and not os.path.exists(socket)):
+            try:
+                out = subprocess.run([os.environ.get('HERDR_BIN_PATH') or 'herdr', 'pane', 'get', pane],
+                                     capture_output=True, text=True, timeout=5).stdout
+                data = json.loads(out).get('result', {}).get('pane', {})
+                info = {k: data[k] for k in ('pane_id', 'terminal_id')
+                        if isinstance(data.get(k), str) and data[k].strip()}
+            except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+                info = {}
+        _HERDR_PANES[key] = info
+    return dict(_HERDR_PANES[key])
+
+
+def herdr_terminal_id(pane, socket, terminal=''):
+    """Terminal id of a Herdr pane: Herdr's own terminal id when known (it follows the
+    pane across workspaces), else the pane id. The socket digest separates servers."""
+    name = (terminal or '').strip() or (pane or '').strip()
+    if not name:
         return ''
     server = os.path.realpath(socket) if socket else ''
-    return 'herdr-%s-%s' % (_sha1(server, 8), pane)
+    return 'herdr-%s-%s' % (_sha1(server, 8), name)
 
 
 def terminal_settings_path(terminal):
