@@ -2177,3 +2177,8 @@ The integrity/cost regressions run through public CLI, hook and installer
 interfaces in `tests/test_safety.py`. Their external HTTP boundary is stubbed:
 CI incurs no semantic-routing requests. The kit cannot validate the semantic
 accuracy of a summary or guarantee total host spend.
+
+## G · Goals
+
+Requirement rows managed by pullboard. Each row has a permanent id that commits cite.
+- G1 [draft, must] Agent-tool subagents get a context-watch notice from their own transcript at subagent_at (default 100000): stop, commit WIP and return a resumable report; one firmer repeat 20k later; never /clear or touch the parent checkpoint | gate: review

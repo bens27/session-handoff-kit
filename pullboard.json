@@ -1,4 +1,7 @@
 {
+  "relay": {
+    "board": "d0f0d250fcc4041f4af560edb700ccac"
+  },
   "gate": "",
   "spec": "SPEC.md",
   "practice": "DOCTRINE.md",
@@ -18,7 +21,9 @@
     },
     "hooks": {
       "owns": [
-        "skills/session-handoff/hooks/"
+        "skills/session-handoff/hooks/",
+        "tests/",
+        "README.md"
       ]
     }
   },
