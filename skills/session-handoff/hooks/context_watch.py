@@ -1435,6 +1435,7 @@ def handle_stop(evt):
     t_clear, t_resume, t_poll, polls = typer_timing()
     typer_env = dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr",
                      R=resume_log_path() or "", D=resume_project_id(cwd), N=resume_missed_path(cwd),
+                     K=resume_terminal_match(),
                      M=RESUME_MISSED_NOTICE % (polls * t_poll),
                      T1=str(t_clear), T2=str(t_resume), T3=str(t_poll), T4=str(polls))
     subprocess.Popen(["sh", "-c", typer_script(multiplexer)], env=typer_env,
@@ -1448,12 +1449,21 @@ RESUME_MISSED_NOTICE = ("[context-watch] Automatic restart typed /clear and resu
                         "Escape+resume: the keys may have gone to a focused subagent view. Press Escape, then "
                         "type resume to pick up the open handoff.")
 
+def resume_terminal_match():
+    """The exact `"terminal_id": "<id>"` text handoff_protocol.telemetry writes for this
+    terminal, so the typer can match it literally; '' when the terminal has no id."""
+    terminal = handoff_identity.terminal_id()
+    return json.dumps({"terminal_id": terminal})[1:-1] if terminal else ""
+
+
 # Herdr and tmux typers share one shape: Escape first (a focused subagent view in
 # Claude's TUI would otherwise take the keys; Escape leaves it), then the text,
-# then Enter. `seen` counts this project's resume events in the ledger ($R; empty
+# then Enter. `seen` counts this terminal's resume events in the ledger ($R; empty
 # when telemetry is off, which skips the check); the successor's resume adds one.
+# An event without a terminal_id (older logs, or a terminal with no id) still
+# counts on its project match alone; with $K empty every project event counts.
 _TYPER_BODY = """
-seen() { if [ -n "$R" ] && [ -f "$R" ]; then grep -E '"operation": "(auto)?resume"' "$R" | grep -c "\\"project_id\\": \\"$D\\""; else echo 0; fi; }
+seen() { if [ -n "$R" ] && [ -f "$R" ]; then grep -E '"operation": "(auto)?resume"' "$R" | grep -F "\\"project_id\\": \\"$D\\"" | awk 'ENVIRON["K"] == "" || index($0, ENVIRON["K"]) || !index($0, "\\"terminal_id\\": ") { n++ } END { print n + 0 }'; else echo 0; fi; }
 wait_resume() { i=0; while [ "$i" -lt "$T4" ]; do if [ "$(seen)" -gt "$N0" ]; then return 0; fi; sleep "$T3"; i=$((i+1)); done; return 1; }
 N0=$(seen); sleep "$T1"; send /clear; sleep "$T2"; send resume
 [ -z "$R" ] && exit 0
