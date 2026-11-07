@@ -223,6 +223,25 @@ def project_root(start):
     return start
 
 
+def main_checkout(start):
+    """The main checkout a linked worktree at or above `start` belongs to, or '' when
+    `start` is not in a linked worktree or Git cannot say. Callers use it only as a
+    second place to look; project_root keeps the worktree as its boundary."""
+    worktree = linked_worktree_root(start)
+    if not worktree:
+        return ''
+    try:
+        out = subprocess.run(['git', '-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    common = out.stdout.strip()
+    if out.returncode != 0 or os.path.basename(common) != '.git':
+        return ''  # a bare common dir has no checkout to search
+    main = os.path.dirname(common)
+    return main if os.path.isdir(main) and not same_dir(main, worktree) else ''
+
+
 def canonical_root(start):
     """realpath(project_root(start)): the form every hash below is keyed on."""
     return os.path.realpath(project_root(start))
