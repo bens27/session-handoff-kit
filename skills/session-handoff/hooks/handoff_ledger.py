@@ -64,6 +64,7 @@ from handoff_identity import (  # noqa: F401
 # The checkpoint record owns status, fingerprint, publication and seal; these
 # names stay importable from the ledger for existing callers.
 import handoff_workspace as workspace
+import handoff_runs
 from handoff_record import (  # noqa: F401
     CLOSED_STATUSES, Record, is_open, content_fingerprint, publication_valid,
     _receipt_key, _mac, seal, valid_seal, trusted)
@@ -568,7 +569,8 @@ def claim(path, owner=None):
 
 def claim_report(path):
     """Lines a resuming session needs after claiming: template problems, the
-    handoff's `verify:` command, and how far the repository moved since `git:`."""
+    handoff's `verify:` command, how far the repository moved since `git:`, and
+    whether each recorded subagent is live, finished or stopped."""
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     fm = parse_front_matter(text)
@@ -584,6 +586,7 @@ def claim_report(path):
             out.append("commits_since: %s" % commits)
         if dirty is not None:
             out.append("dirty: %d" % dirty)
+    out.extend(handoff_runs.subagent_report(fm.get("subagents", "")))
     return out
 
 

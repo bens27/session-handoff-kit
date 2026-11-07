@@ -1063,6 +1063,10 @@ def save(root, session, request_id, document):
         runs = handoff_runs.snapshot(root, session, terminal_id())
         if runs:
             fields['runs'] = runs
+        # #7: Agent-tool subagents travel too, so a successor sees which builders still run.
+        subagents = handoff_runs.subagent_snapshot(note.get('transcript_path') or '')
+        if subagents:
+            fields['subagents'] = subagents
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
         carried = None
