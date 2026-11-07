@@ -112,6 +112,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -1542,16 +1543,85 @@ def resume_missed_path(cwd):
     return base[:-len(".count")] + ".resume-missed" if base.endswith(".count") else base + ".resume-missed"
 
 
+def empty_file(path):
+    """Truncate `path` without following a symlink planted in the shared temp dir."""
+    os.close(os.open(path, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW))
+
+
+def shown_fallback_dirs():
+    """Last places to record a shown notice, outside HOME and TMPDIR, which may both
+    be read-only. $HANDOFF_SHOWN_FALLBACK_DIR replaces them (tests point it at a sandbox)."""
+    override = env("HANDOFF_SHOWN_FALLBACK_DIR").strip()
+    if override:
+        return [override]
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return [os.path.join(base, "session-handoff-%d" % uid) for base in ("/var/tmp", "/tmp")]
+
+
+def _own_private_dir(path):
+    """Make `path` a 0700 dir, refusing one that is a symlink or another user's."""
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+        raise PermissionError("not a private dir: %s" % path)
+
+
+def shown_records(path, text):
+    """Where a shown record for this notice may live, in the order to try writing:
+    the sidecar, then the kit's state dir, then the fallback dirs. Keyed by the
+    notice's realpath and text; the record holds which write of the file was shown."""
+    key = hashlib.sha256((os.path.realpath(path) + "\0" + text).encode("utf-8", "replace")).hexdigest()[:32]
+    name = "context-watch-shown-%s" % key
+    places = [(None, path + ".shown"), (None, os.path.join(handoff_identity.state_dir(), name))]
+    places += [(d, os.path.join(d, name)) for d in shown_fallback_dirs()]
+    return places
+
+
 def take_resume_missed_notice(cwd):
-    """The typer's notice for this project, removed so it shows once; '' if none."""
+    """The typer's notice for this project, shown once; '' if none.
+
+    Removed after reading; if removal fails it is emptied instead. If that fails
+    too, a record of which write of the file was shown goes to the first place in
+    shown_records() that takes it, and every place is checked before showing. A
+    notice that cannot be cleared still shows once rather than never or on every prompt."""
     try:  # an odd cwd or a broken state dir must never block a prompt
         path = resume_missed_path(cwd)
         with open(path, encoding="utf-8") as f:
             text = f.read().strip()
-        os.remove(path)
-        return text
+            st = os.fstat(f.fileno())
     except Exception:
         return ""
+    if not text:
+        return ""
+    for clear in (os.remove, empty_file):
+        try:
+            clear(path)
+            return text
+        except Exception:
+            pass
+    # The typer rewrites the same text on every miss, so key on the write, not the text.
+    stamp = "%d:%d:%d" % (st.st_ino, st.st_size, st.st_mtime_ns)
+    places = shown_records(path, text)
+    for _, record in places:
+        try:
+            with open(record, encoding="utf-8") as f:
+                if f.read().strip() == stamp:
+                    return ""
+        except Exception:
+            pass
+    for parent, record in places:
+        try:
+            if parent:
+                _own_private_dir(parent)
+            with open_private(record) as f:
+                f.write(stamp + "\n")
+            break
+        except Exception:
+            continue  # better shown again than never shown
+    return text
 
 
 def auto_cli(argv):
