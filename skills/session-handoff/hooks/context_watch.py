@@ -1542,16 +1542,65 @@ def resume_missed_path(cwd):
     return base[:-len(".count")] + ".resume-missed" if base.endswith(".count") else base + ".resume-missed"
 
 
+def empty_file(path):
+    """Truncate `path` without following a symlink planted in the shared temp dir."""
+    os.close(os.open(path, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW))
+
+
+def _shown_atime(st):
+    """The atime that marks this write of the notice as shown: one tick before its
+    mtime, which a read (atime at or after mtime) never produces by itself."""
+    return st.st_mtime_ns - 1
+
+
 def take_resume_missed_notice(cwd):
-    """The typer's notice for this project, removed so it shows once; '' if none."""
+    """The typer's notice for this project, shown once; '' if none.
+
+    Removed after reading; if removal fails it is emptied instead. If that fails
+    too, which write of the file was shown is recorded in a sidecar and in the
+    file's own atime: setting times needs ownership, not write access, so the
+    mark holds even when the file and its directory are read-only. A notice that
+    cannot be cleared still shows once rather than never or on every prompt."""
     try:  # an odd cwd or a broken state dir must never block a prompt
         path = resume_missed_path(cwd)
+        before = os.stat(path, follow_symlinks=False)
+        if before.st_atime_ns == _shown_atime(before):
+            return ""  # stat, unlike the read below, leaves atime alone
         with open(path, encoding="utf-8") as f:
             text = f.read().strip()
-        os.remove(path)
-        return text
+            st = os.fstat(f.fileno())
     except Exception:
         return ""
+    if not text:
+        return ""
+    for clear in (os.remove, empty_file):
+        try:
+            clear(path)
+            return text
+        except Exception:
+            pass
+    # The typer rewrites the same text on every miss, so key on the write, not the text.
+    stamp = "%d:%d:%d" % (st.st_ino, st.st_size, st.st_mtime_ns)
+    shown = path + ".shown"
+    try:
+        with open(shown, encoding="utf-8") as f:
+            if f.read().strip() == stamp:
+                return ""
+    except Exception:
+        pass
+    try:
+        with open_private(shown) as f:
+            f.write(stamp + "\n")
+    except Exception:
+        pass
+    try:
+        if os.utime in os.supports_follow_symlinks:
+            os.utime(path, ns=(_shown_atime(st), st.st_mtime_ns), follow_symlinks=False)
+        else:
+            os.utime(path, ns=(_shown_atime(st), st.st_mtime_ns))
+    except Exception:
+        pass  # better shown again than never shown
+    return text
 
 
 def auto_cli(argv):

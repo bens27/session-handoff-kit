@@ -307,6 +307,66 @@ class StopAfterCwdDriftIntoWorktree(HookCase):
         self.assertNotIn("has published no checkpoint", self.hook("Stop", sub))
 
 
+class ResumeMissedNoticeUnremovable(unittest.TestCase):
+    """pullboard #4: a notice that was read but cannot be removed is still shown,
+    and the same notice is not shown again on the next prompt."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = os.path.realpath(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"HOME": self.tmp, "TMPDIR": self.tmp})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cw = load_hook(self.tmp)
+        self.addCleanup(setattr, tempfile, "tempdir", None)
+        self.path = self.cw.resume_missed_path(self.tmp)
+        with open(self.path, "w") as f:
+            f.write("missed notice\n")
+
+    def refuse(self, *a, **k):
+        raise PermissionError("refused")
+
+    def test_shown_once_when_remove_fails(self):
+        with mock.patch.object(self.cw.os, "remove", self.refuse):
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "missed notice")
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "")
+
+    def test_shown_once_when_remove_and_truncate_fail(self):
+        with mock.patch.object(self.cw.os, "remove", self.refuse), \
+                mock.patch.object(self.cw, "empty_file", self.refuse):
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "missed notice")
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "")
+
+    def test_a_rewritten_notice_shows_again(self):
+        with mock.patch.object(self.cw.os, "remove", self.refuse), \
+                mock.patch.object(self.cw, "empty_file", self.refuse):
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "missed notice")
+            st = os.stat(self.path)
+            with open(self.path, "w") as f:  # the typer misses again later
+                f.write("missed notice\n")
+            os.utime(self.path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "missed notice")
+            self.assertEqual(self.cw.take_resume_missed_notice(self.tmp), "")
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores file modes")
+    def test_shown_once_when_every_save_of_shown_fails(self):
+        # Real modes, no mocks: the notice is read-only and its state dir is too, so
+        # remove, truncate and the .shown sidecar all fail. A fresh module load per
+        # call stands in for each prompt's separate hook process.
+        state = os.path.dirname(self.path)
+        os.chmod(self.path, 0o400)
+        os.chmod(state, 0o500)
+        self.addCleanup(os.chmod, self.path, 0o600)
+        self.addCleanup(os.chmod, state, 0o700)
+        first = load_hook(self.tmp).take_resume_missed_notice(self.tmp)
+        second = load_hook(self.tmp).take_resume_missed_notice(self.tmp)
+        self.assertTrue(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(self.path + ".shown"))
+        self.assertEqual(first, "missed notice")
+        self.assertEqual(second, "")
+
+
 class FloorLatchSymlink(HookCase):
     def test_floor_latch_is_not_followed(self):
         # A dangling symlink passes the exists() check, so the write would create its target.
