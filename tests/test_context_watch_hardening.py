@@ -140,13 +140,17 @@ class StopTyperEscapesSubagentView(unittest.TestCase):
         self.cw = load_hook(self.tmp)
         self.addCleanup(setattr, tempfile, "tempdir", None)
 
-    def fake(self, name, resume_succeeds):
-        """A recording herdr/tmux stand-in; optionally logs a resume event when 'resume' is typed."""
+    def fake(self, name, resume_succeeds, terminal=None):
+        """A recording herdr/tmux stand-in; optionally logs a resume event when 'resume' is typed.
+        `terminal` adds the terminal_id the resume telemetry records; None is an old-format event."""
         path = os.path.join(self.tmp, name)
         record = ""
         if resume_succeeds:
-            record = ("case \"$*\" in *resume*) printf '%%s\\n' '{\"operation\": \"resume\", \"project_id\": \"%s\"}' "
-                      ">> \"%s\";; esac\n" % (self.cw.resume_project_id(self.tmp), self.log))
+            event = {"operation": "resume", "project_id": self.cw.resume_project_id(self.tmp)}
+            if terminal is not None:
+                event["terminal_id"] = terminal
+            record = ("case \"$*\" in *resume*) printf '%%s\\n' '%s' >> \"%s\";; esac\n"
+                      % (json.dumps(event), self.log))
         with open(path, "w") as f:
             f.write("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> \"%s\"\n%s" % (self.keys, record))
         os.chmod(path, 0o755)
@@ -198,6 +202,33 @@ class StopTyperEscapesSubagentView(unittest.TestCase):
         self.assertIn("resume", p.stdout)
         self.assertIn("Escape", p.stdout)
         self.assertFalse(os.path.exists(notice))
+
+    def test_resume_by_another_terminal_in_the_project_is_not_success(self):
+        """pullboard #3: a resume from another terminal in this project inside the
+        wait window must not stop the retry or suppress the notice."""
+        herdr = self.fake("herdr", resume_succeeds=True, terminal="term-B")
+        argv, env = self.typer({"HERDR_ENV": "1", "HERDR_PANE_ID": "w2:p3", "HERDR_BIN_PATH": herdr,
+                                "HANDOFF_TERMINAL_ID": "term-A"})
+        keys = self.run_typer(argv, env)
+        self.assertEqual(keys.count("pane send-text w2:p3 resume"), 2)
+        self.assertTrue(os.path.exists(self.cw.resume_missed_path(self.tmp)))
+
+    def test_resume_by_this_terminal_is_success(self):
+        herdr = self.fake("herdr", resume_succeeds=True, terminal="term-A")
+        argv, env = self.typer({"HERDR_ENV": "1", "HERDR_PANE_ID": "w2:p3", "HERDR_BIN_PATH": herdr,
+                                "HANDOFF_TERMINAL_ID": "term-A"})
+        keys = self.run_typer(argv, env)
+        self.assertEqual(keys.count("pane send-text w2:p3 resume"), 1)
+        self.assertFalse(os.path.exists(self.cw.resume_missed_path(self.tmp)))
+
+    def test_resume_telemetry_records_the_terminal_id(self):
+        protocol = importlib.import_module("handoff_protocol")
+        with mock.patch.dict(os.environ, {"HANDOFF_TERMINAL_ID": "term-A", "CONTEXT_WATCH_LOG": ""}):
+            protocol.telemetry("resume", self.tmp, "s1", {"outcome": "resumed"})
+        with open(self.log) as f:
+            record = json.loads(f.read().splitlines()[-1])
+        self.assertEqual(record["terminal_id"], "term-A")
+        self.assertEqual(record["project_id"], self.cw.resume_project_id(self.tmp))
 
     def test_tmux_escape_before_each_command(self):
         bindir = os.path.join(self.tmp, "bin")

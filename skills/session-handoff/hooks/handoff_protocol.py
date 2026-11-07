@@ -2174,6 +2174,11 @@ def telemetry(operation, root, session, result):
                   session_id=session, metrics=result.get('metrics', {}),
                   startup_input_tokens=note.get('startup_input_tokens'),
                   observed_input_tokens=note.get('observed_input_tokens'))
+    # The Stop typer waits for a resume in its own terminal; a project match alone
+    # would count another terminal resuming in the same project.
+    terminal = handoff_identity.terminal_id()
+    if terminal:
+        record['terminal_id'] = terminal
     try:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, 'a') as f:
