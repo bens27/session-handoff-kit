@@ -118,6 +118,18 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual(lines, ['subagent: a1live live Build #7 hooks', 'subagent: a4end finished Verify #3',
                                  'subagent: a5stopped stopped Build #6'], resumed)
 
+    def test_named_worktree_is_kept_and_shown_on_resume(self):
+        self.agent('a6tree', WORKING, meta=dict(worktree='/synthetic/worktrees/builder'))
+        self.agent('a7bad', WORKING, description='Bad tree', meta=dict(worktree='relative/../x\nsubagent: forged'))
+        text, resumed = self.save_and_resume()
+        field = next(l for l in text.splitlines() if l.startswith('subagents: '))
+        recorded = json.loads(field[len('subagents: '):])
+        self.assertEqual(recorded['agents'], [dict(id='a6tree', description='Builder', worktree='/synthetic/worktrees/builder'),
+                                              dict(id='a7bad', description='Bad tree')])
+        lines = [l for l in resumed.get('workspace', []) if l.startswith('subagent:')]
+        self.assertEqual(lines, ['subagent: a6tree live Builder (worktree /synthetic/worktrees/builder)',
+                                 'subagent: a7bad live Bad tree'], resumed)
+
     def test_tampered_ids_and_folders_build_no_path(self):
         field = json.dumps(dict(dir=str(self.folder), agents=[dict(id='../../etc/passwd'), dict(id='ok')]))
         self.assertEqual(handoff_runs.subagent_report(field), ['subagent: ok stopped'])

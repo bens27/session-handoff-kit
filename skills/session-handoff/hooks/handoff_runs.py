@@ -346,6 +346,14 @@ def _subagent_text(text):
     return text[:SUBAGENT_DESCRIPTION_CHARS]
 
 
+def _subagent_worktree(path):
+    """The named worktree when it is a plain absolute path, else ''; it reaches resume output, so no control characters."""
+    if (not isinstance(path, str) or not path or len(path) > 1024 or not os.path.isabs(path)
+            or os.path.normpath(path) != path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
+        return ''
+    return path
+
+
 def subagent_snapshot(transcript_path):
     """One-line JSON for the checkpoint's `subagents` field, or '' when there are none."""
     folder = subagent_dir(transcript_path)
@@ -358,7 +366,12 @@ def subagent_snapshot(transcript_path):
         match = re.fullmatch(r'agent-(.+)\.jsonl', name)
         if match and _AGENT_ID.fullmatch(match.group(1)):
             agent_id = match.group(1)
-            agents.append(dict(id=agent_id, description=_subagent_text(_subagent_meta(folder, agent_id).get('description'))))
+            meta = _subagent_meta(folder, agent_id)
+            agent = dict(id=agent_id, description=_subagent_text(meta.get('description')))
+            worktree = _subagent_worktree(meta.get('worktree'))
+            if worktree:
+                agent['worktree'] = worktree
+            agents.append(agent)
     if not agents:
         return ''
     return json.dumps(dict(dir=folder, agents=agents), sort_keys=True)
@@ -415,7 +428,7 @@ def subagent_state(folder, agent_id, now=None):
 
 
 def subagent_report(field, now=None):
-    """`subagent: <id> <state> <description>` lines for a checkpoint's `subagents` field."""
+    """`subagent: <id> <state> <description> (worktree <path>)` lines for a checkpoint's `subagents` field."""
     try:
         recorded = json.loads(field) if field else {}
     except ValueError:
@@ -432,5 +445,6 @@ def subagent_report(field, now=None):
             continue
         line = 'subagent: %s %s' % (agent_id, subagent_state(folder, agent_id, now))
         description = _subagent_text(agent.get('description'))
-        lines.append(line + (' ' + description if description else ''))
+        worktree = _subagent_worktree(agent.get('worktree'))
+        lines.append(line + (' ' + description if description else '') + (' (worktree %s)' % worktree if worktree else ''))
     return lines
