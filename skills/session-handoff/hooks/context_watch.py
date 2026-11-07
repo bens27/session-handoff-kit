@@ -199,12 +199,15 @@ def env(name, default=""):
 
 
 def config_setting(name, key, cwd=None):
-    """Auto-mode setting: environment when set and non-empty, then the project
-    .context-watch.json, then ~/.context-watch/thresholds.json; None if unset."""
+    """Auto-mode setting: environment when set and non-empty, then this terminal's
+    Herdr pane override, then the project .context-watch.json, then
+    ~/.context-watch/thresholds.json; None if unset."""
     value = env(name).strip()
     if value:
         return value
-    value = _load_config_files(cwd or (_EVT or {}).get("cwd") or os.getcwd(), settings=True).get(key)
+    value = handoff_identity.terminal_settings().get(key)
+    if type(value) is not SETTING_KEYS.get(key):  # same type rule as the config files
+        value = _load_config_files(cwd or (_EVT or {}).get("cwd") or os.getcwd(), settings=True).get(key)
     return None if value is None else str(value).lower()
 
 

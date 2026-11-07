@@ -100,8 +100,9 @@ def auto_setting(project, cwd=None, cw=None, model=None, window=None):
 
     True/False when decided, None when nothing decides (the caller's default).
     With handoff_v3 an invalid timing config is off (pass cw to check it) and
-    unset is off. HANDOFF_AUTO wins next; a project may disable auto, never
-    enable it; otherwise the user file decides.
+    unset is off. HANDOFF_AUTO wins next, then the terminal's Herdr pane
+    override (the pane's own say, like HANDOFF_AUTO for that terminal); a
+    project may disable auto, never enable it; otherwise the user file decides.
     """
     v3 = project.get('handoff_v3') is True
     if v3 and cw is not None and timing_error(project, cwd, cw, model, window):
@@ -109,6 +110,9 @@ def auto_setting(project, cwd=None, cw=None, model=None, window=None):
     explicit = os.environ.get('HANDOFF_AUTO', '').strip()
     if explicit:
         return explicit.lower() in ('1', 'true', 'yes', 'on')
+    pane = terminal_auto()
+    if pane is not None:
+        return pane
     if project.get('auto') is False:
         return False
     try:
@@ -119,6 +123,18 @@ def auto_setting(project, cwd=None, cw=None, model=None, window=None):
     if type(value) is bool:
         return value
     return False if v3 else None
+
+
+def terminal_auto():
+    """"auto" from this terminal's pane override file, or None. The identity
+    module sits beside this gate once the runtime folder is on sys.path (main);
+    before that, or in a lone copy, there is no override to read."""
+    try:
+        import handoff_identity
+    except ImportError:
+        return None
+    value = handoff_identity.terminal_settings().get('auto')
+    return value if type(value) is bool else None
 
 
 def user_auto(project):

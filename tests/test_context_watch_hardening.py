@@ -357,3 +357,63 @@ class LoneHookNoticeOncePerSession(unittest.TestCase):
             self.assertTrue(cw._claim_lone_notice({"session_id": "x"}))
         self.assertTrue(cw._claim_lone_notice({"session_id": "y"}))
         self.assertFalse(cw._claim_lone_notice({"session_id": "y"}))
+
+
+class PaneOverrideAutoSettings(unittest.TestCase):
+    """The Herdr pane override file carries auto and auto_max with the same
+    precedence as its "at": below the environment, above the config files."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = os.path.realpath(self._tmp.name)
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("HANDOFF_AUTO", "HANDOFF_AUTO_MAX", "AGENTSROOM_AGENT_ID", "HERDR_ENV")}
+        env.update(HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0",
+                   HANDOFF_TERMINAL_ID="term-override")
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cw = load_hook(self.tmp)
+        self.addCleanup(setattr, tempfile, "tempdir", None)
+        self.cw._EVT = {"cwd": self.tmp}
+        os.makedirs(os.path.join(self.tmp, ".context-watch"))
+        self.user({"auto": False, "auto_max": 8})
+
+    def user(self, data):
+        with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
+            json.dump(data, f)
+
+    def pane(self, data):
+        path = self.cw.handoff_identity.terminal_settings_path("term-override")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    def project(self, data):
+        with open(os.path.join(self.tmp, ".context-watch.json"), "w") as f:
+            json.dump(data, f)
+
+    def test_pane_auto_and_auto_max_sit_between_env_and_files(self):
+        self.assertFalse(self.cw.auto_mode_on())
+        self.assertEqual(self.cw.auto_max(self.tmp), 8)
+        self.pane({"at": 90000, "auto": True, "auto_max": 2})
+        self.assertTrue(self.cw.auto_mode_on())
+        self.assertEqual(self.cw.auto_max(self.tmp), 2)
+        self.project({"auto": False, "auto_max": 5})  # the pane is the terminal's own say, like HANDOFF_AUTO=1
+        self.assertTrue(self.cw.auto_mode_on())
+        self.assertEqual(self.cw.auto_max(self.tmp), 2)
+        with mock.patch.dict(os.environ, {"HANDOFF_AUTO": "0", "HANDOFF_AUTO_MAX": "6"}):
+            self.assertFalse(self.cw.auto_mode_on())
+            self.assertEqual(self.cw.auto_max(self.tmp), 6)
+
+    def test_pane_auto_off_wins_over_the_user_file(self):
+        self.user({"auto": True})
+        self.assertTrue(self.cw.auto_mode_on())
+        self.pane({"auto": False})
+        self.assertFalse(self.cw.auto_mode_on())
+
+    def test_wrong_types_in_the_pane_file_are_ignored(self):
+        self.pane({"auto": "yes", "auto_max": "3"})
+        self.assertFalse(self.cw.auto_mode_on())
+        self.assertEqual(self.cw.auto_max(self.tmp), 8)
