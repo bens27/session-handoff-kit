@@ -15,7 +15,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_context_watch_regressions import HookCase, codex_count, claude_call, HOOK  # noqa: E402
+from test_context_watch_regressions import CLEAN, HookCase, codex_count, claude_call, HOOK  # noqa: E402
 
 
 def load_hook(tmp):
@@ -208,6 +208,72 @@ class StopTyperEscapesSubagentView(unittest.TestCase):
         self.assertEqual(keys, [
             "send-keys -t %5 Escape", "send-keys -t %5 -l /clear", "send-keys -t %5 Enter",
             "send-keys -t %5 Escape", "send-keys -t %5 -l resume", "send-keys -t %5 Enter"])
+
+
+class StopAfterCwdDriftIntoWorktree(HookCase):
+    """pullboard #6: the notice fires and the checkpoint is saved at the project
+    root, then a Bash cd moves the session cwd into a linked worktree of it. The
+    Stop hook must still find that checkpoint instead of blocking."""
+
+    QUIET = {"HERDR_ENV": "", "HERDR_PANE_ID": "", "HANDOFF_TERMINAL_ID": "", "CONTEXT_WATCH_THINKING": "0"}
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = os.path.realpath(self.tmp)
+        self.root = os.path.join(self.tmp, "project")
+        os.makedirs(os.path.join(self.root, ".handoffs"))
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", self.root]
+        env = dict(os.environ, HOME=self.tmp, GIT_CONFIG_NOSYSTEM="1")
+        for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"],
+                     ["worktree", "add", "-q", os.path.join(".claude", "worktrees", "x")]):
+            subprocess.run(git + args, env=env, check=True, capture_output=True, timeout=30)
+        self.worktree = os.path.join(self.root, ".claude", "worktrees", "x")
+
+    def env(self):
+        # A Codex shell's CODEX_THREAD_ID (or HANDOFF_SESSION_ID) makes the save record
+        # under that host session, not this test's; HANDOFF_STATE_DIR would leave the sandbox.
+        env = {k: v for k, v in os.environ.items()
+               if k not in CLEAN and k not in ("CODEX_THREAD_ID", "HANDOFF_SESSION_ID", "HANDOFF_STATE_DIR")}
+        env.update(self.QUIET, HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0")
+        return env
+
+    def hook(self, event, cwd):
+        env = self.env()
+        env.update(CONTEXT_WATCH_JEV="0", CONTEXT_WATCH_AGENT="claude")
+        evt = {"hook_event_name": event, "session_id": self.sid, "cwd": cwd,
+               "transcript_path": self.transcript}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=env, cwd=cwd,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def save(self):
+        env = self.env()
+        doc = {"topic": "drift", "description": "fixture",
+               "body": "## Objective\nContinue.\n## Current state\nReady.\n## Next steps\nTest.\n"}
+        ledger = os.path.join(os.path.dirname(HOOK), "handoff_ledger.py")
+        p = subprocess.run([sys.executable, ledger, "save", self.root, "--session", self.sid,
+                            "--request-id", "fixture"], input=json.dumps(doc), env=env, cwd=self.root,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(json.loads(p.stdout)["outcome"], "saved")
+
+    def test_stop_from_worktree_finds_the_root_checkpoint(self):
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("context-pressure", self.hook("PostToolUse", self.root))
+        # Guard can fail: before the save, Stop from the drifted cwd blocks.
+        self.assertIn("No checkpoint has been published", self.hook("Stop", self.worktree))
+        self.save()
+        self.assertNotIn("No checkpoint has been published", self.hook("Stop", self.worktree))
+        self.assertNotIn("has published no checkpoint", self.hook("Stop", self.worktree))
+
+    def test_stop_from_a_subdirectory_finds_the_root_checkpoint(self):
+        sub = os.path.join(self.root, "src", "deep")
+        os.makedirs(sub)
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("context-pressure", self.hook("PostToolUse", self.root))
+        self.save()
+        self.assertNotIn("has published no checkpoint", self.hook("Stop", sub))
 
 
 class FloorLatchSymlink(HookCase):

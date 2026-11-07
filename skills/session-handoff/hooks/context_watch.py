@@ -677,21 +677,36 @@ def usage_age_seconds(entries):
     return None
 
 
+def session_roots(cwd):
+    """Project roots that may hold this session's notice and checkpoint: the cwd's own,
+    then, when a Bash cd moved the session into a linked worktree, its main checkout's,
+    where the notice fired and the save went before the drift (pullboard #6)."""
+    roots = [handoff_identity.project_root(cwd)]
+    main = handoff_identity.main_checkout(cwd)
+    if main:
+        other = handoff_identity.project_root(main)
+        if os.path.realpath(other) != os.path.realpath(roots[0]):
+            roots.append(other)
+    return roots
+
+
 def handoff_written_since(cwd, session=None, require_open=False):
     """Only a validated publication for this session's trigger satisfies it."""
     if not session:
         return False
-    try:
-        ledger = _ledger()
-        note = ledger.read_session_note(cwd, session=session)
-        trigger = note.get('trigger_id')
-        return bool(trigger) and any(
-            r['fm'].get('session_id') == session and r['fm'].get('trigger_id') == trigger
-            and r['fm'].get('checkpoint_id') and not r['problems']
-            and (not require_open or r['fm'].get('status') == 'open')
-            for r in ledger._records(handoff_identity.project_root(cwd)))
-    except OSError:
-        return False
+    ledger = _ledger()
+    for root in session_roots(cwd):
+        try:
+            trigger = ledger.read_session_note(root, session=session).get('trigger_id')
+            if trigger and any(
+                    r['fm'].get('session_id') == session and r['fm'].get('trigger_id') == trigger
+                    and r['fm'].get('checkpoint_id') and not r['problems']
+                    and (not require_open or r['fm'].get('status') == 'open')
+                    for r in ledger._records(root)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _looks_base64(s):
@@ -1133,12 +1148,15 @@ def session_checkpoint_published(cwd, session, since):
     advisory latch's mtime): an older save does not cover the notice (#180)."""
     if not session:
         return False
-    try:
-        return any(r['fm'].get('session_id') == session and r['fm'].get('checkpoint_id') and not r['problems']
+    for root in session_roots(cwd):
+        try:
+            if any(r['fm'].get('session_id') == session and r['fm'].get('checkpoint_id') and not r['problems']
                    and r['fm'].get('status') != 'unpublished' and r['mtime'] >= since
-                   for r in _ledger()._records(handoff_identity.project_root(cwd)))
-    except OSError:
-        return False
+                   for r in _ledger()._records(root)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 NUDGE_BAND_TOKENS = 10000
@@ -1235,7 +1253,7 @@ def nudge_unwritten_handoff(evt):
         "[context-watch] This session got a context-watch notice and has published no checkpoint "
         "since. Do not clear it yet: clearing now would lose this work's context. Ask the agent to "
         "save a checkpoint first; any handoff it mentions without a saved path does not exist. "
-        "Searched project: %s." % handoff_identity.project_root(cwd))}
+        "Searched project: %s." % ", ".join(session_roots(cwd)))}
     advisory_only = notice.endswith(".advised")  # #208: warn only, no block, below the threshold
     if not advisory_only and not evt.get("stop_hook_active") and claim_band(notice, "nudged", nudge_band(cwd, key, notice)):
         out.update(decision="block", reason=(
