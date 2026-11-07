@@ -1,8 +1,8 @@
 id = "session-handoff.thresholds"
 name = "Handoff thresholds"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
-description = "Context use against the session-handoff warning and auto-handoff thresholds, editable per pane or globally"
+description = "Context use against the session-handoff warning and handoff thresholds, with the auto-handoff controls, editable per pane or globally"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -16,5 +16,5 @@ id = "thresholds"
 title = "Handoff thresholds"
 placement = "popup"
 width = 60
-height = 14
+height = 17
 command = ["python3", "thresholds.py"]

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'herdr-plugin'))
 
 import thresholds  # noqa: E402
+import mandatory_gate  # noqa: E402  # on sys.path through the plugin's hooks import
 
 CLEARED = ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID', 'HANDOFF_AT', 'CONTEXT_WATCH_WARNING_WINDOW',
            'CONTEXT_WATCH_TOKENS', 'CONTEXT_WATCH_TOKENS_MAP', 'CONTEXT_WATCH_PERCENT',
@@ -77,6 +78,62 @@ class ThresholdsPluginTests(unittest.TestCase):
         self.assertEqual(state.warning, 90000)
         state.adjust('handoff', -thresholds.STEP)
         self.assertEqual(state.handoff, 90000)
+
+    def test_pane_save_writes_auto_controls_the_hook_honours(self):
+        terminal = thresholds.target_identity('w1:p1')
+        thresholds.save_pane(terminal, 'w1:p1', 80000, 90000, auto=True, auto_max=3)
+        saved = json.loads(Path(thresholds.handoff_identity.terminal_settings_path(terminal)).read_text())
+        self.assertEqual((saved['auto'], saved['auto_max'], saved['at']), (True, 3, 90000))
+        cw, gate = thresholds.context_watch, mandatory_gate
+        (self.project / '.context-watch.json').write_text('{"auto": false, "auto_max": 5}')
+        self.assertEqual(cw.auto_max(str(self.project)), 3)  # pane above the project file
+        self.assertIs(gate.auto_setting({'auto': False}), True)  # pane auto is HANDOFF_AUTO=1 for that pane
+        with mock.patch.dict(os.environ, {'HANDOFF_AUTO': '0', 'HANDOFF_AUTO_MAX': '7'}):
+            self.assertIs(gate.auto_setting({}), False)  # an explicit env still wins
+            self.assertEqual(cw.auto_max(str(self.project)), 7)
+        thresholds.clear_pane(terminal)
+        self.assertEqual(cw.auto_max(str(self.project)), 5)
+        self.assertIs(gate.auto_setting({'auto': False}), False)
+
+    def test_save_global_writes_auto_controls_keeping_other_keys(self):
+        thresholds.save_global(100000, 140000, auto=False, auto_max=4, subagent_at=80000)
+        self.assertEqual(json.loads(self.user.read_text()),
+                         {'auto': False, 'claude': 180000, 'at': 140000, 'warning_window_tokens': 40000,
+                          'auto_max': 4, 'subagent_at': 80000})
+        thresholds.target_identity('w1:p1')
+        self.assertEqual(thresholds.context_watch.subagent_threshold(str(self.project)), 80000)
+        self.assertEqual(thresholds.context_watch.auto_max(str(self.project)), 4)
+
+    def test_settings_resolve_with_their_source(self):
+        terminal = thresholds.target_identity('w1:p1')
+        self.assertEqual(thresholds.resolve_settings(str(self.project), terminal),
+                         {'auto': (True, 'all agents'), 'auto_max': (10, 'default'),
+                          'subagent_at': (100000, 'default')})
+        (self.project / '.context-watch.json').write_text('{"auto": false, "auto_max": 5, "subagent_at": 90000}')
+        thresholds.save_pane(terminal, 'w1:p1', 80000, 90000, auto=True, auto_max=3)
+        self.assertEqual(thresholds.resolve_settings(str(self.project), terminal),
+                         {'auto': (True, 'this pane'), 'auto_max': (3, 'this pane'),
+                          'subagent_at': (90000, 'project')})
+        thresholds.clear_pane(terminal)
+        self.assertEqual(thresholds.resolve_settings(str(self.project), terminal)['auto'], (False, 'project'))
+
+    def test_keys_edit_auto_controls_and_subagent_at_is_global_only(self):
+        state = thresholds.State.__new__(thresholds.State)
+        state.scope, state.message = 'pane', ''
+        state.warning, state.handoff, state.auto, state.auto_max, state.subagent_at = 85000, 90000, False, 10, 100000
+        state.sources = {}
+        for key in 'amMMuU':
+            state.key(key)
+        self.assertEqual((state.auto, state.auto_max, state.subagent_at), (True, 11, 100000))
+        state.key('\t')
+        state.key('u')
+        self.assertEqual(state.subagent_at, 95000)
+        for _ in range(11):
+            state.key('m')
+        self.assertEqual(state.auto_max, 1)
+        lines = ''.join(state.setting_lines())
+        for text in ('Auto', 'a ', 'Auto max', 'm/M', 'Subagent', 'u/U'):
+            self.assertIn(text, lines)
 
 
 if __name__ == '__main__':

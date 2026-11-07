@@ -24,6 +24,7 @@ import watch_decision  # noqa: E402
 HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
 TARGET = os.environ.get("HANDOFF_TARGET_PANE") or ""
 STEP = 5000
+DEFAULTS = {"auto": False, "auto_max": 10, "subagent_at": context_watch.SUBAGENT_AT_DEFAULT}
 DIM, BOLD, RESET, WARN, HOT = "\x1b[2m", "\x1b[1m", "\x1b[0m", "\x1b[33m", "\x1b[31m"
 
 
@@ -32,7 +33,8 @@ def target_identity(pane):
     Herdr pane, and the agent's environment overrides are unknown here; the
     session note's threshold source shows when one applies."""
     os.environ.update(HERDR_ENV="1", HERDR_PANE_ID=pane)
-    for name in ("HANDOFF_TERMINAL_ID", "AGENTSROOM_AGENT_ID", "HANDOFF_AT", "CONTEXT_WATCH_WARNING_WINDOW"):
+    for name in ("HANDOFF_TERMINAL_ID", "AGENTSROOM_AGENT_ID", "HANDOFF_AT", "CONTEXT_WATCH_WARNING_WINDOW",
+                 "HANDOFF_AUTO", "HANDOFF_AUTO_MAX"):
         os.environ.pop(name, None)
     return handoff_identity.terminal_id()
 
@@ -46,9 +48,13 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
-def save_pane(terminal, pane, warning, handoff):
-    write_json(handoff_identity.terminal_settings_path(terminal),
-               {"terminal": terminal, "pane": pane, "at": handoff, "warning_window_tokens": handoff - warning})
+def save_pane(terminal, pane, warning, handoff, auto=None, auto_max=None):
+    data = {"terminal": terminal, "pane": pane, "at": handoff, "warning_window_tokens": handoff - warning}
+    if auto is not None:
+        data["auto"] = auto
+    if auto_max is not None:
+        data["auto_max"] = auto_max
+    write_json(handoff_identity.terminal_settings_path(terminal), data)
 
 
 def clear_pane(terminal):
@@ -58,18 +64,55 @@ def clear_pane(terminal):
         pass
 
 
-def save_global(warning, handoff):
-    """Set "at" and "warning_window_tokens", keeping every other key in the file."""
-    path = os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json")
+def global_path():
+    """~/.context-watch/thresholds.json, read at call time so HOME is the caller's."""
+    return os.path.join(os.path.expanduser("~"), ".context-watch", "thresholds.json")
+
+
+def save_global(warning, handoff, auto=None, auto_max=None, subagent_at=None):
+    """Set "at" and "warning_window_tokens" (and the auto controls when given),
+    keeping every other key in the file."""
+    path = global_path()
+    data = read_json(path)
+    if data is None:
+        raise ValueError("%s is not a JSON object" % path)
+    data.update(at=handoff, warning_window_tokens=handoff - warning)
+    data.update({k: v for k, v in (("auto", auto), ("auto_max", auto_max), ("subagent_at", subagent_at))
+                 if v is not None})
+    write_json(path, data)
+
+
+def read_json(path):
+    """The JSON object at `path`; {} when missing or unreadable, None when it is not an object."""
     try:
         with open(path, encoding="utf-8") as stream:
             data = json.load(stream)
-    except FileNotFoundError:
-        data = {}
-    if not isinstance(data, dict):
-        raise ValueError("%s is not a JSON object" % path)
-    data.update(at=handoff, warning_window_tokens=handoff - warning)
-    write_json(path, data)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else None
+
+
+def resolve_settings(cwd, terminal):
+    """{name: (value, source)} for auto, auto_max and subagent_at as the hook
+    resolves them: pane override, then project file, then the global file, then
+    the default; auto in a project file can only turn it off."""
+    pane = handoff_identity.terminal_settings(terminal)
+    project = read_json(os.path.join(handoff_identity.project_root(cwd), ".context-watch.json")) or {}
+    layers = (("this pane", pane), ("project", project), ("all agents", read_json(global_path()) or {}))
+    out = {}
+    for key, kind in context_watch.SETTING_KEYS.items():
+        if key == "at":
+            continue
+        out[key] = (DEFAULTS[key], "default")
+        for source, data in layers:
+            value = data.get(key)
+            if type(value) is not kind or (key == "auto" and source == "project" and value):
+                continue
+            if key == "subagent_at" and source == "this pane":
+                continue  # the subagent point is global only: a subagent has no pane of its own
+            out[key] = (value, source)
+            break
+    return out
 
 
 def resolve(cwd, model, window):
@@ -129,6 +172,7 @@ class State:
         self.session = self.cwd = ""
         self.note = {}
         self.warning = self.handoff = None
+        self.auto, self.auto_max, self.subagent_at, self.sources = None, None, None, {}
         self.message = ""
         self.gone = False
 
@@ -140,7 +184,13 @@ class State:
         self.session, self.cwd = found
         self.note = read_note(self.cwd, self.session)
         if self.warning is None and self.cwd:
-            self.warning, self.handoff, _ = resolve(self.cwd, self.note.get("model"), self.note.get("window") or 200000)
+            self.load()
+
+    def load(self):
+        self.warning, self.handoff, _ = resolve(self.cwd, self.note.get("model"), self.note.get("window") or 200000)
+        settings = resolve_settings(self.cwd, self.terminal)
+        self.auto, self.auto_max, self.subagent_at = (settings[k][0] for k in ("auto", "auto_max", "subagent_at"))
+        self.sources = {k: v[1] for k, v in settings.items()}
 
     def adjust(self, which, delta):
         if self.warning is None:
@@ -152,11 +202,22 @@ class State:
 
     def save(self):
         if self.scope == "pane":
-            save_pane(self.terminal, self.pane, self.warning, self.handoff)
+            save_pane(self.terminal, self.pane, self.warning, self.handoff, self.auto, self.auto_max)
         else:
-            save_global(self.warning, self.handoff)
+            save_global(self.warning, self.handoff, self.auto, self.auto_max, self.subagent_at)
         self.message = "Saved for %s; the hook applies it on its next event." % (
             "this pane" if self.scope == "pane" else "all agents")
+        if self.cwd:
+            self.load()  # show the saved values with their new source
+
+    def setting_lines(self):
+        """One compact line per auto-handoff setting: value, key hints, source."""
+        src = {k: DIM + "(%s)" % v + RESET for k, v in self.sources.items()} if self.sources else {}
+        return [" Auto     %8s   a    toggle   %s" % ("on" if self.auto else "off", src.get("auto", "")),
+                " Auto max %8s   m/M  -/+1     %s" % (self.auto_max, src.get("auto_max", "")),
+                " Subagent %8s   %s   %s" % (human(self.subagent_at),
+                                              "u/U  -/+%s" % human(STEP) if self.scope == "global"
+                                              else "tab  all agents", src.get("subagent_at", ""))]
 
     def render(self):
         note = self.note
@@ -171,6 +232,7 @@ class State:
             lines.append(DIM + "          | warning   ! handoff" + RESET)
             lines.append(" Warning  %8s   w/W  -/+%s" % (human(self.warning), human(STEP)))
             lines.append(" Handoff  %8s   h/H  -/+%s" % (human(self.handoff), human(STEP)))
+            lines.extend(self.setting_lines())
             source = note.get("threshold_source") or "no hook event yet"
             lines.append(DIM + " Hook now: %s at %s" % (human(note.get("threshold") or 0), source) + RESET
                          if note.get("threshold") else DIM + " Hook now: " + source + RESET)
@@ -188,6 +250,12 @@ class State:
         steps = {"w": ("warning", -STEP), "W": ("warning", STEP), "h": ("handoff", -STEP), "H": ("handoff", STEP)}
         if key in steps:
             self.adjust(*steps[key])
+        elif key == "a":
+            self.auto = not self.auto
+        elif key in ("m", "M") and self.auto_max is not None:
+            self.auto_max = max(self.auto_max + (1 if key == "M" else -1), 1)
+        elif key in ("u", "U") and self.scope == "global" and self.subagent_at is not None:
+            self.subagent_at = max(self.subagent_at + (STEP if key == "U" else -STEP), STEP)
         elif key == "\t":
             self.scope = "global" if self.scope == "pane" else "pane"
         elif key == "s" and self.warning is not None:
