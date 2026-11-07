@@ -37,5 +37,6 @@
   },
   "checks": {
     "provesNothing": "hold"
-  }
+  },
+  "affectedTests": "python3 -m pytest -q"
 }
