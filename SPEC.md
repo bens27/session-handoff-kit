@@ -2182,3 +2182,4 @@ accuracy of a summary or guarantee total host spend.
 
 Requirement rows managed by pullboard. Each row has a permanent id that commits cite.
 - G1 [approved, must] Agent-tool subagents get a context-watch notice from their own transcript at subagent_at (default 100000): stop, commit WIP and return a resumable report; one firmer repeat 20k later; never /clear or touch the parent checkpoint | gate: review
+- G2 [approved, must] A checkpoint records each background subagent the parked session launched (id, description, worktree if named), and resume reports each as live, finished or stopped from its transcript, so the next session neither relaunches live work nor waits on dead work. | gate: review
