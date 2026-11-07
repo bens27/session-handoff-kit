@@ -33,6 +33,7 @@ import os
 import re
 import secrets
 import subprocess
+import time
 from datetime import datetime
 
 import handoff_identity
@@ -309,3 +310,127 @@ def render(views):
     if len(views) > RENDER_LIMIT:
         lines.append('- %d more run(s) omitted; list them with run-list.' % (len(views) - RENDER_LIMIT))
     return '\n'.join(lines) + '\n'
+
+
+# ---------------------------------------------------------------- subagents
+# #7: Agent-tool subagents a parked session left behind. Claude Code writes each
+# beside the parent's transcript: <transcript without .jsonl>/subagents/
+# agent-<id>.jsonl plus agent-<id>.meta.json. A save records ids and
+# descriptions; resume re-observes each, so a successor does not relaunch
+# builders that are still live. Like runs, this only reads; it never signals.
+
+SUBAGENT_LIVE_S = 120
+SUBAGENT_TAIL_BYTES = 65536
+SUBAGENT_DESCRIPTION_CHARS = 80
+# Ids come from file names and checkpoint front matter; only this shape may build a path.
+_AGENT_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
+
+
+def subagent_dir(transcript_path):
+    if not transcript_path or not transcript_path.endswith('.jsonl'):
+        return ''
+    return os.path.join(transcript_path[:-len('.jsonl')], 'subagents')
+
+
+def _subagent_meta(folder, agent_id):
+    try:
+        with open(os.path.join(folder, 'agent-%s.meta.json' % agent_id), encoding='utf-8') as f:
+            meta = json.load(f)
+        return meta if isinstance(meta, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _subagent_text(text):
+    text = ' '.join(str(text or '').split())
+    return text[:SUBAGENT_DESCRIPTION_CHARS]
+
+
+def subagent_snapshot(transcript_path):
+    """One-line JSON for the checkpoint's `subagents` field, or '' when there are none."""
+    folder = subagent_dir(transcript_path)
+    try:
+        names = sorted(os.listdir(folder)) if folder else []
+    except OSError:
+        return ''
+    agents = []
+    for name in names:
+        match = re.fullmatch(r'agent-(.+)\.jsonl', name)
+        if match and _AGENT_ID.fullmatch(match.group(1)):
+            agent_id = match.group(1)
+            agents.append(dict(id=agent_id, description=_subagent_text(_subagent_meta(folder, agent_id).get('description'))))
+    if not agents:
+        return ''
+    return json.dumps(dict(dir=folder, agents=agents), sort_keys=True)
+
+
+def _subagent_tail(path):
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - SUBAGENT_TAIL_BYTES))
+            lines = f.read().decode('utf-8', 'replace').splitlines()
+    except OSError:
+        return []
+    if size > SUBAGENT_TAIL_BYTES:
+        lines = lines[1:]  # the first line may be cut mid-entry
+    entries = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+def _subagent_finished(folder, agent_id, entries):
+    if _subagent_meta(folder, agent_id).get('finished') is True:
+        return True
+    last_assistant = None
+    for entry in entries:
+        message = entry.get('message')
+        if entry.get('type') != 'assistant' or not isinstance(message, dict):
+            continue
+        last_assistant = message
+        content = message.get('content')
+        if isinstance(content, list) and any(isinstance(block, dict) and block.get('type') == 'tool_use'
+                                             and block.get('name') == 'SubagentHandback' for block in content):
+            return True
+    return bool(last_assistant and last_assistant.get('stop_reason') == 'end_turn')
+
+
+def subagent_state(folder, agent_id, now=None):
+    """'finished' (a final result is recorded), 'live' (written in the last 120 s) or 'stopped'."""
+    path = os.path.join(folder, 'agent-%s.jsonl' % agent_id)
+    if _subagent_finished(folder, agent_id, _subagent_tail(path)):
+        return 'finished'
+    try:
+        age = (time.time() if now is None else now) - os.path.getmtime(path)
+    except OSError:
+        return 'stopped'
+    return 'live' if age <= SUBAGENT_LIVE_S else 'stopped'
+
+
+def subagent_report(field, now=None):
+    """`subagent: <id> <state> <description>` lines for a checkpoint's `subagents` field."""
+    try:
+        recorded = json.loads(field) if field else {}
+    except ValueError:
+        return []
+    if not isinstance(recorded, dict):
+        return []
+    folder = recorded.get('dir')
+    if not isinstance(folder, str) or os.path.basename(folder) != 'subagents' or not os.path.isabs(folder):
+        return []
+    lines = []
+    for agent in recorded.get('agents') or []:
+        agent_id = agent.get('id') if isinstance(agent, dict) else None
+        if not isinstance(agent_id, str) or not _AGENT_ID.fullmatch(agent_id):
+            continue
+        line = 'subagent: %s %s' % (agent_id, subagent_state(folder, agent_id, now))
+        description = _subagent_text(agent.get('description'))
+        lines.append(line + (' ' + description if description else ''))
+    return lines
