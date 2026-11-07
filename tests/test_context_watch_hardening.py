@@ -351,21 +351,42 @@ class ResumeMissedNoticeUnremovable(unittest.TestCase):
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores file modes")
     def test_shown_once_when_every_save_of_shown_fails(self):
-        # Real modes, no mocks: the notice is read-only and its state dir is too, so
-        # remove, truncate and the .shown sidecar all fail. A fresh module load per
-        # call stands in for each prompt's separate hook process.
+        # Real modes, no mocks: the notice is read-only and its state dir (also HOME
+        # and TMPDIR) is too, so remove, truncate and the .shown sidecar all fail.
+        # Each call is its own process, and a third process reads the notice in
+        # between, as any ordinary reader may (which resets the file's atime).
+        fallback = tempfile.TemporaryDirectory()
+        self.addCleanup(fallback.cleanup)
         state = os.path.dirname(self.path)
         os.chmod(self.path, 0o400)
         os.chmod(state, 0o500)
         self.addCleanup(os.chmod, self.path, 0o600)
         self.addCleanup(os.chmod, state, 0o700)
-        first = load_hook(self.tmp).take_resume_missed_notice(self.tmp)
-        second = load_hook(self.tmp).take_resume_missed_notice(self.tmp)
+        # gettempdir() skips an unwritable TMPDIR, so name the state dir outright.
+        env = dict(os.environ, HOME=self.tmp, TMPDIR=self.tmp, HANDOFF_STATE_DIR=state,
+                   HANDOFF_SHOWN_FALLBACK_DIR=fallback.name)
+        hooks = os.path.dirname(os.path.abspath(HOOK))
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import context_watch as cw; "
+                "sys.stdout.write(cw.take_resume_missed_notice(sys.argv[2]))")
+
+        def take():
+            p = subprocess.run([sys.executable, "-c", code, hooks, self.tmp], env=env, cwd=self.tmp,
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            return p.stdout
+
+        def read():
+            p = subprocess.run([sys.executable, "-c", "import sys; open(sys.argv[1]).read()", self.path],
+                               env=env, cwd=self.tmp, capture_output=True, text=True, timeout=30)
+            self.assertEqual(p.returncode, 0, p.stderr)
+
+        first = take()
+        read()
+        second = take()
         self.assertTrue(os.path.exists(self.path))
         self.assertFalse(os.path.exists(self.path + ".shown"))
         self.assertEqual(first, "missed notice")
         self.assertEqual(second, "")
-
 
 class FloorLatchSymlink(HookCase):
     def test_floor_latch_is_not_followed(self):
