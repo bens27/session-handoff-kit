@@ -370,6 +370,17 @@ but keeps its terminal id, so the open handoff and any pane override follow the
 move, and the `Stop` hook types into the pane's current id. When Herdr cannot be
 asked (no server at `HERDR_SOCKET_PATH`), the pane id names the terminal instead.
 
+Automatic handoff shows a summary and clears the pane seconds later. Inside
+Herdr the typer first opens that summary in an unfocused plugin pane titled
+"Handoff summary", split to the right of the agent pane
+(`herdr plugin pane open --entrypoint summary --placement split --direction right --no-focus`),
+so it stays readable after the clear. The pane reads its own per-terminal copy
+of the summary, which the replay on the next prompt does not consume; `q`
+closes it. While it stays open, the next automatic handoff in that terminal
+updates it instead of opening another split. This needs the plugin below
+linked; when it is not, the clear and resume go ahead without the pane. tmux
+and AgentsRoom sessions are unchanged.
+
 The `herdr-plugin/` folder is a Herdr plugin that shows a pane's context use
 against its warning and handoff thresholds, and edits them:
 
@@ -1094,7 +1105,7 @@ session-handoff-kit/
 │       ├── handoff_protocol.py          # deterministic save/prepare/verify/acknowledge protocol
 │       ├── handoff_dispatch.py          # one validated lifecycle decision per request (dispatch/hold/release)
 │       └── thresholds.example.json      # sample per-model threshold config
-├── herdr-plugin/                        # Herdr popup: view and edit a pane's thresholds
+├── herdr-plugin/                        # Herdr popup: view and edit a pane's thresholds; auto-handoff summary pane
 ├── plugins/session-handoff/             # Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop

@@ -371,6 +371,126 @@ class AutoHandoffSummaryReshownAfterResume(RootCheckpointCase):
         self.assertNotIn(self.SUMMARY, self.resume(self.sid + "-again"))
 
 
+class AutoHandoffSummaryInHerdrPane(RootCheckpointCase):
+    """pullboard #12 (G4): inside Herdr the Stop typer opens the summary in an unfocused
+    plugin pane beside the agent pane before it types /clear. The pane reads its own
+    copy, so the replay after resume (#11) does not take it away. Outside Herdr
+    nothing changes."""
+
+    SUMMARY = "Handoff saved.\nDone: parser fixed (abc1234).\nNext: wire the CLI flag."
+    PLUGIN = os.path.join(os.path.dirname(HERE), "herdr-plugin")
+
+    def setUp(self):
+        super().setUp()
+        self.calls = os.path.join(self.tmp, "calls.txt")
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        for name in ("herdr", "tmux"):
+            path = os.path.join(self.bin, name)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nprintf '%%s\\n' \"%s $*\" >> \"%s\"\n" % (name, self.calls))
+            os.chmod(path, 0o755)
+
+    def host(self, **extra):
+        env = self.env()
+        env.update(CONTEXT_WATCH_JEV="0", CONTEXT_WATCH_AGENT="claude", HANDOFF_AUTO="1",
+                   AGENTSROOM_AGENT_ID="", HANDOFF_AUTO_RUNNER="", TMUX_PANE="",
+                   CONTEXT_WATCH_TYPER_TIMING="0,0,0,0",
+                   PATH=self.bin + os.pathsep + env.get("PATH", ""))
+        env.update(extra)
+        return env
+
+    def stop(self, env):
+        """Run the Stop hook, wait for its detached typer, return what it called."""
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("context-pressure", self.hook("PostToolUse", self.root))
+        self.save()
+        evt = {"hook_event_name": "Stop", "session_id": self.sid, "cwd": self.root,
+               "transcript_path": self.transcript, "last_assistant_message": self.SUMMARY}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=env, cwd=self.root,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        import time
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            calls = open(self.calls).read().splitlines() if os.path.exists(self.calls) else []
+            if any("resume" in c for c in calls) and calls[-1].endswith("Enter"):
+                return calls
+            time.sleep(0.05)
+        self.fail("the typer never typed resume: %r" % calls)
+
+    def resume(self):
+        env = self.env()
+        env.update(CONTEXT_WATCH_JEV="0", CONTEXT_WATCH_AGENT="claude")
+        evt = {"hook_event_name": "UserPromptSubmit", "session_id": self.sid + "-successor",
+               "cwd": self.root, "transcript_path": os.path.join(self.tmp, "successor.jsonl"),
+               "prompt": "resume"}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=env, cwd=self.root,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def render(self, path):
+        p = subprocess.run([sys.executable, os.path.join(self.PLUGIN, "summary.py")],
+                           env=dict(self.env(), HANDOFF_SUMMARY_FILE=path), stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_herdr_opens_the_summary_pane_before_the_clear_and_it_survives_the_replay(self):
+        calls = self.stop(self.host(HERDR_ENV="1", HERDR_PANE_ID="w1:p1",
+                                    HERDR_BIN_PATH=os.path.join(self.bin, "herdr")))
+        opened = [c for c in calls if c.startswith("herdr plugin pane open ")]
+        self.assertEqual(len(opened), 1, calls)
+        for part in ("--plugin session-handoff.thresholds", "--entrypoint summary", "--placement split",
+                     "--direction right", "--target-pane w1:p1", "--no-focus"):
+            self.assertIn(part, opened[0])
+        self.assertNotIn("--focus ", opened[0] + " ")
+        self.assertLess(calls.index(opened[0]), calls.index("herdr pane send-text w1:p1 /clear"))
+        copy = opened[0].split("--env HANDOFF_SUMMARY_FILE=", 1)[1].split(" --")[0]
+        self.assertTrue(os.path.realpath(copy).startswith(self.tmp + os.sep), copy)
+        self.assertIn(self.SUMMARY, self.render(copy))
+        replay = json.loads(self.resume())  # the #11 replay consumes its own file
+        self.assertIn(self.SUMMARY, replay.get("systemMessage", ""))
+        self.assertIn(self.SUMMARY, self.render(copy))
+
+    def test_manifest_declares_the_summary_pane(self):
+        import tomllib
+        with open(os.path.join(self.PLUGIN, "herdr-plugin.toml"), "rb") as f:
+            panes = {p["id"]: p for p in tomllib.load(f)["panes"]}
+        self.assertEqual(panes["summary"]["title"], "Handoff summary")
+        self.assertEqual(panes["summary"]["command"], ["python3", "summary.py"])
+
+    def test_outside_herdr_no_pane_is_opened(self):
+        calls = self.stop(self.host(TMUX_PANE="%7"))
+        self.assertEqual([c for c in calls if "plugin" in c or c.startswith("herdr")], [], calls)
+        self.assertIn("tmux send-keys -t %7 -l /clear", calls)
+
+    def test_a_live_summary_pane_is_reused_instead_of_stacking_another(self):
+        with mock.patch.dict(os.environ, {"HOME": self.tmp, "TMPDIR": self.tmp}):
+            cw = load_hook(self.tmp)
+            self.addCleanup(setattr, tempfile, "tempdir", None)
+            script = cw.typer_script("herdr")
+        copy = os.path.join(self.tmp, "copy.json")
+        env = dict(self.env(), P="w1:p1", H=os.path.join(self.bin, "herdr"), S=copy, R="", D="", N="",
+                   K="", M="", T1="0", T2="0", T3="0", T4="0")
+
+        def opens():
+            if os.path.exists(self.calls):
+                os.remove(self.calls)
+            subprocess.run(["sh", "-c", script], env=env, check=True, timeout=30)
+            return [c for c in open(self.calls).read().splitlines() if " plugin pane open " in c]
+
+        with open(copy + ".pid", "w") as f:
+            f.write("%d\n" % os.getpid())  # a pane process that is alive
+        self.assertEqual(opens(), [])
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        with open(copy + ".pid", "w") as f:
+            f.write("%d\n" % gone.pid)  # the pane was closed
+        self.assertEqual(len(opens()), 1)
+
+
 class ResumeMissedNoticeUnremovable(unittest.TestCase):
     """pullboard #4: a notice that was read but cannot be removed is still shown,
     and the same notice is not shown again on the next prompt."""
