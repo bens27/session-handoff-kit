@@ -241,10 +241,8 @@ class StopTyperEscapesSubagentView(unittest.TestCase):
             "send-keys -t %5 Escape", "send-keys -t %5 -l resume", "send-keys -t %5 Enter"])
 
 
-class StopAfterCwdDriftIntoWorktree(HookCase):
-    """pullboard #6: the notice fires and the checkpoint is saved at the project
-    root, then a Bash cd moves the session cwd into a linked worktree of it. The
-    Stop hook must still find that checkpoint instead of blocking."""
+class RootCheckpointCase(HookCase):
+    """A git project under the sandbox where the hook fires and checkpoints save."""
 
     QUIET = {"HERDR_ENV": "", "HERDR_PANE_ID": "", "HANDOFF_TERMINAL_ID": "", "CONTEXT_WATCH_THINKING": "0"}
 
@@ -255,10 +253,8 @@ class StopAfterCwdDriftIntoWorktree(HookCase):
         os.makedirs(os.path.join(self.root, ".handoffs"))
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", self.root]
         env = dict(os.environ, HOME=self.tmp, GIT_CONFIG_NOSYSTEM="1")
-        for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"],
-                     ["worktree", "add", "-q", os.path.join(".claude", "worktrees", "x")]):
+        for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"]):
             subprocess.run(git + args, env=env, check=True, capture_output=True, timeout=30)
-        self.worktree = os.path.join(self.root, ".claude", "worktrees", "x")
 
     def env(self):
         # A Codex shell's CODEX_THREAD_ID (or HANDOFF_SESSION_ID) makes the save record
@@ -289,6 +285,21 @@ class StopAfterCwdDriftIntoWorktree(HookCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(json.loads(p.stdout)["outcome"], "saved")
 
+
+
+class StopAfterCwdDriftIntoWorktree(RootCheckpointCase):
+    """pullboard #6: the notice fires and the checkpoint is saved at the project
+    root, then a Bash cd moves the session cwd into a linked worktree of it. The
+    Stop hook must still find that checkpoint instead of blocking."""
+
+    def setUp(self):
+        super().setUp()
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", self.root]
+        env = dict(os.environ, HOME=self.tmp, GIT_CONFIG_NOSYSTEM="1")
+        subprocess.run(git + ["worktree", "add", "-q", os.path.join(".claude", "worktrees", "x")],
+                       env=env, check=True, capture_output=True, timeout=30)
+        self.worktree = os.path.join(self.root, ".claude", "worktrees", "x")
+
     def test_stop_from_worktree_finds_the_root_checkpoint(self):
         self.write([claude_call(20000), claude_call(140000)])
         self.assertIn("context-pressure", self.hook("PostToolUse", self.root))
@@ -305,6 +316,59 @@ class StopAfterCwdDriftIntoWorktree(HookCase):
         self.assertIn("context-pressure", self.hook("PostToolUse", self.root))
         self.save()
         self.assertNotIn("has published no checkpoint", self.hook("Stop", sub))
+
+
+class AutoHandoffSummaryReshownAfterResume(RootCheckpointCase):
+    """pullboard #11: auto-handoff shows its summary, then the detached typer clears
+    and resumes seconds later, so the person cannot read it. The Stop hook saves
+    that summary with the checkpoint; the first hook output after resume carries
+    it verbatim, once."""
+
+    SUMMARY = "Handoff saved.\nDone: parser fixed (abc1234).\nNext: wire the CLI flag."
+
+    def stop(self):
+        env = self.env()
+        env.update(CONTEXT_WATCH_JEV="0", CONTEXT_WATCH_AGENT="claude", HANDOFF_AUTO="1",
+                   HERDR_ENV="1", HERDR_PANE_ID="w1:p1", HERDR_BIN_PATH="/usr/bin/true",
+                   AGENTSROOM_AGENT_ID="", HANDOFF_AUTO_RUNNER="",
+                   CONTEXT_WATCH_TYPER_TIMING="0,0,0,0")
+        evt = {"hook_event_name": "Stop", "session_id": self.sid, "cwd": self.root,
+               "transcript_path": self.transcript, "last_assistant_message": self.SUMMARY}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=env, cwd=self.root,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def resume(self, sid):
+        env = self.env()
+        env.update(CONTEXT_WATCH_JEV="0", CONTEXT_WATCH_AGENT="claude")
+        evt = {"hook_event_name": "UserPromptSubmit", "session_id": sid, "cwd": self.root,
+               "transcript_path": os.path.join(self.tmp, sid + ".jsonl"), "prompt": "resume"}
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(evt), env=env, cwd=self.root,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_summary_is_saved_with_the_checkpoint_and_reshown_once(self):
+        self.write([claude_call(20000), claude_call(140000)])
+        self.assertIn("context-pressure", self.hook("PostToolUse", self.root))
+        self.save()
+        self.stop()
+        with mock.patch.dict(os.environ, {"HOME": self.tmp, "TMPDIR": self.tmp}):
+            cw = load_hook(self.tmp)
+            self.addCleanup(setattr, tempfile, "tempdir", None)
+            with open(cw.auto_summary_path(self.root), encoding="utf-8") as f:
+                saved = json.load(f)
+            checkpoint = [r for r in cw._ledger()._records(self.root)
+                          if r["fm"].get("session_id") == self.sid][-1]
+        self.assertEqual(saved["summary"], self.SUMMARY)
+        self.assertEqual(saved["checkpoint_id"], checkpoint["fm"]["checkpoint_id"])
+        self.assertEqual(os.path.realpath(saved["checkpoint"]), os.path.realpath(checkpoint["path"]))
+        first = self.resume(self.sid + "-successor")
+        self.assertTrue(first.strip(), "the first hook output after resume is empty")
+        shown = json.loads(first)
+        self.assertIn(self.SUMMARY, shown.get("systemMessage", ""))
+        self.assertIn(self.SUMMARY, shown["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn(self.SUMMARY, self.resume(self.sid + "-again"))
 
 
 class ResumeMissedNoticeUnremovable(unittest.TestCase):
