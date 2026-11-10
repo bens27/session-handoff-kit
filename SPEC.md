@@ -829,6 +829,11 @@ its CLI alongside the ledger; its state parsers share the core corruption decode
 Default resume JSON delivers the full body once and identifies its next-action
 section with `next_step_section`, and leads with a bounded `next_step` copy (at
 most 3000 JSON-encoded bytes, cut with a `continues in the body` marker).
+Every retrieval, preparation and resumed delivery, including a holder replay,
+carries the checkpoint's work metadata as `identity: {role?, ticket?, base?}`
+(only the well-formed header lines; a legacy checkpoint without them has no
+`identity`), and when a role is set the `action` leads with `You are working as
+<role>[ on ticket <ticket>].` so the successor knows who it is working as (G5).
 Every resumed delivery, including a holder replay and `restart_preflight adopt`,
 carries `staleness: {verdict, reason, source, backlog?, ticket, base,
 origin_main}`, computed outside the ledger lock and never failing the resume; a

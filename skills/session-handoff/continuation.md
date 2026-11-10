@@ -10,7 +10,9 @@ auto-discovered skill catalog (`$HANDOFF_SKILL_ROOTS`, `~/.agents/skills`,
 reports a failed `stage`. `resume <path>` with no flags is the legacy transfer.
 The one-shot command also accepts `--catalog` and `--reuse-receipt` below.
 Its `next_step_section` points to `## Next steps` in the delivered body; `next_step`
-repeats only a bounded lead (marked when cut). `--legacy-next-step` opts into the full text.
+repeats only a bounded lead (marked when cut). `identity` carries the checkpoint's
+`role`, `ticket` and `base` when set, and a role leads the `action` (`You are working
+as <role>`): take it up before the next step. `--legacy-next-step` opts into the full text.
 `metrics.delivery_bytes` measures serialized output; token and working-room
 figures are estimates. Loaded workflow, reused body/references and declared
 loaded skills count toward context size without being emitted again.

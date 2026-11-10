@@ -156,7 +156,8 @@ Reused content still counts toward the full package size. Execution additionally
 counts the phase-specific `continuation.md` instructions.
 
 `resume` accepts the same catalog and receipt options as `prepare`. Its default
-JSON carries a complete body, a `next_step_section` pointer to `Next steps` and a
+JSON carries a complete body, an `identity` (`role`, `ticket`, `base` when set; the
+role leads the `action`), a `next_step_section` pointer to `Next steps` and a
 bounded `next_step` lead (cut at 3000 encoded bytes with a `continues in the body`
 marker); `--legacy-next-step` (or `--fields next_step`) emits the full text instead.
 Use catalogs only for installed skills, and declare `loaded` only for content
