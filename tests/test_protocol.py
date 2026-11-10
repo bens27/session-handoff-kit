@@ -1524,3 +1524,49 @@ with patch('time.time', return_value=float(sys.argv[2])):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ResumedIdentityTests(ProtocolTests):
+    """Resume tells the successor who it is: the checkpoint's role, ticket and base
+    travel with every delivery and the role leads the action (#13)."""
+    TICKET = '6cf33871-1ff9-4d27-a175-a869d775ee84'
+
+    def test_retrieval_and_resume_deliver_identity_and_lead_with_the_role(self):
+        saved = json.loads(self.save(ticket=self.TICKET, role='backend').stdout)
+        retrieved = json.loads(self.cli('prepare', saved['path'], '--session', 'one').stdout)
+        self.assertEqual(retrieved['identity'], dict(role='backend', ticket=self.TICKET))
+        self.assertTrue(retrieved['action'].startswith('You are working as backend on ticket %s.' % self.TICKET),
+                        retrieved['action'])
+        delivered = json.loads(self.cli('resume', saved['path'], '--session', 'two').stdout)
+        self.assertEqual(delivered['outcome'], 'resumed')
+        self.assertEqual(delivered['identity'], dict(role='backend', ticket=self.TICKET))
+        self.assertTrue(delivered['action'].startswith('You are working as backend on ticket %s.' % self.TICKET),
+                        delivered['action'])
+        self.assertIn('Continue with ## Next steps', delivered['action'])
+
+    def test_replay_keeps_identity_after_output_failure(self):
+        saved = json.loads(self.save(role='reviewer').stdout)
+        script = """import sys
+sys.path.insert(0, sys.argv[1])
+import handoff_protocol as protocol
+class BrokenOutput:
+    def write(self, value):
+        raise BrokenPipeError('host transport failed')
+    def flush(self):
+        pass
+sys.stdout = BrokenOutput()
+protocol.cli(['resume', sys.argv[2], '--session', 'holder'])
+"""
+        failed = subprocess.run([sys.executable, '-c', script, str(LEDGER.parent), saved['path']],
+                                cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(failed.returncode, 0)
+        replay = json.loads(self.cli('resume', saved['path'], '--session', 'holder').stdout)
+        self.assertEqual(replay['outcome'], 'resumed')
+        self.assertEqual(replay['identity'], dict(role='reviewer'))
+        self.assertTrue(replay['action'].startswith('You are working as reviewer.'), replay['action'])
+
+    def test_legacy_checkpoint_without_metadata_delivers_no_identity(self):
+        p = self.put()
+        retrieved = json.loads(self.cli('prepare', p, '--session', 'one').stdout)
+        self.assertNotIn('identity', retrieved)
+        self.assertFalse(retrieved['action'].startswith('You are'))

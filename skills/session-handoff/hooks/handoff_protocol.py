@@ -15,7 +15,7 @@ from datetime import datetime
 from handoff_contract import (command_template, continuation_command, ledger_command,
                               exit_status, emit_output, render_output, project_output,
                               continuity_items, continuation_document)
-from handoff_contract import METADATA_FORMATS, metadata_problem, protocol_failure
+from handoff_contract import METADATA_FORMATS, checkpoint_metadata, metadata_problem, protocol_failure
 import handoff_identity
 import handoff_ledger as ledger
 from handoff_review import read_review
@@ -1413,6 +1413,22 @@ def _retired_action(path):
             'If work remains, save a new checkpoint.' % ticket)
 
 
+def with_identity(result, fm):
+    """Deliver the checkpoint's work metadata as `identity` and lead the action with
+    the role: a resumed session otherwise loses who it was working as (#13).
+    A legacy checkpoint without the lines delivers no identity and an unchanged action."""
+    identity = {k: v for k, v in checkpoint_metadata(fm).items() if k in ('role', 'ticket', 'base')}
+    if not identity:
+        return result
+    result['identity'] = identity
+    if identity.get('role'):
+        lead = 'You are working as %s' % identity['role']
+        if identity.get('ticket'):
+            lead += ' on ticket %s' % identity['ticket']
+        result['action'] = lead + '. ' + result.get('action', '')
+    return result
+
+
 def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYTES, reuse_receipt=None, exact=False):
     import time
     root = handoff_identity.project_root(root)
@@ -1530,6 +1546,7 @@ def prepare(path, root, session, execute=False, catalog=None, budget=PACKAGE_BYT
                       optional_references=ledger._split_csv(fm.get('optional_references', ''))[:8])
         result['review'] = read_review(path)
         result['reviewed'] = result['review']['reviewed']
+        with_identity(result, fm)
         if fm.get('continuity'):
             result['continuity'] = continuity_items(json.loads(fm['continuity']))
         if fm.get('predecessor'):
@@ -1976,7 +1993,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                   next_step_section='Next steps', verification=verification,
                   workspace=prepared['workspace'], optional_references=prepared['optional_references'],
                   metrics=prepared['metrics'], action='Continue with ## Next steps in the delivered body.')
-    for key in ('continuity', 'predecessor', 'reviewed', 'review', 'notes', 'notes_omitted', 'note_problems', 'runs'):
+    for key in ('identity', 'continuity', 'predecessor', 'reviewed', 'review', 'notes', 'notes_omitted', 'note_problems', 'runs'):
         if key in prepared:
             result[key] = prepared[key]
     if 'note_problems' in prepared:
@@ -1986,6 +2003,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
     else:
         result['reused_from'] = prepared['reused_from']
         result['action'] = 'Continue with ## Next steps in the body still in this session context.'
+    with_identity(result, Record.load(path).fm)
     full = body or read_text(path).split('\n---\n', 1)[-1]
     steps = section(full, 'Next steps')
     # Always lead with a bounded copy right after action, so a clipped read keeps the next step
@@ -2015,6 +2033,7 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         receipt['delivery'] = dict(result, **receipt['package'])
         receipt['delivery'].pop('reused_from', None)
         receipt['delivery']['action'] = 'Continue with ## Next steps in the delivered body.'
+        with_identity(receipt['delivery'], Record.load(path).fm)
         receipt.pop('package', None)  # Keep one full payload after preparation becomes delivery.
         write_receipt(root, session, path, receipt)
     failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
