@@ -10,9 +10,16 @@ The optional workflow index `~/.agents/skills/skill-index/SKILL.md` may help whe
 
 ## Cross-session messages
 
-- Reports, bugs and questions for another project go in as a backlog ticket in that project (AgentsRoom `backlog_create`), so they outlive the sender's session.
-- For live coordination with an agent, in this project or another, use the AgentsRoom mailbox (`agents_list_live` / `agents_send` / `agents_read_inbox`; pass `project` for another project, which must be open in the desktop); it persists and works across CLIs.
+- Anything for another agent on this board goes through pullboard: `pullboard shout <lane|agent|coordinator> "<text>"` for coordination, `pullboard shout coordinator "<what is needed>" --decision` for anything that needs the person, and a board item (`pullboard add`) for work that must outlive the sender's session.
 - Never rely on a CLI's own session messaging (e.g. Claude Code `SendMessage`): names change per launch and delivery can be held.
+
+## Codex seats
+
+Codex's sandbox must also be able to write `.git/refs/pullboard` and `~/.pullboard`, or a Codex seat can read the board but cannot record a claim, submit or verdict. Launch it with all three folders writable:
+
+    codex --add-dir "$(git rev-parse --path-format=absolute --git-common-dir)/pullboard" --add-dir "$(git rev-parse --path-format=absolute --git-common-dir)/refs/pullboard" --add-dir "$HOME/.pullboard"
+
+In `~/.codex/config.toml`, give each of the three paths `= "write"` in the profile's `[permissions.<profile>.filesystem]` table (or list them under `writable_roots` when no profile is used). The managed pullboard section below names only `.git/pullboard`; this section adds the other two.
 
 <!-- pullboard:start -->
 ## A new board
