@@ -476,6 +476,7 @@ def load_transcript_tail(path):
 
 
 _DIAG = None  # one-time telemetry diagnostic, delivered by emit() or at exit
+_SHOW = ''  # user-visible systemMessage riding on the next Claude output (#11)
 _OPENING_NOTE = ''  # explicit resume guidance, delivered alongside pressure if needed
 
 
@@ -497,7 +498,17 @@ def claim_once(evt, suffix):
 def diag_envelope(agent, event_name, message):
     if agent != "claude" and event_name == "UserPromptSubmit":
         return message  # Codex UserPromptSubmit: plain stdout becomes context
-    return render_output({"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": message}})
+    return render_output(with_shown({"hookSpecificOutput": {"hookEventName": event_name,
+                                                            "additionalContext": message}}))
+
+
+def with_shown(output):
+    """Attach the pending user-visible message, once."""
+    global _SHOW
+    if _SHOW:
+        output = dict(output, systemMessage=_SHOW)
+        _SHOW = ''
+    return output
 
 
 def flush_diag(agent):
@@ -694,23 +705,28 @@ def session_roots(cwd):
     return roots
 
 
-def handoff_written_since(cwd, session=None, require_open=False):
-    """Only a validated publication for this session's trigger satisfies it."""
+def published_checkpoint(cwd, session=None, require_open=False):
+    """The newest validated publication for this session's trigger, or None."""
     if not session:
-        return False
+        return None
     ledger = _ledger()
     for root in session_roots(cwd):
         try:
             trigger = ledger.read_session_note(root, session=session).get('trigger_id')
-            if trigger and any(
-                    r['fm'].get('session_id') == session and r['fm'].get('trigger_id') == trigger
+            hits = [r for r in ledger._records(root) if trigger
+                    and r['fm'].get('session_id') == session and r['fm'].get('trigger_id') == trigger
                     and r['fm'].get('checkpoint_id') and not r['problems']
-                    and (not require_open or r['fm'].get('status') == 'open')
-                    for r in ledger._records(root)):
-                return True
+                    and (not require_open or r['fm'].get('status') == 'open')]
+            if hits:
+                return max(hits, key=lambda r: (r['ended'], r['path']))
         except OSError:
             continue
-    return False
+    return None
+
+
+def handoff_written_since(cwd, session=None, require_open=False):
+    """Only a validated publication for this session's trigger satisfies it."""
+    return published_checkpoint(cwd, session, require_open) is not None
 
 
 def _looks_base64(s):
@@ -1450,6 +1466,7 @@ def handle_stop(evt):
             f.write("%d\n" % (count + 1))
     except OSError:
         pass
+    save_auto_summary(cwd, key, evt)
     # Detached, so this hook returns and the TUI goes idle before the keys arrive.
     t_clear, t_resume, t_poll, polls = typer_timing()
     typer_env = dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr",
@@ -1541,6 +1558,48 @@ def resume_missed_path(cwd):
     """Notice left by the typer when no resume event followed; the next prompt shows it."""
     base = auto_count_path(cwd)
     return base[:-len(".count")] + ".resume-missed" if base.endswith(".count") else base + ".resume-missed"
+
+
+def auto_summary_path(cwd):
+    """The summary auto-handoff showed before its clear, kept for the resumed session (#11)."""
+    base = auto_count_path(cwd)
+    return (base[:-len(".count")] if base.endswith(".count") else base) + ".summary.json"
+
+
+def save_auto_summary(cwd, session, evt):
+    """Keep the summary just shown, bound to its checkpoint: the typer clears the
+    screen seconds later, before the person can read it."""
+    text = str(evt.get("last_assistant_message") or "").strip()
+    if not text:
+        return
+    try:
+        record = published_checkpoint(cwd, session, require_open=True)
+        with open_private(auto_summary_path(cwd)) as f:
+            json.dump({"summary": text, "session": session,
+                       "checkpoint": record["path"] if record else "",
+                       "checkpoint_id": record["fm"].get("checkpoint_id", "") if record else ""}, f)
+    except Exception:
+        pass  # losing the replay must never block the clear
+
+
+def take_auto_summary(cwd):
+    """The saved summary, claimed once by renaming it away; '' if none."""
+    try:
+        path = auto_summary_path(cwd)
+        taken = "%s.%d.taken" % (path, os.getpid())
+        os.rename(path, taken)  # atomic: of two racing prompts only one gets it
+    except Exception:
+        return ""
+    try:
+        with open(taken, encoding="utf-8") as f:
+            return str(json.load(f).get("summary") or "").strip()
+    except Exception:
+        return ""
+    finally:
+        try:
+            os.remove(taken)
+        except OSError:
+            pass
 
 
 def empty_file(path):
@@ -1917,12 +1976,12 @@ def emit(agent, event_name, message, mode):
         if mode == "block" and event_name == "PostToolUse":
             emit_output({"decision": "block", "reason": message})
         else:
-            emit_output({
+            emit_output(with_shown({
                 "hookSpecificOutput": {
                     "hookEventName": event_name,
                     "additionalContext": message,
                 }
-            })
+            }))
         sys.exit(0)
     print(message)  # Codex UserPromptSubmit: stdout becomes extra context for the turn
     sys.exit(0)
@@ -2024,7 +2083,7 @@ def main():
     if env("CONTEXT_WATCH_DISABLE") == "1":
         sys.exit(0)
 
-    global _DIAG, _AGENT, _EVT, _OPENING_NOTE
+    global _DIAG, _AGENT, _EVT, _OPENING_NOTE, _SHOW
     evt = _EVT = read_event()
     if in_subagent(evt):
         handle_subagent(evt)  # its own stop-and-report watch; the parent's state stays untouched
@@ -2056,6 +2115,15 @@ def main():
         missed = take_resume_missed_notice(evt.get("cwd") or os.getcwd())
         if missed:
             _DIAG = (event_name, missed)
+
+    if event_name == "UserPromptSubmit":
+        summary = take_auto_summary(evt.get("cwd") or os.getcwd())
+        if summary:
+            _SHOW = "[context-watch] Summary shown before the automatic clear:\n" + summary
+            shown = ("handoff-status: The previous session showed this summary just before the "
+                     "automatic clear, so the user may not have read it; it is repeated to them "
+                     "above:\n" + summary)
+            _DIAG = (event_name, shown + (" " + _DIAG[1] if _DIAG else ""))
 
     if event_name in ("PostToolUse", "UserPromptSubmit") and not _DIAG:
         ignored = project_enables_disable_only_key(evt.get("cwd") or os.getcwd())
