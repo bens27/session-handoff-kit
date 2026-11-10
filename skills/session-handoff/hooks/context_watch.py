@@ -1466,10 +1466,10 @@ def handle_stop(evt):
             f.write("%d\n" % (count + 1))
     except OSError:
         pass
-    save_auto_summary(cwd, key, evt)
+    pane_copy = save_auto_summary(cwd, key, evt, pane_copy=multiplexer == "herdr")
     # Detached, so this hook returns and the TUI goes idle before the keys arrive.
     t_clear, t_resume, t_poll, polls = typer_timing()
-    typer_env = dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr",
+    typer_env = dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr", S=pane_copy,
                      R=resume_log_path() or "", D=resume_project_id(cwd), N=resume_missed_path(cwd),
                      K=resume_terminal_match(),
                      M=RESUME_MISSED_NOTICE % (polls * t_poll),
@@ -1501,7 +1501,7 @@ def resume_terminal_match():
 _TYPER_BODY = """
 seen() { if [ -n "$R" ] && [ -f "$R" ]; then grep -E '"operation": "(auto)?resume"' "$R" | grep -F "\\"project_id\\": \\"$D\\"" | awk 'ENVIRON["K"] == "" || index($0, ENVIRON["K"]) || !index($0, "\\"terminal_id\\": ") { n++ } END { print n + 0 }'; else echo 0; fi; }
 wait_resume() { i=0; while [ "$i" -lt "$T4" ]; do if [ "$(seen)" -gt "$N0" ]; then return 0; fi; sleep "$T3"; i=$((i+1)); done; return 1; }
-N0=$(seen); sleep "$T1"; send /clear; sleep "$T2"; send resume
+N0=$(seen); show; sleep "$T1"; send /clear; sleep "$T2"; send resume
 [ -z "$R" ] && exit 0
 wait_resume && exit 0
 send resume
@@ -1515,9 +1515,23 @@ def typer_script(multiplexer):
     then wait for the resume event, retry Escape+resume once, else leave the notice."""
     if multiplexer == "herdr":
         send = 'send() { "$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"; "$H" pane send-keys "$P" Enter; }'
+        show = _SHOW_SUMMARY_PANE
     else:
         send = 'send() { tmux send-keys -t "$P" Escape; tmux send-keys -t "$P" -l "$1"; tmux send-keys -t "$P" Enter; }'
-    return send + _TYPER_BODY
+        show = "show() { :; }"
+    return send + "\n" + show + _TYPER_BODY
+
+
+# G4: the summary ($S, the pane's own copy) opens beside the agent pane before the
+# clear. A summary pane still open from an earlier handoff re-reads that file, so a
+# run of automatic clears does not stack a new split each time. A failure here
+# (plugin not linked, older Herdr) must not stop the clear.
+_SHOW_SUMMARY_PANE = """show() {
+[ -n "$S" ] || return 0
+[ -f "$S.pid" ] && kill -0 "$(cat "$S.pid")" 2>/dev/null && return 0
+"$H" plugin pane open --plugin session-handoff.thresholds --entrypoint summary --placement split --direction right --target-pane "$P" --no-focus --env "HANDOFF_SUMMARY_FILE=$S"
+return 0
+}"""
 
 
 def typer_timing():
@@ -1566,20 +1580,38 @@ def auto_summary_path(cwd):
     return (base[:-len(".count")] if base.endswith(".count") else base) + ".summary.json"
 
 
-def save_auto_summary(cwd, session, evt):
+def auto_summary_pane_path(cwd):
+    """This terminal's copy of that summary for the Herdr summary pane (G4). The replay
+    claims auto_summary_path by renaming it away, so the pane reads its own file."""
+    import hashlib
+    path = auto_summary_path(cwd)
+    terminal = hashlib.sha1(handoff_identity.terminal_id().encode()).hexdigest()[:12]
+    return "%s.pane-%s.json" % (path[:-len(".json")], terminal)
+
+
+def save_auto_summary(cwd, session, evt, pane_copy=False):
     """Keep the summary just shown, bound to its checkpoint: the typer clears the
-    screen seconds later, before the person can read it."""
+    screen seconds later, before the person can read it. With `pane_copy`, also
+    write the Herdr pane's copy and return its path; '' when there is none."""
     text = str(evt.get("last_assistant_message") or "").strip()
     if not text:
-        return
+        return ""
+    saved = ""
     try:
         record = published_checkpoint(cwd, session, require_open=True)
+        doc = {"summary": text, "session": session,
+               "checkpoint": record["path"] if record else "",
+               "checkpoint_id": record["fm"].get("checkpoint_id", "") if record else ""}
         with open_private(auto_summary_path(cwd)) as f:
-            json.dump({"summary": text, "session": session,
-                       "checkpoint": record["path"] if record else "",
-                       "checkpoint_id": record["fm"].get("checkpoint_id", "") if record else ""}, f)
+            json.dump(doc, f)
+        if pane_copy:
+            path = auto_summary_pane_path(cwd)
+            with open_private(path) as f:
+                json.dump(doc, f)
+            saved = path
     except Exception:
-        pass  # losing the replay must never block the clear
+        pass  # losing the replay or the pane must never block the clear
+    return saved
 
 
 def take_auto_summary(cwd):
