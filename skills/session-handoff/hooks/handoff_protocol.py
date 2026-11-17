@@ -776,7 +776,12 @@ def owns_transfer(root, path, fm, session):
     # A terminal is the stronger identity: a shared runner cannot override a
     # different terminal's transfer.
     if holder.get('terminal'):
-        return bool(terminal_id()) and holder['terminal'] == terminal_id()
+        if terminal_id() and holder['terminal'] == terminal_id():
+            return True
+        # #14: Herdr can renumber a terminal after /clear. The sealed holder session
+        # still owns it when this terminal's hooks attest it; a bare --session never does.
+        return bool(session) and holder.get('session_id') == session and session in (
+            handoff_identity.terminal_session(root), handoff_identity.host_session())
     runner = os.environ.get('HANDOFF_RUN_ID', '')
     if holder.get('runner_id'):
         return bool(runner) and holder['runner_id'] == runner

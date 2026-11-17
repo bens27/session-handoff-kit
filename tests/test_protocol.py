@@ -743,6 +743,18 @@ with patch('time.time', return_value=float(sys.argv[2])):
         continued = json.loads(self.save('continued', predecessor=saved['path']).stdout)
         self.assertEqual(continued['outcome'], 'saved')
 
+    def test_same_session_continues_its_transfer_after_terminal_id_changes(self):
+        # #14: Herdr gave the same session a new terminal id after /clear.
+        self.env['AGENTSROOM_AGENT_ID'] = 'term-a'
+        saved = json.loads(self.save().stdout)
+        self.hook('SessionStart', session='same-id', source='startup')
+        self.cli('resume', saved['path'], '--session', 'same-id')
+        self.env['AGENTSROOM_AGENT_ID'] = 'term-b'
+        self.hook('SessionStart', session='same-id', source='clear')
+        doc = dict(topic='work', predecessor=saved['path'], body='## Objective\nFix.\n## Current state\nReady.\n## Next steps\nTest.\n')
+        out = json.loads(self.cli('save', '.', '--request-id', 'moved', input=json.dumps(doc), ok=False).stdout)
+        self.assertEqual(out['outcome'], 'saved', out)
+
     def test_original_saver_cannot_supersede_a_different_terminals_transfer(self):
         self.env['AGENTSROOM_AGENT_ID'] = 'agent-a'
         saved = json.loads(self.save().stdout)
