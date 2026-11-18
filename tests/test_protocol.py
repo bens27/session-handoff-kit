@@ -27,7 +27,7 @@ class ProtocolTests(unittest.TestCase):
         inherited = {k: v for k, v in os.environ.items()
                      if k not in ('AGENTSROOM_AGENT_ID', 'HANDOFF_AUTO', 'HANDOFF_TERMINAL_ID', 'TMUX_PANE', 'HERDR_ENV', 'HERDR_PANE_ID',
                                   'CODEX_THREAD_ID', 'HANDOFF_SESSION_ID', 'AUTORESUME', 'CONTEXT_WATCH_AUTORESUME', 'HANDOFF_RUN_ID', 'HANDOFF_AT')}
-        self.env = dict(inherited, HOME=self.tmp.name, TMPDIR=self.tmp.name, CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
+        self.env = dict(inherited, HOME=self.tmp.name, TMPDIR=self.tmp.name, HANDOFF_PROCESS_ANCHOR='0', CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
 
     def cli(self, *args, input=None, ok=True):
         p = subprocess.run([sys.executable, str(LEDGER), *map(str, args)],
