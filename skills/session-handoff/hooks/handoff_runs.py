@@ -415,9 +415,36 @@ def _subagent_finished(folder, agent_id, entries):
     return bool(last_assistant and last_assistant.get('stop_reason') == 'end_turn')
 
 
+def subagent_transcript(folder, agent_id):
+    """The newest copy of a subagent's transcript in this project's session folders.
+
+    At /clear Claude Code moves a running subagent's files into the new
+    session's folder, so the folder a checkpoint recorded can go stale while
+    the agent keeps writing elsewhere."""
+    name = 'agent-%s.jsonl' % agent_id
+    project = os.path.dirname(os.path.dirname(folder))
+    candidates = [os.path.join(folder, name)]
+    try:
+        sessions = os.listdir(project)
+    except OSError:
+        sessions = []
+    for session in sessions:
+        candidates.append(os.path.join(project, session, 'subagents', name))
+    best, best_mtime = os.path.join(folder, name), None
+    for path in candidates:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if best_mtime is None or mtime > best_mtime:
+            best, best_mtime = path, mtime
+    return best
+
+
 def subagent_state(folder, agent_id, now=None):
     """'finished' (a final result is recorded), 'live' (written in the last 120 s) or 'stopped'."""
-    path = os.path.join(folder, 'agent-%s.jsonl' % agent_id)
+    path = subagent_transcript(folder, agent_id)
+    folder = os.path.dirname(path)
     if _subagent_finished(folder, agent_id, _subagent_tail(path)):
         return 'finished'
     try:

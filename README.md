@@ -844,6 +844,16 @@ handoff notice (it detects them by the `agent_id` field Claude Code adds to
 their hook events); past `subagent_at` it tells the subagent to stop, commit and
 report instead (see the thresholds keys above).
 
+Resume reports each subagent the checkpoint recorded as a `subagent: <id>
+live|finished|stopped <description>` line in `workspace`, on every outcome: a
+resume that stops at verification, or waits for the user to confirm an
+untrusted verify command, still lists them. At `/clear` Claude Code moves a
+running subagent's transcript into the new session's folder, so the folder the
+checkpoint recorded can go stale. Resume finds the transcript by `agent_id`
+across the project's session folders
+(`~/.claude/projects/<project>/*/subagents/`) and judges its status from the
+newest copy.
+
 ### Deterministic restart preflight
 
 `skills/session-handoff/hooks/restart_preflight.py` is a stdlib callable module

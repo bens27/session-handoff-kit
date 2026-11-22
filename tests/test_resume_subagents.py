@@ -72,14 +72,14 @@ class SubagentTests(unittest.TestCase):
         self.assertTrue(p.stdout.strip(), p.stderr)
         return json.loads(p.stdout)
 
-    def save_and_resume(self):
+    def save_and_resume(self, expect='resumed', **fields):
         note = handoff_identity.session_note_path(str(self.root), 'sess-a', str(self.base / 'state'))
         Path(note).write_text(json.dumps(dict(session_id='sess-a', ts=time.time(), transcript_path=str(self.transcript))))
         out = self.cli('save', '.', '--session', 'sess-a', '--request-id', 'req-a',
-                       input=json.dumps(dict(topic='builders', description='Builders', body=BODY)))
+                       input=json.dumps(dict(topic='builders', description='Builders', body=BODY, **fields)))
         self.assertEqual(out['outcome'], 'saved', out)
         resumed = self.cli('resume', 'builders', '--session', 'sess-b', terminal='term-b')
-        self.assertEqual(resumed['outcome'], 'resumed', resumed)
+        self.assertEqual(resumed['outcome'], expect, resumed)
         return Path(out['path']).read_text(), resumed
 
     def test_live_subagent(self):
@@ -129,6 +129,65 @@ class SubagentTests(unittest.TestCase):
         lines = [l for l in resumed.get('workspace', []) if l.startswith('subagent:')]
         self.assertEqual(lines, ['subagent: a6tree live Builder (worktree /synthetic/worktrees/builder)',
                                  'subagent: a7bad live Bad tree'], resumed)
+
+    def test_failed_verification_still_reports_subagents(self):
+        """G25: a resume that stops at verify still says which builders are running."""
+        self.agent('a1live', WORKING, description='Build #7 hooks')
+        _, resumed = self.save_and_resume(expect='verification-failed', verify='exit 3')
+        lines = [l for l in resumed.get('workspace', []) if l.startswith('subagent:')]
+        self.assertEqual(lines, ['subagent: a1live live Build #7 hooks'], resumed)
+
+    def test_untrusted_verify_still_reports_subagents(self):
+        self.agent('a1live', WORKING, description='Build #7 hooks')
+        field = handoff_runs.subagent_snapshot(str(self.transcript))
+        foreign = self.root / '.handoffs' / 'foreign.md'  # not saved by this machine, so untrusted
+        foreign.write_text('---\ntopic: foreign\nstatus: open\nverify: exit 3\nsubagents: %s\n---\n%s' % (field, BODY))
+        resumed = self.cli('resume', 'foreign', '--session', 'sess-b', terminal='term-b')
+        self.assertEqual(resumed['outcome'], 'needs-confirmation', resumed)
+        self.assertEqual(resumed.get('workspace'), ['subagent: a1live live Build #7 hooks'], resumed)
+
+    def move_after_clear(self, agent_id, session='sess-b', age=0, keep_old=False):
+        """Claude Code moves a running subagent's files into the new session's folder at /clear."""
+        target = self.base / 'claude' / session / 'subagents'
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ('agent-%s.jsonl' % agent_id, 'agent-%s.meta.json' % agent_id):
+            old = self.folder / name
+            (target / name).write_bytes(old.read_bytes())
+            if not keep_old:
+                old.unlink()
+        stamp = time.time() - age
+        os.utime(target / ('agent-%s.jsonl' % agent_id), (stamp, stamp))
+        return target
+
+    def test_status_follows_transcript_moved_by_clear(self):
+        """G26: the recorded folder goes stale at /clear; the live copy elsewhere decides."""
+        self.agent('a1moved', WORKING, description='Build #7 hooks')
+        field = handoff_runs.subagent_snapshot(str(self.transcript))
+        self.move_after_clear('a1moved')
+        self.assertEqual(handoff_runs.subagent_report(field), ['subagent: a1moved live Build #7 hooks'])
+
+    def test_newest_copy_decides_when_both_remain(self):
+        self.agent('a1both', WORKING, age=OLD)
+        self.agent('a2fin', WORKING, age=OLD)
+        field = handoff_runs.subagent_snapshot(str(self.transcript))
+        self.move_after_clear('a1both', keep_old=True)
+        target = self.move_after_clear('a2fin', keep_old=True)
+        with open(target / 'agent-a2fin.jsonl', 'a') as f:
+            f.write(json.dumps(entry('assistant', [dict(type='text', text='Done.')], 'end_turn')) + '\n')
+        self.assertEqual(handoff_runs.subagent_report(field),
+                         ['subagent: a1both live Builder', 'subagent: a2fin finished Builder'])
+
+    def test_moved_copy_is_found_in_resume_output(self):
+        self.agent('a1moved', WORKING, description='Build #7 hooks', age=OLD)
+        self.transcript.parent.joinpath('sess-a.jsonl').write_text('')
+        note = handoff_identity.session_note_path(str(self.root), 'sess-a', str(self.base / 'state'))
+        Path(note).write_text(json.dumps(dict(session_id='sess-a', ts=time.time(), transcript_path=str(self.transcript))))
+        out = self.cli('save', '.', '--session', 'sess-a', '--request-id', 'req-a',
+                       input=json.dumps(dict(topic='builders', description='Builders', body=BODY)))
+        self.move_after_clear('a1moved')
+        resumed = self.cli('resume', 'builders', '--session', 'sess-b', terminal='term-b')
+        lines = [l for l in resumed.get('workspace', []) if l.startswith('subagent:')]
+        self.assertEqual(lines, ['subagent: a1moved live Build #7 hooks'], (out, resumed))
 
     def test_tampered_ids_and_folders_build_no_path(self):
         field = json.dumps(dict(dir=str(self.folder), agents=[dict(id='../../etc/passwd'), dict(id='ok')]))
