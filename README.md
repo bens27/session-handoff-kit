@@ -846,8 +846,9 @@ report instead (see the thresholds keys above).
 
 Resume reports each subagent the checkpoint recorded as a `subagent: <id>
 live|finished|stopped <description>` line in `workspace`, on every outcome: a
-resume that stops at verification, or waits for the user to confirm an
-untrusted verify command, still lists them. At `/clear` Claude Code moves a
+resume that stops at prepare, verification or a replayed transfer's changed
+reference, or waits for the user to confirm an untrusted verify command, still
+lists them. At `/clear` Claude Code moves a
 running subagent's transcript into the new session's folder, so the folder the
 checkpoint recorded can go stale. Resume finds the transcript by `agent_id`
 across the project's session folders

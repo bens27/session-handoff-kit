@@ -1923,6 +1923,21 @@ def replay_transfer(root, session, target):
 
 def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
            catalog=None, reuse_receipt=None, legacy_next_step=False):
+    result = _resume(root, session, target, budget, confirm_verify, catalog, reuse_receipt, legacy_next_step)
+    if 'workspace' not in result and result.get('outcome') != 'none':
+        # Every outcome owes the subagent report (G25), so a successor stopped
+        # anywhere still knows which builders run and does not relaunch them.
+        try:
+            path = result.get('path') or ledger.resolve(target, root)['authoritative']
+            if path:
+                result['workspace'] = handoff_runs.subagent_report(Record.load(path).get('subagents', ''))
+        except (OSError, ValueError, TypeError, KeyError, ledger.ConflictError):
+            pass  # no readable checkpoint, so no recorded subagents to report
+    return result
+
+
+def _resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
+            catalog=None, reuse_receipt=None, legacy_next_step=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
     root = handoff_identity.project_root(root)
     prune_transfer_payloads(root)

@@ -146,6 +146,40 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual(resumed['outcome'], 'needs-confirmation', resumed)
         self.assertEqual(resumed.get('workspace'), ['subagent: a1live live Build #7 hooks'], resumed)
 
+    def lines(self, out):
+        return [l for l in out.get('workspace', []) if l.startswith('subagent:')]
+
+    def test_prepare_failures_still_report_subagents(self):
+        """G25: a resume that stops at prepare (missing skill, edited checkpoint) still lists the builders."""
+        self.agent('a1live', WORKING, description='Build #7 hooks')
+        _, resumed = self.save_and_resume(expect='needs-context', skills=['absent'])
+        self.assertEqual(resumed.get('stage'), 'prepare', resumed)
+        self.assertEqual(self.lines(resumed), ['subagent: a1live live Build #7 hooks'], resumed)
+        out = self.cli('save', '.', '--session', 'sess-a', '--request-id', 'req-edit',
+                       input=json.dumps(dict(topic='edited', description='Edited', body=BODY)))
+        path = Path(out['path'])
+        path.write_text(path.read_text() + 'Added after publication.\n')
+        edited = self.cli('resume', 'edited', '--session', 'sess-c', terminal='term-c')
+        self.assertEqual(edited['outcome'], 'incomplete', edited)
+        self.assertEqual(self.lines(edited), ['subagent: a1live live Build #7 hooks'], edited)
+
+    def test_replay_needing_context_still_reports_subagents(self):
+        """G25: a replayed transfer whose reference changed, or vanished, still lists the builders."""
+        self.agent('a1live', WORKING, description='Build #7 hooks')
+        notes = self.root / 'notes.txt'
+        notes.write_text('keep the API stable\n')
+        self.save_and_resume(references=['notes.txt'])
+        notes.write_text('changed since the transfer\n')
+        changed = self.cli('resume', 'builders', '--session', 'sess-b', terminal='term-b')
+        self.assertEqual(changed['outcome'], 'needs-context', changed)
+        self.assertIn('changed', changed['action'])
+        self.assertEqual(self.lines(changed), ['subagent: a1live live Build #7 hooks'], changed)
+        notes.unlink()
+        gone = self.cli('resume', 'builders', '--session', 'sess-b', terminal='term-b')
+        self.assertEqual(gone['outcome'], 'needs-context', gone)
+        self.assertIn('unavailable', gone['action'])
+        self.assertEqual(self.lines(gone), ['subagent: a1live live Build #7 hooks'], gone)
+
     def move_after_clear(self, agent_id, session='sess-b', age=0, keep_old=False):
         """Claude Code moves a running subagent's files into the new session's folder at /clear."""
         target = self.base / 'claude' / session / 'subagents'
