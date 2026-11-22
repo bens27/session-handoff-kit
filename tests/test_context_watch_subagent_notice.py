@@ -3,8 +3,8 @@
 
 A PostToolUse event carrying `agent_id` is measured from the subagent's own
 transcript (.../<session_id>/subagents/agent-<agent_id>.jsonl). At or past the
-`subagent_at` config key (default 100000) the hook tells the subagent once to
-stop, commit WIP and hand back a short resumable report; about 20k later it
+`subagent_at` config key (default 160000) the hook tells the subagent once to
+hand over (its own checkpoint, WIP commit, short report); about 20k later it
 repeats once, more firmly; then it stays quiet. It never types /clear, never
 touches the parent's checkpoint or latch, and keys its state by agent_id.
 
@@ -30,7 +30,8 @@ def sidechain_call(tokens):
                 "cache_creation_input_tokens": 0, "output_tokens": 0}}}
 
 
-class SubagentNotice(base.HookCase):
+class SubagentCase(base.HookCase):
+    """Subagent transcript beside a calm parent; shared by the handover tests."""
     def setUp(self):
         super().setUp()
         self.transcript = os.path.join(self.tmp, "proj", self.sid + ".jsonl")
@@ -66,10 +67,12 @@ class SubagentNotice(base.HookCase):
     def parent_latches(self):
         return sorted(f for f in os.listdir(self.tmp) if f.startswith("context-watch-"))
 
+
+class SubagentNotice(SubagentCase):
     def test_notice_once_then_firmer_repeat_then_silence(self):
-        self.write_sub([20000, 99999])
-        self.assertEqual(self.run_hook(), "")  # below the default 100000
-        self.write_sub([20000, 100000])
+        self.write_sub([20000, 159999])
+        self.assertEqual(self.run_hook(), "")  # below the default 160000
+        self.write_sub([20000, 160000])
         first = self.context(self.run_hook())
         self.assertIn("[context-watch]", first)
         for field in ("stop", "commit", "item id", "worktree", "lane", "claim state", "branch",
@@ -78,20 +81,20 @@ class SubagentNotice(base.HookCase):
             self.assertIn(field, first.lower(), field)
         self.assertNotIn("/clear", first)
         self.assertNotIn("session-handoff", first)
-        self.write_sub([20000, 105000])
+        self.write_sub([20000, 165000])
         self.assertEqual(self.run_hook(), "")  # once only until the repeat point
-        self.write_sub([20000, 120000])
+        self.write_sub([20000, 180000])
         second = self.context(self.run_hook())
         self.assertIn("stop now", second.lower())
         self.assertIn("commit", second.lower())
         self.assertNotEqual(first, second)
-        self.write_sub([20000, 150000])
+        self.write_sub([20000, 210000])
         self.assertEqual(self.run_hook(), "")  # no third notice, ever
-        self.write_sub([20000, 190000])
+        self.write_sub([20000, 250000])
         self.assertEqual(self.run_hook(), "")
 
     def test_state_keyed_by_agent_id_and_parent_untouched(self):
-        self.write_sub([20000, 100000])
+        self.write_sub([20000, 160000])
         self.assertIn("[context-watch]", self.context(self.run_hook()))
         self.assertTrue(any(AGENT in f for f in self.state_files()), self.state_files())
         self.assertEqual(self.parent_latches(), [])  # no parent latch, no parent checkpoint
@@ -100,7 +103,7 @@ class SubagentNotice(base.HookCase):
         other = "f0e1d2c3b4a596877"
         other_path = os.path.join(os.path.dirname(self.sub), "agent-%s.jsonl" % other)
         with open(other_path, "w") as f:
-            f.write(json.dumps(sidechain_call(100000)) + "\n")
+            f.write(json.dumps(sidechain_call(160000)) + "\n")
         self.assertIn("[context-watch]", self.context(self.run_hook(evt_extra={"agent_id": other})))
         self.assertTrue(any(other in f for f in self.state_files()), self.state_files())
         # The parent's own event stays exactly as before: well under its threshold, silent.
@@ -124,7 +127,7 @@ class SubagentNotice(base.HookCase):
         self.assertEqual(base.HookCase.run_hook(self, extra=NOTE), "")
 
     def test_subagent_transcript_path_in_event_is_used_directly(self):
-        self.write_sub([20000, 100000])
+        self.write_sub([20000, 160000])
         self.assertIn("[context-watch]", self.context(self.run_hook(transcript=self.sub)))
 
     def test_missing_subagent_transcript_stays_silent(self):
