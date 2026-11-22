@@ -1,4 +1,4 @@
-# label<TAB>prompt. Shapes taken from real save/resume requests that were misrouted (G11);
+# label<TAB>prompt. Shapes taken from real save/resume requests that were misrouted (G12);
 # names and project details are replaced with neutral text.
 save	Checkpoint and session handoff to yourself
 save	checkpoint and session handoff to yourself when you safely can
@@ -13,6 +13,16 @@ save	write a checkpoint and session handoff to yourself
 save	save a checkpoint and session handoff to yourself
 save	sessin handoff to yourself
 save	session handoff to yourseldf
+save	session handoff to yourelf
+save	session handoff to yuorself
+save	seesion handoff to yourself
+save	sesion handoff to yourself
+save	sessoin handoff to yourself
+save	esssion handoff to yourself
+save	checkpoint and session handoff to yorself
+save	then session handoff to yourslef
+save	session handoff to youurself
+none	session handoff to yourself and then delete the branch
 save	Session handoff to yourself
 save	handoff
 resume	continue the handoff

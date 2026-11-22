@@ -1,6 +1,6 @@
-"""G11: real save and resume request shapes keep their classification.
+"""G12: real save and resume request shapes keep their classification.
 
-The fixture holds prompts that were misrouted before G11 (clause-form saves,
+The fixture holds prompts that were misrouted before G12 (clause-form saves,
 typos, `continue <path>`) beside prose that must stay inert.
 """
 from pathlib import Path
