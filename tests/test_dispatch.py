@@ -33,7 +33,7 @@ class Base(unittest.TestCase):
                                  'HERDR_ENV', 'HERDR_PANE_ID',
                                  'HANDOFF_SKILL_ROOTS', 'CODEX_HOME', 'HANDOFF_AUTO', 'HANDOFF_RUN_ID',
                                  'CONTEXT_WATCH_AUTORESUME', 'CONTEXT_WATCH_AUTO')}
-        self.env.update(HOME=str(base), TMPDIR=str(base), CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0',
+        self.env.update(HOME=str(base), TMPDIR=str(base), HANDOFF_PROCESS_ANCHOR='0', CONTEXT_WATCH_ORIGIN='test', CONTEXT_WATCH_LOG='0',
                         CONTEXT_WATCH_RESUME_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='',
                         HANDOFF_SKILL_ROOTS=str(base / 'skills'))
 
