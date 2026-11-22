@@ -26,6 +26,11 @@
         "tests/",
         "README.md"
       ]
+    },
+    "pi": {
+      "owns": [
+        "pi-extension/"
+      ]
     }
   },
   "shared": [],

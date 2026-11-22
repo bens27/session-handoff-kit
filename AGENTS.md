@@ -90,6 +90,12 @@ The coordinator merges verified items into the main line; builders never merge. 
 
 **Replay flow.** Run `pullboard flow replay --json` to reproduce recorded landing order and stage quartiles from text-free lifecycle history. To compare a hypothetical order and board line settings, run `pullboard flow replay --history history.json --policy policy.json --json` with the exported version-1 history and a JSON policy containing `order` and `settings`. Recorded work durations stay fixed; alternate queue times are deterministic predictions, not measured speedups.
 
+## 
+
+- [ ] 
+
+# 
+
 Lane leads are off until the coordinator names an existing lane seat with `pullboard lanes lead <lane> <seat|off>`. Questions and blockers sent with `pullboard shout coordinator "<text>" --kind question|blocker --decision` reach that lead. The lead answers or uses `pullboard pass <shout-id> "<why>"` to escalate to the coordinator; only its decisions and escalations go upward. Status stays activity, not a coordination shout. A lead gains no claim, lease or person-approval authority.
 
 For recurring checks, `pullboard sentinels` lists this board's watches, their approvals and their latest results. Propose one with `pullboard sentinel propose <name> --check "<command>" --every hourly --owner coordinator`; a proposal does not run until the person approves its exact command, directory and schedule. Only the person runs `pullboard sentinel approve <name>` or `pullboard sentinel decline <name> --reason "<why>"` from their own terminal or Pullboard View. Agents never approve their own proposals; send the decision to the coordinator.
@@ -104,7 +110,7 @@ The activity feed separates interrupts from digest summaries. Read `pullboard in
 
 **Listen.** Where your client can run a command in the background, run `pullboard watch --to <your id>` there: it prints one line per event as it happens, and Claude Code wakes on each line when it runs under the Monitor tool. `pullboard watch --work <lane>` also says when an item in your lane becomes claimable, a review has waited too long, or main moves. Where your client cannot, read `pullboard inbox` at session start, after submit and before ending a turn. Coordinator answers and sentinel findings arrive there either way.
 
-**Presence.** Session hooks run `pullboard heartbeat` to record local activity; keep them installed so live, idle and gone reflect your session.
+**Presence.** Session  hooks run `pullboard heartbeat` to record local activity; keep them installed so live, idle and gone reflect your session.
 
 **Never.** Bypass a hook with `--no-verify`, or get past a refusal with filler text: fix what it names. Edit the board's database. Verify your own work. Change an approved spec row without the person's OK. Delete or renumber a spec row. Act from the main checkout; it is the coordinator's. Count a yes relayed by another agent as the person's approval.
 
