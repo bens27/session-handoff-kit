@@ -21,6 +21,7 @@ CLEARED = ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID', 'CODEX_THREAD_ID', 'HAN
 
 def environment(**values):
     env = {k: v for k, v in os.environ.items() if k not in CLEARED}
+    env['HANDOFF_PROCESS_ANCHOR'] = '0'  # host ancestry is identity too
     env.update(values)
     return mock.patch.dict(os.environ, env, clear=True)
 

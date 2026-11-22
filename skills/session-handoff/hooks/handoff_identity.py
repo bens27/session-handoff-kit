@@ -253,7 +253,7 @@ def terminal_id():
     """Wrapper identity that survives /clear: one terminal, one current handoff.
 
     A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID, then to the
-    Herdr pane's terminal. Ids over 120 characters keep a readable prefix plus a digest
+    Herdr pane's terminal, then the agent process (G9). Ids over 120 characters keep a readable prefix plus a digest
     of the whole value, so two long ids sharing a prefix never name the same terminal."""
     for name in ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
         value = (os.environ.get(name) or '').strip()
@@ -264,8 +264,54 @@ def terminal_id():
             return value
     pane = herdr_pane()
     if not pane:
-        return ''
+        return process_anchor()
     return herdr_terminal_id(pane, os.environ.get('HERDR_SOCKET_PATH'), herdr_pane_info(pane).get('terminal_id'))
+
+
+# G9: /clear starts a new session in the same agent process, so the nearest
+# claude/codex ancestor (pid plus start time, against pid reuse) is the terminal.
+ANCHOR_PROGRAMS = ('claude', 'codex')
+ANCHOR_MAX_DEPTH = 32
+_process_anchor_cache = {}
+
+
+def _process_table():
+    try:
+        return subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,lstart=,comm='], capture_output=True,
+                              text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _own_pid():
+    return os.getpid()
+
+
+def process_anchor():
+    """`proc-<program>-<pid>-<start digest>` of the nearest agent ancestor, else ''."""
+    if os.environ.get('HANDOFF_PROCESS_ANCHOR', '').strip() == '0':
+        return ''
+    pid = _own_pid()
+    if pid in _process_anchor_cache:
+        return _process_anchor_cache[pid]
+    rows = {}
+    for line in _process_table().splitlines():
+        parts = line.split(None, 7)  # pid ppid Dow Mon DD HH:MM:SS YYYY command
+        if len(parts) == 8 and parts[0].isdigit() and parts[1].isdigit():
+            rows[int(parts[0])] = (int(parts[1]), ' '.join(parts[2:7]), parts[7].strip())
+    anchor, current = '', pid
+    for _ in range(ANCHOR_MAX_DEPTH):
+        row = rows.get(current)
+        if not row or current <= 1:
+            break
+        ppid, start, command = row
+        program = os.path.basename(command).lstrip('-')  # comm has no arguments
+        if current != pid and program in ANCHOR_PROGRAMS:
+            anchor = 'proc-%s-%d-%s' % (program, current, _sha1(start, 8))
+            break
+        current = ppid
+    _process_anchor_cache[pid] = anchor
+    return anchor
 
 
 def herdr_pane():

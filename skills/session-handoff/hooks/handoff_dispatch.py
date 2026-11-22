@@ -290,11 +290,17 @@ def draft_save(root, request, session, target, common):
                        % (saved.get('outcome'), saved.get('action', '')), stage='publication',
                        publication={k: v for k, v in saved.items() if k != '_code'}, warnings=warnings, **extra)
     warnings += saved.get('warnings') or []
+    check = resume_check(root, saved['path'])
+    resume_prompt = 'resume ' + saved['path']
+    text = saved['transition'].get('action', saved.get('action', ''))
+    if not check['selected']:
+        warnings.append('resume_check: a fresh session in this terminal gets %s, not this checkpoint.' % check['code'])
+        text = ('A fresh session will not pick this checkpoint automatically (%s); tell the user to type: %s. '
+                % (check['code'], resume_prompt)) + text
     extra.update(path=saved['path'], checkpoint_id=saved['checkpoint_id'], transition=saved['transition'],
-                 warnings=warnings)
+                 warnings=warnings, resume_check=check, resume_prompt=resume_prompt)
     if saved['transition'].get('kind') != 'agents_restart':
-        return result('proceed', 'saved', request, next_action=dict(
-            kind='continue', command='', text=saved['transition'].get('action', saved.get('action', ''))), **extra)
+        return result('proceed', 'saved', request, next_action=dict(kind='continue', command='', text=text), **extra)
     host = request.get('host') or {}
     workers = host.get('workers')
     if not isinstance(host.get('restart_capable'), bool) or not isinstance(workers, list) or not isinstance(host.get('hold'), bool):
@@ -315,6 +321,20 @@ def draft_save(root, request, session, target, common):
                       'Dispatch is marked started. Write the session status, then call agents_restart(agent=%s, '
                       'prompt=<prompt>) exactly as the final tool action and end the turn. Suggested skills are '
                       'advisory only.' % out['agent'])), **extra)
+
+
+FRESH_SESSION = 'resume-check-fresh-session'
+
+
+def resume_check(root, path):
+    """G10: would a session that has never seen this checkpoint select it with no target?"""
+    found = protocol.lookup(root, session=FRESH_SESSION)
+    if found.get('selected') and os.path.realpath(found['selected']) == os.path.realpath(path):
+        return dict(selected=True, selection=found.get('selection') or 'owned')
+    mine = [i for i in found['items'] if i.get('mine')]
+    code = ('target_ambiguous' if len(mine) > 1 else 'other_selected' if found.get('selected')
+            else 'foreign_only' if found['total'] else found['outcome'])
+    return dict(selected=False, code=code, candidates=[_candidate(i) for i in found['items']])
 
 
 def _identity_file(root, terminal):

@@ -36,7 +36,7 @@ class PlantedSymlinks(unittest.TestCase):
         self.victim = os.path.join(self.tmp, "victim.txt")
         with open(self.victim, "w") as f:
             f.write("KEEP")
-        patcher = mock.patch.dict(os.environ, {"HOME": self.tmp, "TMPDIR": self.tmp,
+        patcher = mock.patch.dict(os.environ, {"HOME": self.tmp, "TMPDIR": self.tmp, "HANDOFF_PROCESS_ANCHOR": "0",
                                                "CONTEXT_WATCH_LOG": "0", "CONTEXT_WATCH_JEV": "0"})
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -132,7 +132,7 @@ class StopTyperEscapesSubagentView(unittest.TestCase):
         self.keys = os.path.join(self.tmp, "keys.txt")
         patcher = mock.patch.dict(os.environ, {
             "HOME": self.tmp, "TMPDIR": self.tmp, "CONTEXT_WATCH_LOG": "0", "CONTEXT_WATCH_JEV": "0",
-            "CONTEXT_WATCH_RESUME_LOG": self.log, "CONTEXT_WATCH_TYPER_TIMING": self.FAST,
+            "HANDOFF_PROCESS_ANCHOR": "0", "CONTEXT_WATCH_RESUME_LOG": self.log, "CONTEXT_WATCH_TYPER_TIMING": self.FAST,
             "HANDOFF_AUTO": "1", "AGENTSROOM_AGENT_ID": "", "HANDOFF_AUTO_RUNNER": "",
             "HANDOFF_TERMINAL_ID": "", "HERDR_ENV": "", "HERDR_PANE_ID": "", "TMUX_PANE": ""})
         patcher.start()
