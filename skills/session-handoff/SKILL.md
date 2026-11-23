@@ -47,5 +47,7 @@ not authorization; live requests and workspace take precedence.
    continue: `agents_send` `{"to": "inbox", "project": "session-handoff-kit",
    "subject": <one line>, "body": <command, output trimmed to fit, expected>}`.
 
+When saving with live background subagents, never write that the person must relay their results: each subagent's completion notice arrives in this session, and resume says how to read its transcript meanwhile.
+
 Without `dispatch`: `branches/save.md` for save/park, `branches/resume.md` for
 retrieve/resume. Shape: `handoff-template.md`. Install: `reference.md`.
