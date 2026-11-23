@@ -843,8 +843,9 @@ from them, which costs a full extra read of every changed interface.
 A coordinator that is asked to save while workers are live saves immediately,
 then waits for them to report (or confirms their results are durable in commits
 or the AgentsRoom mailbox) before it follows the transition. An Agent-tool subagent's
-report reaches only the session that spawned it, so `/clear` or `agents_restart`
-would discard it. For long-running parallel lanes prefer AgentsRoom workers
+report reaches only the Claude Code process that spawned it. After `/clear` its
+completion notice still arrives in that process's new session; `agents_restart`
+or a different terminal would lose it. For long-running parallel lanes prefer AgentsRoom workers
 (`agents_spawn`, reported back through the mailbox): they outlive the
 coordinator. Workers report with `agents_send`, not `backlog_comment`, which
 only works on user-feedback backlog items; the coordinator records each report
@@ -863,7 +864,10 @@ running subagent's transcript into the new session's folder, so the folder the
 checkpoint recorded can go stale. Resume finds the transcript by `agent_id`
 across the project's session folders
 (`~/.claude/projects/<project>/*/subagents/`) and judges its status from the
-newest copy.
+newest copy. Each live subagent also gets a `subagent_notice: <id>` line: its
+completion notice arrives in this session, and until then the successor reads
+the named transcript. Results never need the person to relay them, so a
+checkpoint body must not say they do.
 
 ### Deterministic restart preflight
 
