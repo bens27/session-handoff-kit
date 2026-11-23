@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Subagent limit and planned handover (G23, G24).
 
-A subagent gets its own limit, subagent_at, 160000 by default and above the
-parent's default threshold. At it the subagent is told to hand over: save its
+A subagent can opt in to its own limit, subagent_at (off by default since G32,
+which replaced G23's 160000 default). At it the subagent is told to hand over: save its
 own subagent-scoped checkpoint (agent_id, parent session id, objective, done,
 next), never the parent's; commit WIP unless its brief forbids commits; end
 with a short report naming the checkpoint path and the exact resume command,
@@ -34,15 +34,18 @@ def load_thresholds():
 
 
 class SubagentLimit(unittest.TestCase):
-    def test_default_is_160k_and_above_parent_default(self):
-        self.assertEqual(context_watch.SUBAGENT_AT_DEFAULT, 160000)
-        self.assertGreater(context_watch.SUBAGENT_AT_DEFAULT, context_watch.DEFAULT_TOKENS)
-
-    def test_herdr_plugin_default_follows_hook(self):
-        self.assertEqual(load_thresholds().DEFAULTS["subagent_at"], 160000)
+    def test_off_by_default_in_hook_and_herdr_plugin(self):  # G32 replaced G23's default
+        self.assertFalse(hasattr(context_watch, "SUBAGENT_AT_DEFAULT"))
+        self.assertIsNone(load_thresholds().DEFAULTS["subagent_at"])
 
 
 class SubagentHandover(notice.SubagentCase):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.tmp, ".context-watch"))
+        with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
+            f.write('{"subagent_at": 160000}')  # opt in (G32)
+
     def checkpoint(self):
         with mock.patch.dict(os.environ, {"HOME": self.tmp}):
             return context_watch.subagent_checkpoint_path(notice.AGENT, self.sid)

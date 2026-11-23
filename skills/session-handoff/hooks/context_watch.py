@@ -44,8 +44,9 @@ Optional auto-mode keys in the same files (never model thresholds):
   "auto" (bool), "at" (int), "auto_max" (int) = HANDOFF_AUTO, HANDOFF_AT,
   HANDOFF_AUTO_MAX; a non-empty environment variable wins, then the project
   file, then the user file.
-  "subagent_at" (int, default 160000, above the parent's default 130000):
-  Agent-tool subagents (hook events that carry `agent_id`) get their own watch,
+  "subagent_at" (int > 0, opt-in; unset or null is off): by default the hook
+  sends Agent-tool subagents no notice, since Claude Code compacts them itself.
+  When set, subagents (hook events that carry `agent_id`) get their own watch,
   measured from the subagent's own transcript
   (.../<session_id>/subagents/agent-<agent_id>.jsonl). At that occupancy the
   hook tells the subagent once to hand over: save its own checkpoint at
@@ -911,8 +912,8 @@ def _load_config_files(cwd, settings=False):
                     if k in SETTING_KEYS:
                         if k in PROJECT_DISABLE_ONLY_KEYS:
                             continue  # skipped in every file: mandatory_gate.auto_setting decides
-                        if settings and type(v) is SETTING_KEYS[k]:
-                            merged[k] = v
+                        if settings and (type(v) is SETTING_KEYS[k] or (k == SUBAGENT_AT_KEY and v is None)):
+                            merged[k] = v  # a null subagent_at turns off a value from the user file
                     elif not settings and isinstance(v, int) and not isinstance(v, bool):
                         merged[k] = v
         except Exception:
@@ -2026,9 +2027,9 @@ def emit(agent, event_name, message, mode):
 # ---------------------------------------------------------------- subagents
 
 SUBAGENT_AT_KEY = "subagent_at"       # config key: subagent handover point
-# Above DEFAULT_TOKENS: a subagent stopping before its parent would reports its
-# limit as a failure (2026-11-22, a subagent stopped at 81k and said so).
-SUBAGENT_AT_DEFAULT = 160000
+# Opt-in only, with no token default (G32): Claude Code compacts subagents
+# itself, and on 2026-11-22 a kit default stopped 15 subagents at 74-163k
+# that then reported hitting their context limit.
 SUBAGENT_REPEAT_LEAD = 20000          # the one firmer repeat fires this far past it
 
 SUBAGENT_REPORT_FIELDS = (
@@ -2053,10 +2054,11 @@ def subagent_transcript_path(evt):
 
 
 def subagent_threshold(cwd):
-    """subagent_at from the thresholds files (project over user), default 160000.
-    No environment override: the Agent tool cannot pass a subagent its own env."""
+    """subagent_at from the thresholds files (project over user); None (off)
+    unless it is an int above 0. No environment override: the Agent tool cannot
+    pass a subagent its own env."""
     value = _load_config_files(cwd, settings=True).get(SUBAGENT_AT_KEY)
-    return value if isinstance(value, int) and value > 0 else SUBAGENT_AT_DEFAULT
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
 def subagent_state_path(agent_id, stage=1):
@@ -2112,7 +2114,8 @@ def handle_subagent(evt):
     """Planned-handover watch for an Agent-tool subagent (PostToolUse only).
     Occupancy comes from the subagent's own transcript, as the parent watch
     measures its own; the harness's per-run token figure is not window occupancy.
-    One notice at subagent_at, one firmer repeat ~20k later, nothing after.
+    Off unless a thresholds file sets subagent_at; then one notice there, one
+    firmer repeat ~20k later, nothing after.
     Never /clear, never the parent's checkpoint, latch or session note."""
     agent_id = evt.get("agent_id")
     if evt.get("hook_event_name") != "PostToolUse" or not agent_id:
@@ -2123,7 +2126,7 @@ def handle_subagent(evt):
     breakdown = claude_usage(load_transcript_tail(path), sidechain=True)[0]
     occupancy = (breakdown or {}).get("occupancy") or 0
     limit = subagent_threshold(evt.get("cwd") or os.getcwd())
-    if occupancy < limit:
+    if limit is None or occupancy < limit:
         return
     if claim_subagent_once(agent_id, 1):
         emit("claude", "PostToolUse", subagent_message(1, occupancy, limit, agent_id, evt.get("session_id")), "warn")
