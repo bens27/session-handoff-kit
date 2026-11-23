@@ -2081,12 +2081,15 @@ def subagent_checkpoint_path(agent_id, parent_session_id):
 def subagent_message(occupancy, limit, agent_id, parent_session_id):
     """Save-and-continue, never stop (G32): Claude Code compacts subagents itself,
     so the notice asks for durable progress and never for the end of a turn."""
+    checkpoint = subagent_checkpoint_path(agent_id, parent_session_id)
+    # G33: a brief that forbids commits would otherwise leave uncommitted work only in the tree.
+    patch = os.path.splitext(checkpoint)[0] + ".patch"
     return ("[context-watch] Subagent context ~%s tokens, past your configured subagent_at %s. "
             "Write your findings so far and your work in progress to your own subagent checkpoint "
-            "at %s (front matter agent_id: %s, parent_session_id: %s); never claim, supersede or "
-            "edit the parent's checkpoint. Then keep working on your task."
-            % (occupancy, limit, subagent_checkpoint_path(agent_id, parent_session_id), agent_id,
-               parent_session_id))
+            "at %s (front matter agent_id: %s, parent_session_id: %s); if your brief forbids commits, "
+            "also save `git diff` beside it at %s. Never claim, supersede or edit the parent's "
+            "checkpoint. Then keep working on your task."
+            % (occupancy, limit, checkpoint, agent_id, parent_session_id, patch))
 
 
 def handle_subagent(evt):
