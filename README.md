@@ -1196,6 +1196,16 @@ that ask the caller to act (`needs-confirmation`, `needs-context`,
   also carries `target.terminal_latest`, the newest checkpoint this terminal
   wrote (any status), and in AgentsRoom a `recovery_hint` that points to the
   tab's open assignments. Both are evidence; neither is ever adopted.
+  A session started by `/clear` inherits its predecessor's handoff lineage
+  (G30): at SessionStart `clear` the hook reads Claude Code's `derived-from`
+  record (`via: clear`) at the top of the new transcript, walks the chain
+  through the sibling transcripts, and records it in the session note. Lookup
+  then counts checkpoints saved by any session in that chain as this session's
+  own, whatever terminal they carry. When the chain last resumed a checkpoint
+  and saved nothing after it, resume answers `none`/`lineage_unsaved` instead
+  of `foreign_only`: the session before `/clear` ran without a checkpoint since
+  the resume time, what it last resumed (in `target.lineage`), and that its
+  later work is only in git and the board.
   An explicitly selected checkpoint tagged with another terminal whose hook
   pointer was refreshed in the last 1800 s (`HANDOFF_OWNER_LIVE_SECONDS`) gives
   `ask`/`owner_live` for resume and autoresume, with `target.owner`
