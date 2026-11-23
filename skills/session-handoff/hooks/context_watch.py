@@ -49,11 +49,9 @@ Optional auto-mode keys in the same files (never model thresholds):
   When set, subagents (hook events that carry `agent_id`) get their own watch,
   measured from the subagent's own transcript
   (.../<session_id>/subagents/agent-<agent_id>.jsonl). At that occupancy the
-  hook tells the subagent once to hand over: save its own checkpoint at
-  ~/.context-watch/subagents/<parent session>/<agent_id>.md, commit WIP unless
-  its brief forbids commits, and end with a short report naming that path and
-  the resume command, as a planned handover; one firmer repeat follows about
-  20k later, then nothing. State is keyed by agent_id under
+  hook tells the subagent once to write its findings and work in progress to
+  its own checkpoint at ~/.context-watch/subagents/<parent session>/<agent_id>.md
+  and keep working; it never tells it to stop. State is keyed by agent_id under
   ~/.context-watch/subagents. The subagent watch never types /clear and never
   touches the parent's checkpoint, latch or notice; no environment override
   (the Agent tool passes no env).
@@ -2030,15 +2028,6 @@ SUBAGENT_AT_KEY = "subagent_at"       # config key: subagent handover point
 # Opt-in only, with no token default (G32): Claude Code compacts subagents
 # itself, and on 2026-11-22 a kit default stopped 15 subagents at 74-163k
 # that then reported hitting their context limit.
-SUBAGENT_REPEAT_LEAD = 20000          # the one firmer repeat fires this far past it
-
-SUBAGENT_REPORT_FIELDS = (
-    "item id; worktree path; lane and seat; claim state (claimed / submitted / commit under "
-    "verification); branch and last commit; tree clean or WIP listed; done and verified; "
-    "remaining; last test command and result; background processes you started (pid, what); "
-    "open shout or decision id awaited; next command to run")
-
-
 def subagent_transcript_path(evt):
     """The subagent's own transcript: the event's transcript_path when it already
     sits under .../subagents/, else Claude Code's layout beside the parent's
@@ -2080,7 +2069,7 @@ def claim_subagent_once(agent_id, stage):
 
 
 def subagent_checkpoint_path(agent_id, parent_session_id):
-    """The subagent's own handover checkpoint. It lives beside the subagent
+    """The subagent's own progress checkpoint. It lives beside the subagent
     latches, outside every project's .handoffs ledger, so no lookup, claim or
     supersede of the parent's checkpoints can ever select it."""
     def safe(v):
@@ -2089,33 +2078,23 @@ def subagent_checkpoint_path(agent_id, parent_session_id):
                         safe(parent_session_id), safe(agent_id) + ".md")
 
 
-def subagent_message(stage, occupancy, limit, agent_id, parent_session_id):
-    path = subagent_checkpoint_path(agent_id, parent_session_id)
-    resume = ("Agent tool, fresh subagent, prompt: \"Resume the planned subagent handover in %s: "
-              "read it, continue from its next step, keep its branch and worktree.\"" % path)
-    handover = (
-        "Save your own subagent checkpoint at %s with front matter agent_id: %s and "
-        "parent_session_id: %s, then sections objective, done (with evidence) and next (report "
-        "fields: %s). It is yours alone: never claim, supersede or edit the parent's checkpoint "
-        "and do not run the handoff skill's save. Commit work in progress on your branch unless "
-        "your brief forbids commits. End your turn with a short report for your parent naming "
-        "the checkpoint path and this exact resume command: %s. Call it a planned handover, not "
-        "a failure: the parent resumes you in a fresh subagent with its own watch."
-        % (path, agent_id, parent_session_id, SUBAGENT_REPORT_FIELDS, resume))
-    if stage == 1:
-        return ("[context-watch] Subagent context ~%s tokens, at the subagent handover point %s. "
-                "Stop taking new work and finish the atomic action in hand. %s Do not clear your "
-                "context." % (occupancy, limit, handover))
-    return ("[context-watch] Stop now: subagent context ~%s tokens, %s past the handover point %s. "
-            "Hand over this turn. %s No further notices follow." % (occupancy, occupancy - limit, limit, handover))
+def subagent_message(occupancy, limit, agent_id, parent_session_id):
+    """Save-and-continue, never stop (G32): Claude Code compacts subagents itself,
+    so the notice asks for durable progress and never for the end of a turn."""
+    return ("[context-watch] Subagent context ~%s tokens, past your configured subagent_at %s. "
+            "Write your findings so far and your work in progress to your own subagent checkpoint "
+            "at %s (front matter agent_id: %s, parent_session_id: %s); never claim, supersede or "
+            "edit the parent's checkpoint. Then keep working on your task."
+            % (occupancy, limit, subagent_checkpoint_path(agent_id, parent_session_id), agent_id,
+               parent_session_id))
 
 
 def handle_subagent(evt):
-    """Planned-handover watch for an Agent-tool subagent (PostToolUse only).
+    """Opt-in progress watch for an Agent-tool subagent (PostToolUse only).
     Occupancy comes from the subagent's own transcript, as the parent watch
     measures its own; the harness's per-run token figure is not window occupancy.
-    Off unless a thresholds file sets subagent_at; then one notice there, one
-    firmer repeat ~20k later, nothing after.
+    Off unless a thresholds file sets subagent_at; then one notice there and
+    nothing after.
     Never /clear, never the parent's checkpoint, latch or session note."""
     agent_id = evt.get("agent_id")
     if evt.get("hook_event_name") != "PostToolUse" or not agent_id:
@@ -2129,9 +2108,7 @@ def handle_subagent(evt):
     if limit is None or occupancy < limit:
         return
     if claim_subagent_once(agent_id, 1):
-        emit("claude", "PostToolUse", subagent_message(1, occupancy, limit, agent_id, evt.get("session_id")), "warn")
-    if occupancy >= limit + SUBAGENT_REPEAT_LEAD and claim_subagent_once(agent_id, 2):
-        emit("claude", "PostToolUse", subagent_message(2, occupancy, limit, agent_id, evt.get("session_id")), "warn")
+        emit("claude", "PostToolUse", subagent_message(occupancy, limit, agent_id, evt.get("session_id")), "warn")
 
 
 # ---------------------------------------------------------------- main

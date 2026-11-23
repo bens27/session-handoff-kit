@@ -4,7 +4,8 @@
 Without a `subagent_at` in a thresholds file (unset, null, zero or not an int)
 an Agent-tool subagent gets no stop or handover notice at any occupancy, since
 Claude Code compacts subagents itself (observed to 393k). A positive int still
-opts in. No fixed token default remains in the hook, the Herdr plugin or the
+opts in to one save-and-continue notice that never says stop and never repeats.
+No fixed token default remains in the hook, the Herdr plugin or the
 README.
 
 Run: python3 -m pytest -q tests/test_subagent_optin.py"""
@@ -55,6 +56,18 @@ class OptIn(sub.SubagentCase):
         self.thresholds({"subagent_at": 60000})
         self.write_sub([20000, 60000])
         self.assertIn("[context-watch]", self.context(self.run_hook()))
+
+    def test_opted_in_notice_never_stops_and_never_repeats(self):  # G23/G24/G28 are wont
+        self.thresholds({"subagent_at": 60000})
+        self.write_sub([20000, 60000])
+        low = self.context(self.run_hook()).lower()
+        self.assertIn("keep working", low)
+        for banned in ("stop", "end your turn", "context limit", "hand over", "planned handover"):
+            self.assertNotIn(banned, low, banned)
+        for tokens in (80000, 160000, 393000):
+            self.write_sub([20000, tokens])
+            self.assertEqual(self.run_hook(), "", tokens)
+        self.assertFalse(hasattr(context_watch, "SUBAGENT_REPEAT_LEAD"))
 
     def test_no_fixed_default_in_the_hook(self):
         from unittest import mock
