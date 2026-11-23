@@ -1108,6 +1108,10 @@ def save(root, session, request_id, document):
         subagents = handoff_runs.subagent_snapshot(note.get('transcript_path') or '')
         if subagents:
             fields['subagents'] = subagents
+        # G31: the seat this session holds travels, so resume names the takeover step.
+        seat = handoff_identity.seat_holder(root, [session])
+        if seat:
+            fields['pullboard_seat'] = seat
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
         carried = None

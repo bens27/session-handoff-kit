@@ -1155,16 +1155,41 @@ def handle_session_start(evt, agent):
     lineage = ({'lineage': handoff_identity.clear_lineage(evt.get('transcript_path') or '')}
                if source == 'clear' else None)  # G30: the cleared session's handoffs stay this lineage's
     write_session_note(cwd, evt, False, lineage)  # fresh native identity first, then the pointer index
+    seat = cleared_seat_notice(cwd, session_key(evt), lineage['lineage']) if lineage else ''
     adopted = startup_adoption(cwd, session_key(evt)) if _MISSING_INSTALL is None else ''
     if adopted:
-        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': adopted}})
+        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart',
+                                            'additionalContext': adopted + ('\n\n' + seat if seat else '')}})
         sys.stdout.flush()
         mark_startup_delivered(adopted)
         sys.exit(0)
-    note = bounded_opening_note(evt)
+    note = '\n\n'.join(n for n in (bounded_opening_note(evt), seat) if n)
     if note:
         emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}})
     sys.exit(0)
+
+
+def cleared_seat_notice(cwd, session, lineage):
+    """G31: a session before this /clear held the checkout's Pullboard seat and no
+    open checkpoint from the lineage carries it, so name the seat and the step.
+    The kit never runs takeover itself: the seat is the agent's to continue."""
+    predecessors = [s for s in lineage if s and s != session]
+    if not predecessors:
+        return ''
+    try:
+        root = handoff_identity.project_root(cwd)
+        agent = handoff_identity.seat_holder(root, predecessors)
+        if not agent:
+            return ''
+        import handoff_ledger
+        if any(r['fm'].get('session_id') in predecessors and handoff_ledger.is_open(r['fm'])
+               for r in handoff_ledger._records(root)):
+            return ''  # the open checkpoint hands the seat over on resume
+    except Exception:
+        return ''
+    return ('handoff-status: The session before /clear held Pullboard seat %s in %s, and nothing handed it over: '
+            'no checkpoint was saved. Continue that seat with `%s` before other pullboard commands, then '
+            '`pullboard resume`.' % (agent, root, handoff_identity.takeover_step(root)))
 
 
 # ---------------------------------------------------------------- stop nudge
