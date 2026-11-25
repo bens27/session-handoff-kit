@@ -24,7 +24,8 @@ import watch_decision  # noqa: E402
 HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
 TARGET = os.environ.get("HANDOFF_TARGET_PANE") or ""
 STEP = 5000
-DEFAULTS = {"auto": False, "auto_max": 10, "subagent_at": context_watch.SUBAGENT_AT_DEFAULT}
+DEFAULTS = {"auto": False, "auto_max": 10, "subagent_at": None}  # subagent_at is opt-in (G32)
+OFF = object()  # save_global(subagent_at=OFF) writes null: the hook reads it as off
 DIM, BOLD, RESET, WARN, HOT = "\x1b[2m", "\x1b[1m", "\x1b[0m", "\x1b[33m", "\x1b[31m"
 
 
@@ -79,6 +80,8 @@ def save_global(warning, handoff, auto=None, auto_max=None, subagent_at=None):
     data.update(at=handoff, warning_window_tokens=handoff - warning)
     data.update({k: v for k, v in (("auto", auto), ("auto_max", auto_max), ("subagent_at", subagent_at))
                  if v is not None})
+    if subagent_at is OFF:
+        data["subagent_at"] = None
     write_json(path, data)
 
 
@@ -106,10 +109,13 @@ def resolve_settings(cwd, terminal):
         out[key] = (DEFAULTS[key], "default")
         for source, data in layers:
             value = data.get(key)
-            if type(value) is not kind or (key == "auto" and source == "project" and value):
-                continue
             if key == "subagent_at" and source == "this pane":
                 continue  # the subagent point is global only: a subagent has no pane of its own
+            if key == "subagent_at" and value is None and key in data:
+                out[key] = (None, source)  # an explicit null turns it off
+                break
+            if type(value) is not kind or (key == "auto" and source == "project" and value):
+                continue
             out[key] = (value, source)
             break
     return out
@@ -204,7 +210,8 @@ class State:
         if self.scope == "pane":
             save_pane(self.terminal, self.pane, self.warning, self.handoff, self.auto, self.auto_max)
         else:
-            save_global(self.warning, self.handoff, self.auto, self.auto_max, self.subagent_at)
+            save_global(self.warning, self.handoff, self.auto, self.auto_max,
+                        OFF if self.subagent_at is None else self.subagent_at)
         self.message = "Saved for %s; the hook applies it on its next event." % (
             "this pane" if self.scope == "pane" else "all agents")
         if self.cwd:
@@ -215,7 +222,7 @@ class State:
         src = {k: DIM + "(%s)" % v + RESET for k, v in self.sources.items()} if self.sources else {}
         return [" Auto     %8s   a    toggle   %s" % ("on" if self.auto else "off", src.get("auto", "")),
                 " Auto max %8s   m/M  -/+1     %s" % (self.auto_max, src.get("auto_max", "")),
-                " Subagent %8s   %s   %s" % (human(self.subagent_at),
+                " Subagent %8s   %s   %s" % ("off" if self.subagent_at is None else human(self.subagent_at),
                                               "u/U  -/+%s" % human(STEP) if self.scope == "global"
                                               else "tab  all agents", src.get("subagent_at", ""))]
 
@@ -254,8 +261,12 @@ class State:
             self.auto = not self.auto
         elif key in ("m", "M") and self.auto_max is not None:
             self.auto_max = max(self.auto_max + (1 if key == "M" else -1), 1)
-        elif key in ("u", "U") and self.scope == "global" and self.subagent_at is not None:
-            self.subagent_at = max(self.subagent_at + (STEP if key == "U" else -STEP), STEP)
+        elif key in ("u", "U") and self.scope == "global":
+            if self.subagent_at is None:
+                self.subagent_at = self.handoff if key == "U" else None  # opt in at the parent's point
+            else:
+                step = self.subagent_at + (STEP if key == "U" else -STEP)
+                self.subagent_at = step if step >= STEP else None
         elif key == "\t":
             self.scope = "global" if self.scope == "pane" else "pane"
         elif key == "s" and self.warning is not None:

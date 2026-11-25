@@ -394,8 +394,9 @@ between this pane and all agents, `s` saves and `c` clears the pane override.
 Below them sit the automatic-handoff controls, each shown with its resolved
 value and where it comes from (this pane, project, all agents or default):
 `a` toggles `auto` on or off, `m`/`M` move `auto_max` by 1, and `u`/`U` move
-`subagent_at` (default 160k) by 5k in the all-agents scope only (a subagent
-has no pane of its own). A pane override lives in `~/.context-watch/terminals/<digest>.json`
+`subagent_at` by 5k in the all-agents scope only (a subagent has no pane of
+its own). It shows `off` until set: `U` turns it on at the handoff point, `u`
+below 5k turns it off again, and saving off writes `null`. A pane override lives in `~/.context-watch/terminals/<digest>.json`
 and sits below `HANDOFF_AT`, `CONTEXT_WATCH_WARNING_WINDOW`, `HANDOFF_AUTO`
 and `HANDOFF_AUTO_MAX` but above the config files: saving `auto` on for a pane
 means the same as `HANDOFF_AUTO=1` for that terminal (a gated request, not
@@ -552,24 +553,18 @@ really saves or states plainly that nothing was saved and why. The agent's state
 again. A checkpoint saved since the notice silences all three. Codex gets the
 reminder only (it has no Stop hook).
 
-`"subagent_at"` (int, default `160000`) is the handover point for Agent-tool
-subagents, set above the parent's default threshold (`130000`) so a subagent
-does not stop before the session that launched it. Their hook events carry
+`"subagent_at"` (int above 0, opt-in) is a progress point for Agent-tool
+subagents. Unset or `null` means off, which is the default: Claude Code compacts
+subagents itself (they have run to 393k), and a fixed kit limit once stopped
+fifteen subagents that then reported hitting their context limit. A project
+file's `null` turns off a value from the user file. When set, their hook events carry
 `agent_id`, and the watcher measures each one from the subagent's own transcript
 (`.../<session_id>/subagents/agent-<agent_id>.jsonl`), not from the parent's.
-At that occupancy the subagent gets one notice to hand over: stop taking new
-work, save its own checkpoint at
+At that occupancy the subagent gets one notice, and only one: write its findings
+so far and its work in progress to its own checkpoint at
 `~/.context-watch/subagents/<parent session id>/<agent_id>.md` (front matter
-`agent_id` and `parent_session_id`; objective, done with evidence, next, and the
-report fields: item id, worktree, lane and seat, claim state, branch and last
-commit, tree state, remaining, last test command and result, background
-processes, awaited shout or decision, next command), commit work in progress
-unless its brief forbids commits, and end its turn with a short report naming
-the checkpoint path and the exact resume command. The notice calls this a
-planned handover, not a failure. The parent resumes it by launching a fresh
-subagent told to read that checkpoint; the continuation has a new `agent_id`,
-its own watch, and can hand over again. One firmer repeat follows about 20k
-tokens later, then nothing. State is keyed by `agent_id` under
+`agent_id` and `parent_session_id`), then keep working. It never tells the
+subagent to stop or end its turn. State is keyed by `agent_id` under
 `~/.context-watch/subagents/`. The subagent checkpoint sits outside every
 project's `.handoffs` ledger, so it is never claimed, superseded or edited as
 the parent's; the subagent watch never types `/clear`, and parent events are
@@ -850,9 +845,8 @@ coordinator. Workers report with `agents_send`, not `backlog_comment`, which
 only works on user-feedback backlog items; the coordinator records each report
 on the backlog item with a `descriptionAppend` update. The context watcher never gives a subagent the parent's
 handoff notice (it detects them by the `agent_id` field Claude Code adds to
-their hook events); past `subagent_at` (default 160k) it tells the subagent to
-save its own subagent checkpoint, commit and report a planned handover with
-the resume command instead (see the thresholds keys above).
+their hook events); only past a configured `subagent_at` does it ask the subagent to
+save its progress to its own checkpoint and keep working (see the thresholds keys above).
 
 Resume reports each subagent the checkpoint recorded as a `subagent: <id>
 live|finished|stopped <description>` line in `workspace`, on every outcome: a

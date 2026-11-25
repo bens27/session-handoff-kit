@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Agent-tool subagents get their own stop-and-report notice (pullboard #1).
+"""Agent-tool subagents that opt in get one save-and-continue notice (G32).
 
 A PostToolUse event carrying `agent_id` is measured from the subagent's own
 transcript (.../<session_id>/subagents/agent-<agent_id>.jsonl). At or past the
-`subagent_at` config key (default 160000) the hook tells the subagent once to
-hand over (its own checkpoint, WIP commit, short report); about 20k later it
-repeats once, more firmly; then it stays quiet. It never types /clear, never
+`subagent_at` config key (opt-in since G32) the hook tells the subagent once to
+write its findings and work in progress to its own checkpoint and keep working;
+then it stays quiet. It never types /clear, never
 touches the parent's checkpoint or latch, and keys its state by agent_id.
 
 Run: python3 -m pytest -q tests/test_context_watch_subagent_notice.py"""
@@ -28,6 +28,14 @@ def sidechain_call(tokens):
             "message": {"model": "claude-sonnet-5-5", "usage": {
                 "input_tokens": 2, "cache_read_input_tokens": tokens - 2,
                 "cache_creation_input_tokens": 0, "output_tokens": 0}}}
+
+
+def context_watch_checkpoint(home, agent_id, parent):
+    sys.path.insert(0, os.path.dirname(base.HOOK))
+    import context_watch
+    from unittest import mock
+    with mock.patch.dict(os.environ, {"HOME": home}):
+        return context_watch.subagent_checkpoint_path(agent_id, parent)
 
 
 class SubagentCase(base.HookCase):
@@ -69,29 +77,36 @@ class SubagentCase(base.HookCase):
 
 
 class SubagentNotice(SubagentCase):
-    def test_notice_once_then_firmer_repeat_then_silence(self):
+    def setUp(self):
+        super().setUp()
+        # subagent_at is opt-in (G32); these tests opt in at the old 160000.
+        os.makedirs(os.path.join(self.tmp, ".context-watch"))
+        with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
+            json.dump({"subagent_at": 160000}, f)
+
+    def test_one_save_and_continue_notice_then_silence(self):
         self.write_sub([20000, 159999])
-        self.assertEqual(self.run_hook(), "")  # below the default 160000
+        self.assertEqual(self.run_hook(), "")  # below the opted-in 160000
         self.write_sub([20000, 160000])
         first = self.context(self.run_hook())
         self.assertIn("[context-watch]", first)
-        for field in ("stop", "commit", "item id", "worktree", "lane", "claim state", "branch",
-                      "last commit", "clean", "done", "remaining", "test command", "background",
-                      "shout", "next command"):
-            self.assertIn(field, first.lower(), field)
-        self.assertNotIn("/clear", first)
-        self.assertNotIn("session-handoff", first)
-        self.write_sub([20000, 165000])
-        self.assertEqual(self.run_hook(), "")  # once only until the repeat point
-        self.write_sub([20000, 180000])
-        second = self.context(self.run_hook())
-        self.assertIn("stop now", second.lower())
-        self.assertIn("commit", second.lower())
-        self.assertNotEqual(first, second)
-        self.write_sub([20000, 210000])
-        self.assertEqual(self.run_hook(), "")  # no third notice, ever
-        self.write_sub([20000, 250000])
-        self.assertEqual(self.run_hook(), "")
+        low = first.lower()
+        for field in ("findings", "work in progress", "keep working", "agent_id", "parent_session_id",
+                      "never claim, supersede or edit the parent"):
+            self.assertIn(field, low, field)
+        self.assertIn(context_watch_checkpoint(self.tmp, AGENT, self.sid), first)
+        for banned in ("stop", "end your turn", "context limit", "hand over", "/clear", "session-handoff"):
+            self.assertNotIn(banned, low, banned)
+        for tokens in (165000, 180000, 250000, 393000):
+            self.write_sub([20000, tokens])
+            self.assertEqual(self.run_hook(), "", tokens)  # one notice, never a repeat
+
+    def test_checkpoint_path_scoped_to_agent_not_parent_ledger(self):
+        a = context_watch_checkpoint(self.tmp, "agent-x1", "parent-s")
+        self.assertNotEqual(a, context_watch_checkpoint(self.tmp, "agent-x2", "parent-s"))
+        self.assertIn("agent-x1", a)
+        self.assertIn("parent-s", a)
+        self.assertNotIn(os.sep + ".handoffs" + os.sep, a)
 
     def test_state_keyed_by_agent_id_and_parent_untouched(self):
         self.write_sub([20000, 160000])
@@ -110,7 +125,6 @@ class SubagentNotice(SubagentCase):
         self.assertEqual(base.HookCase.run_hook(self, extra=NOTE), "")
 
     def test_subagent_at_config_key_project_over_user(self):
-        os.makedirs(os.path.join(self.tmp, ".context-watch"))
         with open(os.path.join(self.tmp, ".context-watch", "thresholds.json"), "w") as f:
             json.dump({"subagent_at": 60000, "default": 130000}, f)
         self.write_sub([20000, 59000])
