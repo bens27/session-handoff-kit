@@ -65,6 +65,7 @@ from handoff_identity import (  # noqa: F401
 # names stay importable from the ledger for existing callers.
 import handoff_workspace as workspace
 import handoff_runs
+import handoff_identity
 from handoff_record import (  # noqa: F401
     CLOSED_STATUSES, Record, is_open, content_fingerprint, publication_valid,
     _receipt_key, _mac, seal, valid_seal, trusted)
@@ -587,6 +588,11 @@ def claim_report(path):
         if dirty is not None:
             out.append("dirty: %d" % dirty)
     out.extend(handoff_runs.subagent_report(fm.get("subagents", "")))
+    seat = fm.get("pullboard_seat", "")
+    if seat and os.path.isdir(root) and handoff_identity.seat_holder(root, [fm.get("session_id", "")]) == seat:
+        # G31: the saving session still holds the seat; once taken over, stay silent.
+        out.append("pullboard_seat: %s was held by the saving session; continue it with `%s`"
+                   % (seat, handoff_identity.takeover_step(root)))
     return out
 
 

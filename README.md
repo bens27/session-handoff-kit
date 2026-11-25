@@ -1215,6 +1215,14 @@ that ask the caller to act (`needs-confirmation`, `needs-context`,
   of `foreign_only`: the session before `/clear` ran without a checkpoint since
   the resume time, what it last resumed (in `target.lineage`), and that its
   later work is only in git and the board.
+  A Pullboard seat follows the same chain (G31). Pullboard binds a checkout to
+  one session in `<git-dir>/pullboard-checkout-session.json`; the kit reads
+  that file and never runs pullboard. When a session before `/clear` holds the
+  seat and no open checkpoint from the chain carries it, SessionStart `clear`
+  names the seat, the checkout and `cd <checkout> && pullboard takeover`. A
+  checkpoint saved by the seat holder records `pullboard_seat`, and resume
+  adds a `pullboard_seat:` line with the same step while the saving session
+  still holds the seat. The kit never runs takeover itself.
   An explicitly selected checkpoint tagged with another terminal whose hook
   pointer was refreshed in the last 1800 s (`HANDOFF_OWNER_LIVE_SECONDS`) gives
   `ask`/`owner_live` for resume and autoresume, with `target.owner`

@@ -492,6 +492,66 @@ def clear_lineage(transcript):
     return out
 
 
+# G31: Pullboard binds a checkout to one agent session in
+# <git-dir>/pullboard-checkout-session.json as {agent, digest}. Reading the file
+# (rather than running pullboard) tells which session holds the seat, and keeps
+# SessionStart free of subprocesses.
+PULLBOARD_BINDING = 'pullboard-checkout-session.json'
+_DIGEST_RE = __import__('re').compile(r'[0-9a-f]{64}')
+
+
+def session_digest(session):
+    """Pullboard's digest of a Claude Code session id."""
+    return hashlib.sha256(json.dumps(['CLAUDE_CODE_SESSION_ID', session], separators=(',', ':')).encode()).hexdigest()
+
+
+def _git_dir(root):
+    marker = os.path.join(root, '.git')
+    if os.path.isdir(marker):
+        return marker
+    try:
+        with open(marker, encoding='utf-8') as stream:
+            pointer = stream.read(8192).strip()
+    except (OSError, ValueError):
+        return ''
+    if pointer.startswith('gitdir: ') and pointer[8:].strip():
+        return os.path.realpath(os.path.join(root, pointer[8:].strip()))
+    return ''
+
+
+def pullboard_binding(root):
+    """{agent, digest} of the seat bound to this checkout, or None when absent or damaged."""
+    gitdir = _git_dir(root) if root else ''
+    if not gitdir:
+        return None
+    try:
+        with open(os.path.join(gitdir, PULLBOARD_BINDING), encoding='utf-8') as stream:
+            data = json.loads(stream.read(65536))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    agent, digest = data.get('agent'), data.get('digest')
+    if not (isinstance(agent, str) and 0 < len(agent) <= 200 and agent.isprintable()):
+        return None
+    if not (isinstance(digest, str) and _DIGEST_RE.fullmatch(digest)):
+        return None
+    return dict(agent=agent, digest=digest)
+
+
+def seat_holder(root, sessions):
+    """The bound seat's agent when one of `sessions` holds it, else ''."""
+    binding = pullboard_binding(root)
+    if not binding:
+        return ''
+    return binding['agent'] if any(s and session_digest(s) == binding['digest'] for s in sessions) else ''
+
+
+def takeover_step(root):
+    import shlex
+    return 'cd %s && pullboard takeover' % shlex.quote(root)
+
+
 def default_session(root, directory=None):
     """Fallback order: terminal pointer -> CODEX_THREAD_ID -> HANDOFF_SESSION_ID."""
     return terminal_session(root, directory) or host_session() or environment_session()
