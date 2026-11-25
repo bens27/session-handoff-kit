@@ -1959,6 +1959,21 @@ def replay_transfer(root, session, target):
 
 def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
            catalog=None, reuse_receipt=None, legacy_next_step=False):
+    result = _resume(root, session, target, budget, confirm_verify, catalog, reuse_receipt, legacy_next_step)
+    if 'workspace' not in result and result.get('outcome') != 'none':
+        # Every outcome owes the subagent report (G25), so a successor stopped
+        # anywhere still knows which builders run and does not relaunch them.
+        try:
+            path = result.get('path') or ledger.resolve(target, root)['authoritative']
+            if path:
+                result['workspace'] = handoff_runs.subagent_report(Record.load(path).get('subagents', ''))
+        except (OSError, ValueError, TypeError, KeyError, ledger.ConflictError):
+            pass  # no readable checkpoint, so no recorded subagents to report
+    return result
+
+
+def _resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
+            catalog=None, reuse_receipt=None, legacy_next_step=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
     root = handoff_identity.project_root(root)
     prune_transfer_payloads(root)
@@ -2008,7 +2023,9 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                 checkpoint = Record.load(resolved['authoritative'])
                 command = checkpoint.verify
                 if command and not checkpoint.trusted():
-                    return needs_confirmation(resolved['authoritative'], command)
+                    # Nothing is claimed yet, but the subagent report still applies (G25).
+                    return dict(needs_confirmation(resolved['authoritative'], command),
+                                workspace=handoff_runs.subagent_report(checkpoint.get('subagents', '')))
         except OSError:
             pass  # prepare reports unreadable state
     def stage(name, run, success):
@@ -2026,6 +2043,9 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
     if prepared['verify_required']:
         failed, checked = stage('verify', lambda: verify(path, root, session, confirm=confirm_verify), 'verified')
         if failed:
+            # A resume that stops here still owes the subagent report (G25):
+            # the successor must not relaunch builders that are still running.
+            failed.setdefault('workspace', prepared['workspace'])
             return failed
         verification = {k: checked[k] for k in ('outcome', 'baseline_failures') if k in checked}
     body = prepared.get('body', '')
@@ -2060,10 +2080,11 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         receipt = prepared_receipt(path, root, session)
         receipt['delivery_state'] = 'pending'
         if 'package' not in receipt:
-            return dict(outcome='needs-context', stage='prepare', path=path,
+            return dict(outcome='needs-context', stage='prepare', path=path, workspace=prepared['workspace'],
                         action='Legacy preparation has no complete replay package; run prepare --execute again before acknowledgement.')
         failed, draft = stage('report-back', lambda: report_back_draft(root, session, path), ('drafted', 'skipped'))
         if failed:
+            failed.setdefault('workspace', prepared['workspace'])
             return failed
         if draft['outcome'] == 'drafted':
             result['report_back_draft'] = {k: draft[k] for k in ('path', 'status')}
@@ -2078,6 +2099,8 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         receipt.pop('package', None)  # Keep one full payload after preparation becomes delivery.
         write_receipt(root, session, path, receipt)
     failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
+    if failed:
+        failed.setdefault('workspace', prepared['workspace'])
     return failed or result
 
 
