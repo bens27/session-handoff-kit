@@ -563,7 +563,8 @@ file's `null` turns off a value from the user file. When set, their hook events 
 At that occupancy the subagent gets one notice, and only one: write its findings
 so far and its work in progress to its own checkpoint at
 `~/.context-watch/subagents/<parent session id>/<agent_id>.md` (front matter
-`agent_id` and `parent_session_id`), then keep working. It never tells the
+`agent_id` and `parent_session_id`), plus a `git diff` patch beside it
+(`<agent_id>.patch`) when its brief forbids commits, then keep working (G33). It never tells the
 subagent to stop or end its turn. State is keyed by `agent_id` under
 `~/.context-watch/subagents/`. The subagent checkpoint sits outside every
 project's `.handoffs` ledger, so it is never claimed, superseded or edited as
