@@ -495,5 +495,74 @@ class UnrecordedResultsStreamedUsage(unittest.TestCase):
         self.assertEqual(self.ur(rows, skip_id="t3"), 0)
 
 
+class TyperWaitsForIdle(unittest.TestCase):
+    """pullboard #26: /clear typed while the Claude pane is still busy (Stop hooks
+    running) lands in the input and joins the resume into '/clearresume'. The Herdr
+    typer must poll `herdr pane get` and send each command only once it is idle."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = os.path.realpath(self._tmp.name)
+        self.calls = os.path.join(self.tmp, "calls")
+        self.polls = os.path.join(self.tmp, "polls")
+        self.herdr = os.path.join(self.tmp, "herdr")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def fake(self, statuses, after="idle"):
+        """`pane get` answers each status in turn, then `after`; every other call is
+        logged with the number of polls answered so far."""
+        answers = " ".join(statuses)
+        with open(self.herdr, "w") as f:
+            f.write("""#!/bin/sh
+n=$(cat "%(polls)s" 2>/dev/null || echo 0)
+if [ "$1 $2" = "pane get" ]; then
+  echo $((n+1)) > "%(polls)s"
+  set -- %(answers)s
+  i=0; st=%(after)s
+  for a in "$@"; do if [ "$i" -eq "$n" ]; then st=$a; fi; i=$((i+1)); done
+  printf '{"id":"cli:pane:get","result":{"pane":{"agent_status":"%%s","pane_id":"w2:p3"},"type":"pane_info"}}\\n' "$st"
+  exit 0
+fi
+printf '%%s %%s\\n' "$n" "$*" >> "%(calls)s"
+""" % {"polls": self.polls, "calls": self.calls, "answers": answers, "after": after})
+        os.chmod(self.herdr, 0o755)
+
+    def run_typer(self, polls="20"):
+        script = _load_hook().typer_script("herdr")
+        env = dict(os.environ, P="w2:p3", H=self.herdr, S="", R="", D="", N="", K="", M="",
+                   T1="0", T2="0", T3="0", T4=polls)
+        subprocess.run(["sh", "-c", script], env=env, check=True, timeout=30)
+        with open(self.calls) as f:
+            return [line.split(" ", 1) for line in f.read().splitlines()]
+
+    def test_clear_waits_until_the_pane_reports_idle(self):
+        self.fake(["working", "working", "working"])
+        calls = self.run_typer()
+        sent = {text: int(n) for n, text in calls if " send-text " in " " + text}
+        self.assertGreaterEqual(sent["pane send-text w2:p3 /clear"], 4, calls)
+
+    def test_resume_waits_for_idle_again_after_the_clear(self):
+        self.fake(["idle", "working", "working"])
+        calls = self.run_typer()
+        sent = {text: int(n) for n, text in calls if " send-text " in " " + text}
+        self.assertEqual(sent["pane send-text w2:p3 /clear"], 1, calls)
+        self.assertGreaterEqual(sent["pane send-text w2:p3 resume"], 4, calls)
+
+    def test_done_counts_as_idle(self):
+        self.fake([], after="done")
+        calls = self.run_typer()
+        sent = {text: int(n) for n, text in calls if " send-text " in " " + text}
+        self.assertEqual(sent["pane send-text w2:p3 /clear"], 1, calls)
+
+    def test_a_pane_that_never_goes_idle_still_gets_the_keys_after_the_bound(self):
+        self.fake([], after="working")
+        calls = self.run_typer(polls="3")
+        texts = [text for _, text in calls]
+        self.assertIn("pane send-text w2:p3 /clear", texts)
+        self.assertIn("pane send-text w2:p3 resume", texts)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1540,11 +1540,22 @@ printf '%s\\n' "$M" > "$N"
 """
 
 
+# pullboard #26: keys typed while Claude is still busy (Stop hooks running, a prompt
+# just started) land in the input and Enter does not submit, so /clear and resume
+# join as '/clearresume'. Herdr reports the pane's agent_status; wait out "working"
+# and "blocked" for at most $T4 polls of $T3 s, then send anyway. An empty or
+# unreadable status (older Herdr) cannot be waited on, so it does not hold the keys.
+_HERDR_WAIT_IDLE = """wait_idle() { w=0; while [ "$w" -lt "$T4" ]; do
+st=$("$H" pane get "$P" 2>/dev/null | sed -n 's/.*"agent_status"[[:space:]]*:[[:space:]]*"\\([a-z_]*\\)".*/\\1/p')
+case "$st" in working|blocked) ;; *) return 0;; esac
+sleep "$T3"; w=$((w+1)); done; return 0; }"""
+
+
 def typer_script(multiplexer):
     """Shell for the detached Stop typer: Escape, /clear, Enter; Escape, resume, Enter;
     then wait for the resume event, retry Escape+resume once, else leave the notice."""
     if multiplexer == "herdr":
-        send = 'send() { "$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"; "$H" pane send-keys "$P" Enter; }'
+        send = _HERDR_WAIT_IDLE + '\nsend() { wait_idle; "$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"; "$H" pane send-keys "$P" Enter; }'
         show = _SHOW_SUMMARY_PANE
     else:
         send = 'send() { tmux send-keys -t "$P" Escape; tmux send-keys -t "$P" -l "$1"; tmux send-keys -t "$P" Enter; }'
