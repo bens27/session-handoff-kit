@@ -451,6 +451,47 @@ def terminal_session(root, directory=None):
     return ''
 
 
+# G30: Claude Code starts the new transcript after /clear with a derived-from
+# record naming the cleared session; its transcript sits beside the new one.
+LINEAGE_MAX = 20
+LINEAGE_HEAD_LINES = 50
+_SESSION_ID_RE = __import__('re').compile(r'[A-Za-z0-9_-]{1,200}')
+
+
+def clear_predecessor(transcript):
+    """The session id `transcript` was /cleared from, or ''."""
+    try:
+        with open(transcript, encoding='utf-8', errors='replace') as stream:
+            for _, line in zip(range(LINEAGE_HEAD_LINES), stream):
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get('type') != 'derived-from':
+                    continue
+                for source in record.get('sessions') or []:
+                    sid = source.get('id') if isinstance(source, dict) else None
+                    if source.get('via') == 'clear' and isinstance(sid, str) and _SESSION_ID_RE.fullmatch(sid):
+                        return sid
+                return ''
+    except (OSError, TypeError, AttributeError):
+        pass
+    return ''
+
+
+def clear_lineage(transcript):
+    """Session ids this transcript descends from by /clear, nearest first."""
+    out, path = [], transcript
+    own = os.path.splitext(os.path.basename(transcript or ''))[0]
+    while path and len(out) < LINEAGE_MAX:
+        sid = clear_predecessor(path)
+        if not sid or sid in out or sid == own:
+            break
+        out.append(sid)
+        path = os.path.join(os.path.dirname(path), sid + '.jsonl')
+    return out
+
+
 def default_session(root, directory=None):
     """Fallback order: terminal pointer -> CODEX_THREAD_ID -> HANDOFF_SESSION_ID."""
     return terminal_session(root, directory) or host_session() or environment_session()

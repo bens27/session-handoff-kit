@@ -295,7 +295,7 @@ def write_session_note(cwd, evt, fired, context=None):
         previous = _ledger().read_session_note(cwd, session=sid)
         note.update({k: v for k, v in previous.items() if k.startswith('resume')})
         note.update({k: previous[k] for k in ('observed_occupancy_tokens', 'threshold', 'threshold_source',
-                                            'window', 'window_source', 'model') if k in previous})
+                                            'window', 'window_source', 'model', 'lineage') if k in previous})
         note.update(context or {})
         entries = load_transcript_tail(evt.get('transcript_path') or '') if evt.get('transcript_path') else []
         agent = detect_agent(evt, entries)
@@ -1152,7 +1152,9 @@ def handle_session_start(evt, agent):
     if source in ("resume", "fork"):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
-    write_session_note(cwd, evt, False)  # fresh native identity first, then the pointer index
+    lineage = ({'lineage': handoff_identity.clear_lineage(evt.get('transcript_path') or '')}
+               if source == 'clear' else None)  # G30: the cleared session's handoffs stay this lineage's
+    write_session_note(cwd, evt, False, lineage)  # fresh native identity first, then the pointer index
     adopted = startup_adoption(cwd, session_key(evt)) if _MISSING_INSTALL is None else ''
     if adopted:
         emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': adopted}})

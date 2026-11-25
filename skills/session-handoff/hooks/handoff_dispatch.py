@@ -527,6 +527,12 @@ def select_target(root, request, session):
         return info, None
     if len(mine) > 1:
         return dict(candidates=[_candidate(i) for i in mine]), ('ask', 'target_ambiguous', 'Several of this session\'s checkpoints are open; ask the user which one.')
+    gap = protocol.lineage_gap(root, session)
+    if gap:
+        info = dict(lineage=gap)
+        if found['total']:
+            info['candidates'] = [_candidate(i) for i in found['items']]
+        return info, ('none', 'lineage_unsaved', gap['text'])
     if found['total']:
         info = dict(candidates=[_candidate(i) for i in found['items']])
         latest = ledger.terminal_latest(root, protocol.terminal_id())
