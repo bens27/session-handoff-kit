@@ -429,6 +429,8 @@ def subagent_transcript(folder, agent_id):
     except OSError:
         sessions = []
     for session in sessions:
+        if any(ord(c) < 32 or ord(c) == 127 for c in session):
+            continue  # the path reaches resume output
         candidates.append(os.path.join(project, session, 'subagents', name))
     best, best_mtime = os.path.join(folder, name), None
     for path in candidates:
@@ -455,7 +457,8 @@ def subagent_state(folder, agent_id, now=None):
 
 
 def subagent_report(field, now=None):
-    """`subagent: <id> <state> <description> (worktree <path>)` lines for a checkpoint's `subagents` field."""
+    """`subagent: <id> <state> <description> (worktree <path>)` lines for a checkpoint's `subagents` field,
+    each live one followed by a `subagent_notice:` line naming where its result arrives."""
     try:
         recorded = json.loads(field) if field else {}
     except ValueError:
@@ -470,8 +473,13 @@ def subagent_report(field, now=None):
         agent_id = agent.get('id') if isinstance(agent, dict) else None
         if not isinstance(agent_id, str) or not _AGENT_ID.fullmatch(agent_id):
             continue
-        line = 'subagent: %s %s' % (agent_id, subagent_state(folder, agent_id, now))
+        state = subagent_state(folder, agent_id, now)
         description = _subagent_text(agent.get('description'))
         worktree = _subagent_worktree(agent.get('worktree'))
-        lines.append(line + (' ' + description if description else '') + (' (worktree %s)' % worktree if worktree else ''))
+        lines.append('subagent: %s %s' % (agent_id, state) + (' ' + description if description else '')
+                     + (' (worktree %s)' % worktree if worktree else ''))
+        if state == 'live':
+            # Results come to this session, not through the person (G27).
+            lines.append('subagent_notice: %s its completion notice arrives in this session; until then read its transcript: %s'
+                         % (agent_id, subagent_transcript(folder, agent_id)))
     return lines

@@ -32,7 +32,11 @@ WORKING = [entry('user', 'Build #7.'),
            entry('assistant', [dict(type='tool_use', name='Bash', input={})], 'tool_use')]
 
 
-class SubagentTests(unittest.TestCase):
+def report(field):
+    return [l for l in handoff_runs.subagent_report(field) if l.startswith('subagent:')]
+
+
+class SubagentFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -63,7 +67,7 @@ class SubagentTests(unittest.TestCase):
 
     def states(self):
         field = handoff_runs.subagent_snapshot(str(self.transcript))
-        return {line.split()[1]: line.split()[2] for line in handoff_runs.subagent_report(field)}
+        return {line.split()[1]: line.split()[2] for line in report(field)}
 
     def cli(self, *args, input=None, terminal='term-a'):
         p = subprocess.run([sys.executable, str(LEDGER), *map(str, args)], cwd=self.root,
@@ -82,6 +86,7 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual(resumed['outcome'], expect, resumed)
         return Path(out['path']).read_text(), resumed
 
+class SubagentTests(SubagentFixture):
     def test_live_subagent(self):
         self.agent('a1live', WORKING)
         self.assertEqual(self.states(), {'a1live': 'live'})
@@ -144,7 +149,8 @@ class SubagentTests(unittest.TestCase):
         foreign.write_text('---\ntopic: foreign\nstatus: open\nverify: exit 3\nsubagents: %s\n---\n%s' % (field, BODY))
         resumed = self.cli('resume', 'foreign', '--session', 'sess-b', terminal='term-b')
         self.assertEqual(resumed['outcome'], 'needs-confirmation', resumed)
-        self.assertEqual(resumed.get('workspace'), ['subagent: a1live live Build #7 hooks'], resumed)
+        self.assertEqual([l for l in resumed.get('workspace', []) if l.startswith('subagent:')],
+                         ['subagent: a1live live Build #7 hooks'], resumed)
 
     def lines(self, out):
         return [l for l in out.get('workspace', []) if l.startswith('subagent:')]
@@ -198,7 +204,7 @@ class SubagentTests(unittest.TestCase):
         self.agent('a1moved', WORKING, description='Build #7 hooks')
         field = handoff_runs.subagent_snapshot(str(self.transcript))
         self.move_after_clear('a1moved')
-        self.assertEqual(handoff_runs.subagent_report(field), ['subagent: a1moved live Build #7 hooks'])
+        self.assertEqual(report(field), ['subagent: a1moved live Build #7 hooks'])
 
     def test_newest_copy_decides_when_both_remain(self):
         self.agent('a1both', WORKING, age=OLD)
@@ -208,7 +214,7 @@ class SubagentTests(unittest.TestCase):
         target = self.move_after_clear('a2fin', keep_old=True)
         with open(target / 'agent-a2fin.jsonl', 'a') as f:
             f.write(json.dumps(entry('assistant', [dict(type='text', text='Done.')], 'end_turn')) + '\n')
-        self.assertEqual(handoff_runs.subagent_report(field),
+        self.assertEqual(report(field),
                          ['subagent: a1both live Builder', 'subagent: a2fin finished Builder'])
 
     def test_moved_copy_is_found_in_resume_output(self):
@@ -225,8 +231,8 @@ class SubagentTests(unittest.TestCase):
 
     def test_tampered_ids_and_folders_build_no_path(self):
         field = json.dumps(dict(dir=str(self.folder), agents=[dict(id='../../etc/passwd'), dict(id='ok')]))
-        self.assertEqual(handoff_runs.subagent_report(field), ['subagent: ok stopped'])
-        self.assertEqual(handoff_runs.subagent_report(json.dumps(dict(dir='/etc', agents=[dict(id='ok')]))), [])
+        self.assertEqual(report(field), ['subagent: ok stopped'])
+        self.assertEqual(report(json.dumps(dict(dir='/etc', agents=[dict(id='ok')]))), [])
 
 
 if __name__ == '__main__':
