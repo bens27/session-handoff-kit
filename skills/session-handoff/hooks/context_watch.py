@@ -1291,7 +1291,7 @@ def nudge_unwritten_handoff(evt):
     nothing was saved and why (the reply is never parsed; only a save silences
     the guard). A stop already continued by a block (stop_hook_active) only
     warns and claims nothing, so the guard never loops and the band's block
-    stays for the next ordinary stop. Claude only (Codex has no Stop hook)."""
+    stays for the next ordinary stop. Claude only: a Codex Stop runs only the automatic clear."""
     if detect_agent(evt, []) != "claude":
         return
     key = session_key(evt)
