@@ -1,0 +1,7 @@
+version = 1
+id = "pullboard-worker"
+kind = "heartbeat"
+name = "Pullboard worker"
+prompt = "Run the Pullboard worker loop on this seat.\n\n## Worker loop\n\nNever wait, never sleep, never poll, never stop while the board has work.\n\n1. `pullboard next --wait 1`: build/verify. On an empty answer, wait 1 s, then 2 s, 4 s and so on up to 60 s; run it again. `pullboard next --verify --wait 1`.\n2. `next` printed your bar; `pullboard show <id>` only for the thread and history.\n3. **Build**; **commit**; `pullboard submit <id>`; fix reds; resubmit.\n\n- **Review:** A review-lane seat reviews; loop with `pullboard next --verify --wait 1`.\n\n### Building\n\n- **Gate:** Pullboard checks; no suites.\n- **Can't build:** `pullboard release <id> --reason <CODE>`.\n- **Stop:** only when the wait reached 60 s and `next` is still empty.\n\n### Verifying\n\n- **Judge:** check bar, diff, receipts.\n- **Accept:** `pullboard verify <id> accept`.\n- **Reject:** `pullboard verify <id> reject --reason TEST_FAILURE|BEHAVIOR_MISMATCH|INSUFFICIENT_EVIDENCE|STALE_HEAD|OTHER --clause \"<clause>\" --note \"...\"`.\n\nRun `next`, `status` and `shout` from your seat folder, not its item folder; the item folder gets `NOT_JOINED` otherwise.\n"
+status = "PAUSED"
+rrule = "FREQ=MINUTELY;INTERVAL=15"

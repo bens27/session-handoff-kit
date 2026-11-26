@@ -9,3 +9,4 @@ prefix_rule(pattern=["git","rebase"], decision="allow", justification="Run the P
 prefix_rule(pattern=["git","switch"], decision="allow", justification="Run the Pullboard project loop.")
 prefix_rule(pattern=["git","checkout"], decision="allow", justification="Run the Pullboard project loop.")
 prefix_rule(pattern=["git","worktree"], decision="allow", justification="Run the Pullboard project loop.")
+prefix_rule(pattern=["pullboard","spec","check"], decision="allow", justification="Run the Pullboard project loop.")
