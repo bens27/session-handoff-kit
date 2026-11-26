@@ -291,15 +291,71 @@ def record_session(evt, agent):
         tid, fresh = _background_tid()
     with _locked(tid):
         record = read_record(tid) or fresh
+        pid, start = _agent_anchor()
         entry = {'kit_session': kit_session_id(agent, provider), 'agent': agent, 'provider_session': provider,
                  'form': _form(record, bool(agent_id)),
-                 'parent': kit_session_id(agent, session) if agent_id and session else None}
+                 'parent': kit_session_id(agent, session) if agent_id and session else None,
+                 'process': {'pid': pid, 'start': list(start)}}
         sessions = [s for s in record.get('sessions') or [] if isinstance(s, dict)]
         if not any(s.get('kit_session') == entry['kit_session'] for s in sessions):
             sessions.append(dict(entry, started=_now()))
             record['sessions'] = sessions
             _write(record)
     return dict(entry, tid=tid)
+
+
+def _herdr_json(*args):
+    herdr = os.environ.get('HERDR_BIN_PATH') or 'herdr'
+    try:
+        return json.loads(_run([herdr, 'pane'] + list(args)) or 'null')['result']
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _named_sessions(pid, sessions):
+    """Sessions whose agent process is `pid` at its exact recorded start (G52: a reused pid is not them)."""
+    info = proc_info(pid) if isinstance(pid, int) else None
+    if info is None:
+        return []
+    return [s['kit_session'] for s in sessions
+            if (s.get('process') or {}).get('pid') == pid and list((s.get('process') or {}).get('start') or []) == list(info[1])]
+
+
+def _bracketed_read(terminal_id):
+    """One list -> process-info -> get pass; a pane renumbered in between is a mismatch, never a result."""
+    listed = _herdr_json('list')
+    if listed is None:
+        return 'fail', 'herdr pane list was unreadable'
+    panes = [p for p in listed.get('panes') or [] if isinstance(p, dict) and p.get('terminal_id') == terminal_id]
+    if len(panes) != 1:
+        return 'fail', 'herdr pane list has %d panes with terminal %s, not one' % (len(panes), terminal_id)
+    pane_id = str(panes[0].get('pane_id') or '')
+    info = (_herdr_json('process-info', '--pane', pane_id) or {}).get('process_info')
+    confirmed = (_herdr_json('get', pane_id) or {}).get('pane') or {}
+    if not isinstance(info, dict) or info.get('pane_id') != pane_id or confirmed.get('terminal_id') != terminal_id:
+        return 'mismatch', 'pane %s no longer maps to terminal %s' % (pane_id, terminal_id)
+    return 'ok', (pane_id, info)
+
+
+def process_info(tid):
+    """G50: the processes in the Herdr terminal of `tid`, each naming the TID's sessions it runs."""
+    record = read_record(tid) if TID_PATTERN.match(tid or '') else None
+    terminal_id = ((record or {}).get('herdr') or {}).get('terminal_id')
+    if not terminal_id:
+        return {'ok': False, 'tid': tid, 'error': 'no Herdr terminal recorded for this TID'}
+    for _ in range(2):
+        status, value = _bracketed_read(terminal_id)
+        if status != 'mismatch':
+            break
+    if status != 'ok':
+        return {'ok': False, 'tid': tid, 'terminal_id': terminal_id, 'error': value}
+    pane_id, info = value
+    sessions = [s for s in record.get('sessions') or [] if isinstance(s, dict) and s.get('kit_session')]
+    processes = [dict(p, sessions=_named_sessions(p.get('pid'), sessions))
+                 for p in info.get('foreground_processes') or [] if isinstance(p, dict)]
+    return {'ok': True, 'tid': tid, 'terminal_id': terminal_id, 'pane_id': pane_id,
+            'shell_pid': info.get('shell_pid'), 'processes': processes,
+            'sessions': [s['kit_session'] for s in sessions]}
 
 
 def main(argv):
@@ -309,7 +365,13 @@ def main(argv):
     reg = sub.add_parser('register', help='create this shell\'s TID and print its export line')
     reg.add_argument('--shell-pid', type=int, default=os.getppid())
     sub.add_parser('snippet', help='print the line a shell rc file runs at start')
+    pinfo = sub.add_parser('process-info', help='print the processes of a TID\'s Herdr terminal as JSON')
+    pinfo.add_argument('tid')
     args = parser.parse_args(argv)
+    if args.command == 'process-info':
+        result = process_info(args.tid)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result['ok'] else 1
     if args.command == 'snippet':
         print('eval "$(%s %s register --shell-pid $$ 2>/dev/null)"' % ('python3', os.path.abspath(__file__)))
         return 0
