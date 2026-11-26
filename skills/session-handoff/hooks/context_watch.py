@@ -1130,8 +1130,18 @@ def reserve_handoff_status(evt):
     return True
 
 
+def record_terminal_session(evt, agent):
+    """G49: add this session under its terminal id; the registry never blocks startup."""
+    try:
+        import handoff_terminal
+        handoff_terminal.record_session(evt, agent)
+    except Exception:
+        pass
+
+
 def handle_session_start(evt, agent):
     """Keep startup quiet except for owned publication repair or compaction recovery."""
+    record_terminal_session(evt, agent)
     source = evt.get("source") or ""
     if source == "compact":
         sid = session_key(evt)
@@ -2141,13 +2151,17 @@ def subagent_message(occupancy, limit, agent_id, parent_session_id):
 
 
 def handle_subagent(evt):
-    """Opt-in progress watch for an Agent-tool subagent (PostToolUse only).
+    """Opt-in progress watch for an Agent-tool subagent (PostToolUse), plus its
+    registry entry at SubagentStart.
     Occupancy comes from the subagent's own transcript, as the parent watch
     measures its own; the harness's per-run token figure is not window occupancy.
     Off unless a thresholds file sets subagent_at; then one notice there and
     nothing after.
     Never /clear, never the parent's checkpoint, latch or session note."""
     agent_id = evt.get("agent_id")
+    if evt.get("hook_event_name") == "SubagentStart" and agent_id:
+        record_terminal_session(evt, "claude")  # Agent-tool subagents exist only in Claude Code
+        return
     if evt.get("hook_event_name") != "PostToolUse" or not agent_id:
         return
     path = subagent_transcript_path(evt)

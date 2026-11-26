@@ -7,6 +7,7 @@ Usage: python3 install.py [claude|codex ...] [--uninstall]
        python3 install.py runtime --root PATH create VERSION
        python3 install.py runtime --root PATH activate RELEASE claude|codex
        python3 install.py runtime --root PATH rollback claude|codex
+       python3 install.py shell-id [--rc PATH] [--uninstall]
 
 Hook commands point at hooks/context_watch.py beside this file by absolute
 path, so run this from where the skill folder is installed, and re-run it
@@ -33,7 +34,7 @@ import time
 RUNTIME_FORMAT = 1
 REQUIRED_RUNTIME = {"SKILL.md", "branches/save.md", "branches/resume.md", "continuation.md", "handoff-template.md", "reference.md",
                     "install.py", "hooks/context_watch.py", "hooks/mandatory_gate.py", "hooks/handoff_ledger.py",
-                    "hooks/handoff_protocol.py", "hooks/handoff_notes.py", "hooks/handoff_runs.py", "hooks/handoff_autoclose.py", "hooks/handoff_contract.py", "hooks/handoff_cli.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_record.py", "hooks/handoff_review.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "hooks/commit_ticket.py", "hooks/handoff_staleness.py", "hooks/handoff_mcp.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
+                    "hooks/handoff_protocol.py", "hooks/handoff_notes.py", "hooks/handoff_runs.py", "hooks/handoff_autoclose.py", "hooks/handoff_contract.py", "hooks/handoff_cli.py", "hooks/restart_preflight.py", "hooks/handoff_pointers.py", "hooks/handoff_dispatch.py", "hooks/handoff_identity.py", "hooks/handoff_terminal.py", "hooks/handoff_record.py", "hooks/handoff_review.py", "hooks/handoff_workspace.py", "hooks/handoff_intents.py", "hooks/handoff_holds.py", "hooks/watch_decision.py", "hooks/commit_ticket.py", "hooks/handoff_staleness.py", "hooks/handoff_mcp.py", "agents/openai.yaml", "claude-auto", "codex-auto"}
 # Explicit product inputs, independent of Git metadata so extracted packages
 # behave exactly like checkouts. Local config, secrets and editor files are not
 # distributable inputs. Update this declaration when adding a product file.
@@ -379,6 +380,7 @@ HOST_HOOKS = {
         "UserPromptSubmit": {"timeout": 20},
         "SessionStart": {"timeout": 10},
         "Stop": {"timeout": 10},
+        "SubagentStart": {"timeout": 10},  # G49: the subagent's registry entry
     },
     "codex": {  # no Stop in Codex
         "SessionStart": {"timeout": 20},
@@ -579,7 +581,64 @@ def git_hook_main(argv):
     print(('Removed' if args.uninstall else 'Registered') + ' Ticket hook: ' + str(hook))
 
 
+SHELL_ID_BEGIN = "# >>> session-handoff terminal id >>>"
+SHELL_ID_END = "# <<< session-handoff terminal id <<<"
+SHELL_ID_BLOCK = re.compile(r"\n?" + re.escape(SHELL_ID_BEGIN) + r".*?" + re.escape(SHELL_ID_END) + r"\n?", re.S)
+
+
+def ask(question):
+    """The person's own yes, read from their terminal; no terminal is never a yes."""
+    if not sys.stdin.isatty():
+        raise EOFError
+    return input(question + " [y/N] ").strip().lower() in ("y", "yes")
+
+
+def shell_id_block():
+    terminal = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "handoff_terminal.py")
+    return "\n".join((SHELL_ID_BEGIN,
+                      "# G48: one terminal id per interactive shell, kept across Claude Code and Codex.",
+                      'if [[ -o interactive ]]; then eval "$(python3 -B %s register --shell-pid $$ 2>/dev/null)"; fi'
+                      % shlex.quote(terminal),
+                      SHELL_ID_END)) + "\n"
+
+
+def shell_id_main(argv):
+    """Add (after the person's yes) or remove the shell-start terminal id line (G48)."""
+    parser = argparse.ArgumentParser(prog="install.py shell-id",
+                                     description="Give each interactive zsh a terminal id at start")
+    parser.add_argument("--rc", default=os.path.join(os.environ.get("ZDOTDIR") or os.path.expanduser("~"), ".zshrc"))
+    parser.add_argument("--uninstall", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        with open(args.rc, encoding="utf-8") as stream:
+            before = stream.read()
+    except FileNotFoundError:
+        before = ""
+    if args.uninstall and SHELL_ID_BEGIN not in before:
+        print("No terminal id line in %s; left it unchanged." % args.rc)
+        return 0
+    kept = SHELL_ID_BLOCK.sub("\n", before).rstrip("\n")
+    kept = kept + "\n" if kept else ""
+    if not args.uninstall:
+        try:
+            yes = ask("Add the session-handoff terminal id line to %s?" % args.rc)
+        except EOFError:
+            print("shell-id asks before editing %s: run it in your own terminal." % args.rc)
+            return 2
+        if not yes:
+            print("Left %s unchanged." % args.rc)
+            return 1
+        kept += ("\n" if kept else "") + shell_id_block()
+    if kept != before:
+        with open(args.rc, "w", encoding="utf-8") as stream:
+            stream.write(kept)
+    print("%s the terminal id line: %s" % ("Removed" if args.uninstall else "Added", args.rc))
+    return 0
+
+
 def main(argv):
+    if argv[:1] == ["shell-id"]:
+        sys.exit(shell_id_main(argv[1:]))
     if argv[:1] == ["git-hook"]:
         try:
             git_hook_main(argv[1:])

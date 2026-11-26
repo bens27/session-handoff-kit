@@ -44,6 +44,17 @@
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/session-handoff/hooks/context_watch.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
