@@ -26,7 +26,8 @@
         "tests/",
         "README.md",
         "skills/session-handoff/install.py",
-        "docs/local-rollout.md"
+        "docs/local-rollout.md",
+        "plugins/session-handoff/hooks/hooks.json"
       ]
     },
     "pi": {
