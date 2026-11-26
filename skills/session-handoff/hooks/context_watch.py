@@ -1130,8 +1130,18 @@ def reserve_handoff_status(evt):
     return True
 
 
+def record_terminal_session(evt, agent):
+    """G49: add this session under its terminal id; the registry never blocks startup."""
+    try:
+        import handoff_terminal
+        handoff_terminal.record_session(evt, agent)
+    except Exception:
+        pass
+
+
 def handle_session_start(evt, agent):
     """Keep startup quiet except for owned publication repair or compaction recovery."""
+    record_terminal_session(evt, agent)
     source = evt.get("source") or ""
     if source == "compact":
         sid = session_key(evt)
