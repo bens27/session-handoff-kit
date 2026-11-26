@@ -614,6 +614,9 @@ def shell_id_main(argv):
             before = stream.read()
     except FileNotFoundError:
         before = ""
+    if args.uninstall and SHELL_ID_BEGIN not in before:
+        print("No terminal id line in %s; left it unchanged." % args.rc)
+        return 0
     kept = SHELL_ID_BLOCK.sub("\n", before).rstrip("\n")
     kept = kept + "\n" if kept else ""
     if not args.uninstall:

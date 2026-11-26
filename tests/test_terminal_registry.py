@@ -10,6 +10,7 @@ a background TID anchored to its agent process. Every test runs with HOME in a
 temporary folder and a fake Herdr binary.
 
 Run: python3 -m pytest -q tests/test_terminal_registry.py"""
+import io
 import json
 import os
 from pathlib import Path
@@ -298,6 +299,14 @@ class ShellStartConsent(Sandbox):
         self.assertEqual(self.rc.read_text(), 'export KEEP=1\n')
         self.assertFalse(asked.called, 'removal needs no consent')
 
+    def test_uninstall_without_a_block_leaves_the_file_byte_for_byte(self):
+        self.rc.write_text('export KEEP=1\n\n\n')
+        with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            code, _ = self.run_with(True, '--uninstall')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.rc.read_text(), 'export KEEP=1\n\n\n')
+        self.assertNotIn('Removed', out.getvalue())
+
     def test_without_a_terminal_it_refuses_instead_of_assuming_consent(self):
         p = subprocess.run([sys.executable, str(HOOKS.parent / 'install.py'), 'shell-id', '--rc', str(self.rc)],
                            env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
@@ -319,6 +328,10 @@ class SubagentStartHook(Sandbox):
         spec.loader.exec_module(install)
         self.assertIn('SubagentStart', install.hook_groups('claude', 'cmd'))
         self.assertNotIn('SubagentStart', install.hook_groups('codex', 'cmd'))
+
+    def test_the_plugin_hooks_file_registers_subagent_start(self):
+        plugin = json.loads((REPO / 'plugins/session-handoff/hooks/hooks.json').read_text())
+        self.assertIn('SubagentStart', plugin['hooks'], 'plugin installs would record no subagent entry')
 
     def test_subagent_start_event_records_a_subagent_under_the_parents_tid(self):
         watch = '%s -B %s' % (sys.executable, HOOKS / 'context_watch.py')
