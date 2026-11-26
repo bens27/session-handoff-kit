@@ -46,16 +46,39 @@ LIFECYCLE_WORD = re.compile(r'\b(handoffs?|resume|retrieve|checkpoint|park)\b', 
 SAVE = re.compile(r'^(park|save|checkpoint)( (this|the|my|a))? (work|session|handoff|checkpoint)'
                   r'|^hand off( (this|the|my))? (work|session|handoff)$|^(save|write)( a| the)? handoff$'
                   r'|^session handoff( to (yourself|your successor|successor|self))?$|^hand ?off$', re.I)
+# G12: a save request is often the last clause of a longer instruction and may carry typos.
+def _typos(word):
+    """The word and its single-edit typos: one letter dropped, doubled, replaced, or swapped with the next."""
+    out = {word}
+    for i in range(len(word)):
+        out.update((word[:i] + word[i + 1:], word[:i] + word[i] + word[i:], word[:i] + '[a-z]' + word[i + 1:]))
+        if i + 1 < len(word):
+            out.add(word[:i] + word[i + 1] + word[i] + word[i + 2:])
+    return '|'.join(sorted(out, key=len, reverse=True))
+
+
+_SELF = r'(?:yours\w{0,5}|' + _typos('yourself') + r'|self|(?:your\s+)?successor)'
+_HANDOFF = r'(?:(?:ses+\w{0,4}|' + _typos('session') + r')\s+)?hand[\s-]?off'
+SAVE_CLAUSE = re.compile(r'(?:^|[,.;:]\s*|\b(?:then|and|after|now|please)\s+)'
+                         r'(?:(?:make|write|save|do|create)\s+(?:a\s+)?)?'
+                         r'(?:checkpoint\s+and\s+' + _HANDOFF + r'(?:\s+to\s+' + _SELF + r')?'
+                         r'|' + _HANDOFF + r'\s+to\s+' + _SELF + r')'
+                         r'(?:,?\s+(?:please|now|when\s+(?:you\s+)?(?:safely\s+)?(?:can|ready)))?$', re.I)
+RESUME_WORD = re.compile(r'\b(resume|retrieve|continue)\b', re.I)
 
 
 def targeted_command(prompt, root=None):
     """Parse an exact opening command; readable names must match stored metadata."""
     if not isinstance(prompt, str) or QUOTED.search(prompt):
         return None
-    match = re.fullmatch(r'(resume|retrieve)\s+(.+)', prompt.strip(), re.I)
+    match = re.fullmatch(r'(resume|retrieve|continue)\s+(.+)', prompt.strip(), re.I)
     if not match or protocol.generic_intent(prompt):
         return None
     operation, target = match.group(1).lower(), match.group(2)
+    if operation == 'continue':  # G12: only an exact checkpoint path, never a readable name
+        if re.search(r'\s', target) or not target.endswith('.md'):
+            return None
+        operation = 'resume'
     if target.startswith(("'", '‘')) or target.endswith(("'", '’')):
         return None
     if not re.search(r'\s', target) and target.endswith('.md'):
@@ -101,6 +124,9 @@ def classify(prompt):
     targeted = targeted_command(text)
     if targeted:
         return targeted[0]
+    clause = SAVE_CLAUSE.search(text.strip().rstrip('.!').strip())
+    if clause and '?' not in text and not RESUME_WORD.search(text):
+        return 'save'  # a further instruction after the clause ("then keep working") is not a park
     if MAINTENANCE.search(text) and LIFECYCLE_WORD.search(text):
         return 'maintenance'
     intent = protocol.generic_intent(text)
