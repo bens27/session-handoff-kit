@@ -382,10 +382,11 @@ HOST_HOOKS = {
         "Stop": {"timeout": 10},
         "SubagentStart": {"timeout": 10},  # G49: the subagent's registry entry
     },
-    "codex": {  # no Stop in Codex
+    "codex": {  # Stop runs the automatic clear (pullboard #27)
         "SessionStart": {"timeout": 20},
         "UserPromptSubmit": {"timeout": 20},
         "PostToolUse": {"timeout": 20},
+        "Stop": {"timeout": 10},
     },
 }
 

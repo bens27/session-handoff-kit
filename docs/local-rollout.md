@@ -94,9 +94,9 @@ done
 
 **Exception: a profile whose workspace is `$HOME`.** When Codex runs with `cwd=$HOME`, `~/.codex/hooks.json` is also loaded as a *project* hook layer (Codex 0.159.3 `hooks/list` reports `source: project`), on top of the profile's own `hooks.json`. Registering the watcher in both fires it twice per event. For such a profile, skip it in the loop above or remove its entry with `CODEX_HOME="$profile_dir" python3 .../install.py codex --uninstall`; the shared `~/.codex/hooks.json` then supplies the single registration. Trust is stored per hook in the host config (AgentsRoom keeps it in its per-agent `agentsroom-agent-*.config.toml`, not the profile's `config.toml`), so a bare `hooks/list` against the profile directory shows "untrusted" even when the live agent has trusted every hook; deleting a registration needs no re-review.
 
-Codex has no Stop hook for this skill: `install.py` registers SessionStart, UserPromptSubmit and PostToolUse only, so no handoff-completion or automatic-clear logic runs at turn end. Do not add no-op Stop/PreToolUse/PermissionRequest/Subagent* handlers; they enforce nothing.
+`install.py` registers SessionStart, UserPromptSubmit, PostToolUse and Stop for Codex. The Stop hook runs the automatic clear: after a context-pressure checkpoint is published, it types /clear and resume into the Herdr or tmux pane, as it does for Claude Code. The Claude-only unsaved-handoff guard does not run for Codex. Do not add no-op PreToolUse/PermissionRequest/Subagent* handlers; they enforce nothing.
 
-Then start/restart the relevant Codex sessions. In the CLI, use `/hooks` to verify the SessionStart, UserPromptSubmit and PostToolUse entries, their shared `context_watch.py` path, and trust status. If the host has no hook-review UI, open the same profile with:
+Then start/restart the relevant Codex sessions. In the CLI, use `/hooks` to verify the SessionStart, UserPromptSubmit, PostToolUse and Stop entries, their shared `context_watch.py` path, and trust status. If the host has no hook-review UI, open the same profile with:
 
 ```sh
 CODEX_HOME="$HOME/.agentsroom/codex/PROFILE_DIRECTORY" codex
