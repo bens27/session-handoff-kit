@@ -1128,7 +1128,7 @@ session-handoff-kit/
 ├── herdr-plugin/                        # Herdr popup: view and edit a pane's thresholds; auto-handoff summary pane
 ├── plugins/session-handoff/             # Claude Code + Cowork plugin wrapper
 │   ├── .claude-plugin/plugin.json
-│   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop
+│   ├── hooks/hooks.json                 # PostToolUse, UserPromptSubmit, SessionStart, Stop, SubagentStart
 │   └── skills/session-handoff -> ../../../skills/session-handoff
 ├── scripts/package.sh                   # builds dist/*.plugin and dist/*.skill artifacts
 ├── scripts/bump-version                 # rewrites (or --check) the version in every file that carries it (incl. product page)

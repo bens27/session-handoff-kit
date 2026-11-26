@@ -26,6 +26,14 @@ CODEX_HOME="$HOME/.codex" CLAUDE_CONFIG_DIR="$HOME/.claude" \
   python3 "$HOME/.agents/skills/session-handoff/install.py" claude codex
 ```
 
+Terminal ids (G48) start in the shell, not in an agent. To give each interactive zsh one, run this yourself in your own terminal: it shows the file it would change and edits `~/.zshrc` (or `$ZDOTDIR/.zshrc`) only after you answer yes. Without a terminal it refuses rather than assume consent. `--uninstall` removes only its own marked block.
+
+```sh
+python3 "$HOME/.agents/skills/session-handoff/install.py" shell-id
+```
+
+Each new shell then exports `KIT_TERMINAL_ID` and writes `~/.context-watch/terminals/<TID>.json`. Every Claude Code or Codex session started in that shell adds an entry under that id at SessionStart. A process that inherited the variable but does not run under that shell gets a background id instead.
+
 The installer preserves other hooks and backs up config files. Use one handoff installation per active runtime: either the standalone registration or a plugin that registers the same hooks. The audited Claude plugin registry contained no installed Session Handoff plugin, despite old cache directories on disk.
 
 ## Optional mandatory save gate

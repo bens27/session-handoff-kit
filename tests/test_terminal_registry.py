@@ -247,5 +247,95 @@ class SessionStartHook(Sandbox):
         self.assertEqual([[s['provider_session'] for s in r['sessions']] for r in found], [['s-hook']])
 
 
+class ShellStartConsent(Sandbox):
+    """G48: the installer adds the shell-start line to ~/.zshrc only after the person says yes."""
+
+    def setUp(self):
+        super().setUp()
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('kit_install', HOOKS.parent / 'install.py')
+        self.install = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.install)
+        self.rc = self.home / '.zshrc'
+        self.rc.write_text('export KEEP=1\n')
+
+    def run_with(self, answer, *args):
+        with mock.patch.object(self.install, 'ask', return_value=answer) as asked:
+            code = self.install.shell_id_main(['--rc', str(self.rc)] + list(args))
+        return code, asked
+
+    def test_yes_adds_one_block_that_registers_this_shell(self):
+        for _ in range(2):
+            code, asked = self.run_with(True)
+            self.assertEqual(code, 0)
+        text = self.rc.read_text()
+        self.assertTrue(text.startswith('export KEEP=1\n'))
+        self.assertEqual(text.count(self.install.SHELL_ID_BEGIN), 1)
+        self.assertIn('handoff_terminal.py', text)
+        self.assertIn('register --shell-pid $$', text)
+        self.assertTrue(asked.called)
+
+    def test_no_leaves_the_file_untouched(self):
+        code, _ = self.run_with(False)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.rc.read_text(), 'export KEEP=1\n')
+
+    def test_the_block_gives_a_zsh_a_tid(self):
+        self.run_with(True)
+        zsh = '/bin/zsh'
+        if not os.path.exists(zsh):
+            self.skipTest('no zsh')
+        out = subprocess.run([zsh, '-i', '-c', 'echo "tid=$KIT_TERMINAL_ID"'], env=dict(self.env, ZDOTDIR=str(self.home)),
+                             capture_output=True, text=True, timeout=30).stdout
+        tid = out.strip().splitlines()[-1].split('=', 1)[1]
+        self.assertTrue(tid.startswith('tid-'), out)
+        self.assertTrue((self.registry() / (tid + '.json')).exists())
+
+    def test_uninstall_removes_only_the_block(self):
+        self.run_with(True)
+        code, asked = self.run_with(True, '--uninstall')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.rc.read_text(), 'export KEEP=1\n')
+        self.assertFalse(asked.called, 'removal needs no consent')
+
+    def test_without_a_terminal_it_refuses_instead_of_assuming_consent(self):
+        p = subprocess.run([sys.executable, str(HOOKS.parent / 'install.py'), 'shell-id', '--rc', str(self.rc)],
+                           env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('own terminal', p.stdout + p.stderr)
+        self.assertEqual(self.rc.read_text(), 'export KEEP=1\n')
+
+    def test_handoff_terminal_is_a_declared_runtime_input(self):
+        self.assertIn('hooks/handoff_terminal.py', self.install.REQUIRED_RUNTIME)
+
+
+class SubagentStartHook(Sandbox):
+    """G49: Claude Agent-tool subagents add their entry at SubagentStart, naming the parent."""
+
+    def test_claude_registers_subagent_start_and_codex_does_not(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('kit_install', HOOKS.parent / 'install.py')
+        install = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(install)
+        self.assertIn('SubagentStart', install.hook_groups('claude', 'cmd'))
+        self.assertNotIn('SubagentStart', install.hook_groups('codex', 'cmd'))
+
+    def test_subagent_start_event_records_a_subagent_under_the_parents_tid(self):
+        watch = '%s -B %s' % (sys.executable, HOOKS / 'context_watch.py')
+        parent = json.dumps(dict(hook_event_name='SessionStart', source='startup', session_id='p-1', cwd=str(self.home)))
+        child = json.dumps(dict(hook_event_name='SubagentStart', session_id='p-1', agent_id='a-9',
+                                agent_type='Explore', cwd=str(self.home)))
+        lines = ['eval "$(%s %s register --shell-pid $$)"' % (sys.executable, TERMINAL), 'echo "tid=$KIT_TERMINAL_ID"',
+                 "printf %%s '%s' | %s >/dev/null" % (parent, watch),
+                 "printf %%s '%s' | %s; echo \"rc=$?\"" % (child, watch)]
+        out = self.sh('\n'.join(lines), dict(CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_RESUME_LOG='0', CONTEXT_WATCH_JEV='0',
+                                              HANDOFF_PROCESS_ANCHOR='0')).splitlines()
+        tid = out[0].split('=', 1)[1]
+        self.assertEqual(out[1:], ['rc=0'], 'SubagentStart prints nothing')
+        sessions = {s['provider_session']: s for s in self.record_of(tid)['sessions']}
+        self.assertEqual(sessions['a-9']['form'], 'subagent')
+        self.assertEqual(sessions['a-9']['parent'], sessions['p-1']['kit_session'])
+
+
 if __name__ == '__main__':
     unittest.main()

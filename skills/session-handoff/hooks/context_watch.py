@@ -2151,13 +2151,17 @@ def subagent_message(occupancy, limit, agent_id, parent_session_id):
 
 
 def handle_subagent(evt):
-    """Opt-in progress watch for an Agent-tool subagent (PostToolUse only).
+    """Opt-in progress watch for an Agent-tool subagent (PostToolUse), plus its
+    registry entry at SubagentStart.
     Occupancy comes from the subagent's own transcript, as the parent watch
     measures its own; the harness's per-run token figure is not window occupancy.
     Off unless a thresholds file sets subagent_at; then one notice there and
     nothing after.
     Never /clear, never the parent's checkpoint, latch or session note."""
     agent_id = evt.get("agent_id")
+    if evt.get("hook_event_name") == "SubagentStart" and agent_id:
+        record_terminal_session(evt, "claude")  # Agent-tool subagents exist only in Claude Code
+        return
     if evt.get("hook_event_name") != "PostToolUse" or not agent_id:
         return
     path = subagent_transcript_path(evt)
