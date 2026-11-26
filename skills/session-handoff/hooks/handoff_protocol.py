@@ -264,6 +264,40 @@ def session_lineage(root, session):
     return handoff_identity.clear_lineage(note.get('transcript_path') or '')
 
 
+def subagent_resume(root, session, agent_id):
+    """G36: the parent, or any session in its /clear lineage, continues a
+    subagent's checkpoint by agent_id. The first session to ask claims it; the
+    subagent's own session need not be live."""
+    if not agent_id or not re.fullmatch(r'[A-Za-z0-9_-]+', agent_id):
+        return dict(outcome='invalid', action='Pass the agent_id the subagent notice named (letters, digits, - and _ only).')
+    candidates = [session] + [s for s in session_lineage(root, session) if s != session]
+    for parent in candidates:
+        path = handoff_identity.subagent_checkpoint_path(agent_id, parent)
+        if not os.path.isfile(path):
+            continue
+        claim = os.path.splitext(path)[0] + '.claim.json'
+        try:
+            # O_EXCL: two parents racing for one subagent cannot both continue it.
+            fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                json.dump(dict(session=session, at=datetime.now().isoformat(timespec='seconds')), f)
+        except FileExistsError:
+            try:
+                with open(claim) as f:
+                    holder = json.load(f).get('session')
+            except (OSError, ValueError, AttributeError):
+                holder = None
+            if holder != session:
+                return dict(outcome='claimed', path=path, claimed_by=holder,
+                            action='Another session already continues this subagent; do not resume it here.')
+        with open(path, encoding='utf-8') as f:
+            body = f.read()
+        return dict(outcome='resumed', path=path, parent_session=parent, body=body,
+                    next_step=section(body, 'Next steps'),
+                    action="Continue with the subagent's ## Next steps, or hand them to a fresh subagent.")
+    return dict(outcome='none', action='No checkpoint for this subagent under this session or its /clear lineage.')
+
+
 def lineage_gap(root, session):
     """G30: when this session's /clear lineage last resumed a checkpoint and saved
     nothing after it, {resumed_by, resumed, path, topic, text}; else None."""
@@ -2435,6 +2469,10 @@ def cli(argv):
     resume_p.add_argument('--catalog', help='JSON installed skills mapping plus paths already loaded in this context')
     resume_p.add_argument('--reuse-receipt', help='Receipt for body/references still in this session context; omit after context loss')
     resume_p.add_argument('--legacy-next-step', action='store_true', help='Also emit the Next steps text (duplicates body) for older consumers')
+    subres_p = sub.add_parser('subagent-resume', description="Continue a subagent's checkpoint by its agent_id; claims it for this session once (G36).")
+    subres_p.add_argument('agent_id')
+    subres_p.add_argument('--root', default='.')
+    subres_p.add_argument('--session', help='Parent session; default: $HANDOFF_SESSION_ID, else the session the hooks recorded for this terminal')
     wait_p = sub.add_parser('wait', description='Poll until the newest handoff for a topic or path is saved/open or resumed.')
     wait_p.add_argument('target', help='Topic or path')
     wait_p.add_argument('--status', required=True, choices=('saved', 'open', 'resumed'))
@@ -2576,6 +2614,8 @@ def cli(argv):
             result = run_list(a.root, a.session)
         elif a.command == 'wait':
             result = wait(a.root, a.target, a.status, a.timeout, a.interval)
+        elif a.command == 'subagent-resume':
+            result = subagent_resume(a.root, a.session, a.agent_id)
         elif a.command == 'resume':
             catalog = load_state_json(a.catalog) if a.catalog else None
             result = resume(a.root, a.session, a.target, a.budget_bytes, a.confirm_verify, catalog,
