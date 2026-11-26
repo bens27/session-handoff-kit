@@ -44,14 +44,17 @@ Optional auto-mode keys in the same files (never model thresholds):
   "auto" (bool), "at" (int), "auto_max" (int) = HANDOFF_AUTO, HANDOFF_AT,
   HANDOFF_AUTO_MAX; a non-empty environment variable wins, then the project
   file, then the user file.
-  "subagent_at" (int, default 100000): Agent-tool subagents (hook events that
-  carry `agent_id`) get their own watch, measured from the subagent's own
-  transcript (.../<session_id>/subagents/agent-<agent_id>.jsonl). At that
-  occupancy the hook tells the subagent once to stop, commit WIP and hand back
-  a ~15-line resumable report; one firmer repeat follows about 20k later, then
-  nothing. State is keyed by agent_id under ~/.context-watch/subagents. The
-  subagent watch never types /clear and never touches the parent's checkpoint,
-  latch or notice; no environment override (the Agent tool passes no env).
+  "subagent_at" (int > 0, opt-in; unset or null is off): by default the hook
+  sends Agent-tool subagents no notice, since Claude Code compacts them itself.
+  When set, subagents (hook events that carry `agent_id`) get their own watch,
+  measured from the subagent's own transcript
+  (.../<session_id>/subagents/agent-<agent_id>.jsonl). At that occupancy the
+  hook tells the subagent once to write its findings and work in progress to
+  its own checkpoint at ~/.context-watch/subagents/<parent session>/<agent_id>.md
+  and keep working; it never tells it to stop. State is keyed by agent_id under
+  ~/.context-watch/subagents. The subagent watch never types /clear and never
+  touches the parent's checkpoint, latch or notice; no environment override
+  (the Agent tool passes no env).
 
 Other environment variables:
   CONTEXT_WATCH_WINDOW        window size for the PERCENT path (default 200000;
@@ -291,7 +294,7 @@ def write_session_note(cwd, evt, fired, context=None):
         previous = _ledger().read_session_note(cwd, session=sid)
         note.update({k: v for k, v in previous.items() if k.startswith('resume')})
         note.update({k: previous[k] for k in ('observed_occupancy_tokens', 'threshold', 'threshold_source',
-                                            'window', 'window_source', 'model') if k in previous})
+                                            'window', 'window_source', 'model', 'lineage') if k in previous})
         note.update(context or {})
         entries = load_transcript_tail(evt.get('transcript_path') or '') if evt.get('transcript_path') else []
         agent = detect_agent(evt, entries)
@@ -907,8 +910,8 @@ def _load_config_files(cwd, settings=False):
                     if k in SETTING_KEYS:
                         if k in PROJECT_DISABLE_ONLY_KEYS:
                             continue  # skipped in every file: mandatory_gate.auto_setting decides
-                        if settings and type(v) is SETTING_KEYS[k]:
-                            merged[k] = v
+                        if settings and (type(v) is SETTING_KEYS[k] or (k == SUBAGENT_AT_KEY and v is None)):
+                            merged[k] = v  # a null subagent_at turns off a value from the user file
                     elif not settings and isinstance(v, int) and not isinstance(v, bool):
                         merged[k] = v
         except Exception:
@@ -1148,17 +1151,44 @@ def handle_session_start(evt, agent):
     if source in ("resume", "fork"):
         sys.exit(0)  # a resumed session already has its context
     cwd = evt.get("cwd") or os.getcwd()
-    write_session_note(cwd, evt, False)  # fresh native identity first, then the pointer index
+    lineage = ({'lineage': handoff_identity.clear_lineage(evt.get('transcript_path') or '')}
+               if source == 'clear' else None)  # G30: the cleared session's handoffs stay this lineage's
+    write_session_note(cwd, evt, False, lineage)  # fresh native identity first, then the pointer index
+    seat = cleared_seat_notice(cwd, session_key(evt), lineage['lineage']) if lineage else ''
     adopted = startup_adoption(cwd, session_key(evt)) if _MISSING_INSTALL is None else ''
     if adopted:
-        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': adopted}})
+        emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart',
+                                            'additionalContext': adopted + ('\n\n' + seat if seat else '')}})
         sys.stdout.flush()
         mark_startup_delivered(adopted)
         sys.exit(0)
-    note = bounded_opening_note(evt)
+    note = '\n\n'.join(n for n in (bounded_opening_note(evt), seat) if n)
     if note:
         emit_output({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': note}})
     sys.exit(0)
+
+
+def cleared_seat_notice(cwd, session, lineage):
+    """G31: a session before this /clear held the checkout's Pullboard seat and no
+    open checkpoint from the lineage carries it, so name the seat and the step.
+    The kit never runs takeover itself: the seat is the agent's to continue."""
+    predecessors = [s for s in lineage if s and s != session]
+    if not predecessors:
+        return ''
+    try:
+        root = handoff_identity.project_root(cwd)
+        agent = handoff_identity.seat_holder(root, predecessors)
+        if not agent:
+            return ''
+        import handoff_ledger
+        if any(r['fm'].get('session_id') in predecessors and handoff_ledger.is_open(r['fm'])
+               for r in handoff_ledger._records(root)):
+            return ''  # the open checkpoint hands the seat over on resume
+    except Exception:
+        return ''
+    return ('handoff-status: The session before /clear held Pullboard seat %s in %s, and nothing handed it over: '
+            'no checkpoint was saved. Continue that seat with `%s` before other pullboard commands, then '
+            '`pullboard resume`.' % (agent, root, handoff_identity.takeover_step(root)))
 
 
 # ---------------------------------------------------------------- stop nudge
@@ -2021,17 +2051,10 @@ def emit(agent, event_name, message, mode):
 
 # ---------------------------------------------------------------- subagents
 
-SUBAGENT_AT_KEY = "subagent_at"       # config key: subagent stop-and-report point
-SUBAGENT_AT_DEFAULT = 100000
-SUBAGENT_REPEAT_LEAD = 20000          # the one firmer repeat fires this far past it
-
-SUBAGENT_REPORT_FIELDS = (
-    "item id; worktree path; lane and seat; claim state (claimed / submitted / commit under "
-    "verification); branch and last commit; tree clean or WIP listed; done and verified; "
-    "remaining; last test command and result; background processes you started (pid, what); "
-    "open shout or decision id awaited; next command to run")
-
-
+SUBAGENT_AT_KEY = "subagent_at"       # config key: subagent handover point
+# Opt-in only, with no token default (G32): Claude Code compacts subagents
+# itself, and on 2026-11-22 a kit default stopped 15 subagents at 74-163k
+# that then reported hitting their context limit.
 def subagent_transcript_path(evt):
     """The subagent's own transcript: the event's transcript_path when it already
     sits under .../subagents/, else Claude Code's layout beside the parent's
@@ -2047,10 +2070,11 @@ def subagent_transcript_path(evt):
 
 
 def subagent_threshold(cwd):
-    """subagent_at from the thresholds files (project over user), default 100000.
-    No environment override: the Agent tool cannot pass a subagent its own env."""
+    """subagent_at from the thresholds files (project over user); None (off)
+    unless it is an int above 0. No environment override: the Agent tool cannot
+    pass a subagent its own env."""
     value = _load_config_files(cwd, settings=True).get(SUBAGENT_AT_KEY)
-    return value if isinstance(value, int) and value > 0 else SUBAGENT_AT_DEFAULT
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
 def subagent_state_path(agent_id, stage=1):
@@ -2071,23 +2095,36 @@ def claim_subagent_once(agent_id, stage):
         return False  # already claimed, or the state dir is unwritable: stay quiet
 
 
-def subagent_message(stage, occupancy, limit):
-    if stage == 1:
-        return ("[context-watch] Subagent context ~%s tokens, at the subagent stop point %s. "
-                "Stop taking new work: finish the atomic action in hand, commit WIP on your branch, "
-                "and end your turn with a resumable report of about 15 lines for your parent, "
-                "which restarts a fresh agent from it. Report fields: %s. Do not clear your context "
-                "and do not save a checkpoint: the parent session owns both." % (occupancy, limit, SUBAGENT_REPORT_FIELDS))
-    return ("[context-watch] Stop now: subagent context ~%s tokens, %s past the stop point %s. "
-            "Commit WIP and return your report this turn (%s). No further notices follow."
-            % (occupancy, occupancy - limit, limit, SUBAGENT_REPORT_FIELDS))
+def subagent_checkpoint_path(agent_id, parent_session_id):
+    """The subagent's own progress checkpoint. It lives beside the subagent
+    latches, outside every project's .handoffs ledger, so no lookup, claim or
+    supersede of the parent's checkpoints can ever select it."""
+    def safe(v):
+        return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(v)) or "unknown"
+    return os.path.join(os.path.expanduser("~"), ".context-watch", "subagents",
+                        safe(parent_session_id), safe(agent_id) + ".md")
+
+
+def subagent_message(occupancy, limit, agent_id, parent_session_id):
+    """Save-and-continue, never stop (G32): Claude Code compacts subagents itself,
+    so the notice asks for durable progress and never for the end of a turn."""
+    checkpoint = subagent_checkpoint_path(agent_id, parent_session_id)
+    # G33: a brief that forbids commits would otherwise leave uncommitted work only in the tree.
+    patch = os.path.splitext(checkpoint)[0] + ".patch"
+    return ("[context-watch] Subagent context ~%s tokens, past your configured subagent_at %s. "
+            "Write your findings so far and your work in progress to your own subagent checkpoint "
+            "at %s (front matter agent_id: %s, parent_session_id: %s); if your brief forbids commits, "
+            "also save `git diff` beside it at %s. Never claim, supersede or edit the parent's "
+            "checkpoint. Then keep working on your task."
+            % (occupancy, limit, checkpoint, agent_id, parent_session_id, patch))
 
 
 def handle_subagent(evt):
-    """Stop-and-report watch for an Agent-tool subagent (PostToolUse only).
+    """Opt-in progress watch for an Agent-tool subagent (PostToolUse only).
     Occupancy comes from the subagent's own transcript, as the parent watch
     measures its own; the harness's per-run token figure is not window occupancy.
-    One notice at subagent_at, one firmer repeat ~20k later, nothing after.
+    Off unless a thresholds file sets subagent_at; then one notice there and
+    nothing after.
     Never /clear, never the parent's checkpoint, latch or session note."""
     agent_id = evt.get("agent_id")
     if evt.get("hook_event_name") != "PostToolUse" or not agent_id:
@@ -2098,12 +2135,10 @@ def handle_subagent(evt):
     breakdown = claude_usage(load_transcript_tail(path), sidechain=True)[0]
     occupancy = (breakdown or {}).get("occupancy") or 0
     limit = subagent_threshold(evt.get("cwd") or os.getcwd())
-    if occupancy < limit:
+    if limit is None or occupancy < limit:
         return
     if claim_subagent_once(agent_id, 1):
-        emit("claude", "PostToolUse", subagent_message(1, occupancy, limit), "warn")
-    if occupancy >= limit + SUBAGENT_REPEAT_LEAD and claim_subagent_once(agent_id, 2):
-        emit("claude", "PostToolUse", subagent_message(2, occupancy, limit), "warn")
+        emit("claude", "PostToolUse", subagent_message(occupancy, limit, agent_id, evt.get("session_id")), "warn")
 
 
 # ---------------------------------------------------------------- main
@@ -2118,7 +2153,7 @@ def main():
     global _DIAG, _AGENT, _EVT, _OPENING_NOTE, _SHOW
     evt = _EVT = read_event()
     if in_subagent(evt):
-        handle_subagent(evt)  # its own stop-and-report watch; the parent's state stays untouched
+        handle_subagent(evt)  # its own handover watch; the parent's state stays untouched
         sys.exit(0)
     event_name = evt.get("hook_event_name") or ""
     if event_name == "Stop":

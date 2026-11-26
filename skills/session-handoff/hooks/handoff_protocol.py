@@ -252,6 +252,40 @@ def owned_selection(root):
     return value if value in OWNED_SELECTIONS else 'ask'
 
 
+def session_lineage(root, session):
+    """Sessions `session` descends from by /clear (G30): recorded at SessionStart
+    clear, else read from the transcript the session note names."""
+    if not session:
+        return []
+    note = ledger.read_session_note(root, session=session)
+    lineage = note.get('lineage')
+    if isinstance(lineage, list):
+        return [s for s in lineage if isinstance(s, str) and s]
+    return handoff_identity.clear_lineage(note.get('transcript_path') or '')
+
+
+def lineage_gap(root, session):
+    """G30: when this session's /clear lineage last resumed a checkpoint and saved
+    nothing after it, {resumed_by, resumed, path, topic, text}; else None."""
+    lineage = session_lineage(root, session)
+    if not lineage:
+        return None
+    rows = ledger._records(root)
+    resumes = [r for r in rows if r['fm'].get('resumed_by') in lineage and r['fm'].get('resumed')]
+    if not resumes:
+        return None
+    last = max(resumes, key=lambda r: r['fm']['resumed'])
+    since = last['fm']['resumed']
+    if any(r['fm'].get('session_id') in lineage and (r['fm'].get('created') or '') > since for r in rows):
+        return None
+    text = ('The session before /clear ran without a checkpoint since %s: %s last resumed %s (topic %s) and '
+            'nothing in this lineage saved after it, so its later work is only in git and the board. Read '
+            'git log and the board for it; do not adopt another session\'s checkpoint.'
+            % (since, last['fm']['resumed_by'], last['path'], last['topic']))
+    return dict(resumed_by=last['fm']['resumed_by'], resumed=since, path=last['path'], topic=last['topic'],
+                lineage=lineage, text=text)
+
+
 def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=None, auto_close=False):
     """Open handoffs for a choose/listing. auto_close (explicit listings only, never
     hooks or resume) first retires checkpoints whose ticket is done and landed (#162)."""
@@ -269,11 +303,13 @@ def lookup(root='.', max_age=14, offset=0, topic=None, terminal=None, session=No
         items = [h for h in items if h['topic'] == topic or os.path.realpath(h['path']) == os.path.realpath(topic)]
     current = terminal_id()
     session = session or default_session(root)
+    lineage = session_lineage(root, session)
     for h in items:
         # A recorded terminal takes precedence; legacy untagged ownership can
         # be established only by the actual current session, never by absence.
-        h['mine'] = (bool(current) and h['terminal'] == current if h.get('terminal')
-                     else bool(session) and h.get('session_id') == session)
+        h['mine'] = ((bool(current) and h['terminal'] == current if h.get('terminal')
+                      else bool(session) and h.get('session_id') == session)
+                     or h.get('session_id') in lineage)  # G30: saved before this session's /clear
     items.sort(key=lambda h: not h['mine'])  # stable: newest-first within each group
     mine = [h for h in items if h['mine']]
     # A missing own checkpoint must not make foreign or unowned work
@@ -1072,6 +1108,10 @@ def save(root, session, request_id, document):
         subagents = handoff_runs.subagent_snapshot(note.get('transcript_path') or '')
         if subagents:
             fields['subagents'] = subagents
+        # G31: the seat this session holds travels, so resume names the takeover step.
+        seat = handoff_identity.seat_holder(root, [session])
+        if seat:
+            fields['pullboard_seat'] = seat
         if any(not isinstance(v, str) or '\n' in v or '\r' in v for v in fields.values()):
             return dict(outcome='invalid', action='Metadata values must be single-line strings or lists of strings.')
         carried = None
@@ -1923,6 +1963,21 @@ def replay_transfer(root, session, target):
 
 def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
            catalog=None, reuse_receipt=None, legacy_next_step=False):
+    result = _resume(root, session, target, budget, confirm_verify, catalog, reuse_receipt, legacy_next_step)
+    if 'workspace' not in result and result.get('outcome') != 'none':
+        # Every outcome owes the subagent report (G25), so a successor stopped
+        # anywhere still knows which builders run and does not relaunch them.
+        try:
+            path = result.get('path') or ledger.resolve(target, root)['authoritative']
+            if path:
+                result['workspace'] = handoff_runs.subagent_report(Record.load(path).get('subagents', ''))
+        except (OSError, ValueError, TypeError, KeyError, ledger.ConflictError):
+            pass  # no readable checkpoint, so no recorded subagents to report
+    return result
+
+
+def _resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=False,
+            catalog=None, reuse_receipt=None, legacy_next_step=False):
     """Select, prepare --execute, verify and acknowledge in one call; stop at the first failing stage."""
     root = handoff_identity.project_root(root)
     prune_transfer_payloads(root)
@@ -1972,7 +2027,9 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
                 checkpoint = Record.load(resolved['authoritative'])
                 command = checkpoint.verify
                 if command and not checkpoint.trusted():
-                    return needs_confirmation(resolved['authoritative'], command)
+                    # Nothing is claimed yet, but the subagent report still applies (G25).
+                    return dict(needs_confirmation(resolved['authoritative'], command),
+                                workspace=handoff_runs.subagent_report(checkpoint.get('subagents', '')))
         except OSError:
             pass  # prepare reports unreadable state
     def stage(name, run, success):
@@ -1990,6 +2047,9 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
     if prepared['verify_required']:
         failed, checked = stage('verify', lambda: verify(path, root, session, confirm=confirm_verify), 'verified')
         if failed:
+            # A resume that stops here still owes the subagent report (G25):
+            # the successor must not relaunch builders that are still running.
+            failed.setdefault('workspace', prepared['workspace'])
             return failed
         verification = {k: checked[k] for k in ('outcome', 'baseline_failures') if k in checked}
     body = prepared.get('body', '')
@@ -2024,10 +2084,11 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         receipt = prepared_receipt(path, root, session)
         receipt['delivery_state'] = 'pending'
         if 'package' not in receipt:
-            return dict(outcome='needs-context', stage='prepare', path=path,
+            return dict(outcome='needs-context', stage='prepare', path=path, workspace=prepared['workspace'],
                         action='Legacy preparation has no complete replay package; run prepare --execute again before acknowledgement.')
         failed, draft = stage('report-back', lambda: report_back_draft(root, session, path), ('drafted', 'skipped'))
         if failed:
+            failed.setdefault('workspace', prepared['workspace'])
             return failed
         if draft['outcome'] == 'drafted':
             result['report_back_draft'] = {k: draft[k] for k in ('path', 'status')}
@@ -2042,6 +2103,8 @@ def resume(root, session, target=None, budget=PACKAGE_BYTES, confirm_verify=Fals
         receipt.pop('package', None)  # Keep one full payload after preparation becomes delivery.
         write_receipt(root, session, path, receipt)
     failed, _ = stage('acknowledge', lambda: acknowledge(path, root, session), 'resumed')
+    if failed:
+        failed.setdefault('workspace', prepared['workspace'])
     return failed or result
 
 

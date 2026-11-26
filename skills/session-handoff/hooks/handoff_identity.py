@@ -253,7 +253,7 @@ def terminal_id():
     """Wrapper identity that survives /clear: one terminal, one current handoff.
 
     A blank HANDOFF_TERMINAL_ID falls through to AGENTSROOM_AGENT_ID, then to the
-    Herdr pane's terminal. Ids over 120 characters keep a readable prefix plus a digest
+    Herdr pane's terminal, then the agent process (G9). Ids over 120 characters keep a readable prefix plus a digest
     of the whole value, so two long ids sharing a prefix never name the same terminal."""
     for name in ('HANDOFF_TERMINAL_ID', 'AGENTSROOM_AGENT_ID'):
         value = (os.environ.get(name) or '').strip()
@@ -264,8 +264,54 @@ def terminal_id():
             return value
     pane = herdr_pane()
     if not pane:
-        return ''
+        return process_anchor()
     return herdr_terminal_id(pane, os.environ.get('HERDR_SOCKET_PATH'), herdr_pane_info(pane).get('terminal_id'))
+
+
+# G9: /clear starts a new session in the same agent process, so the nearest
+# claude/codex ancestor (pid plus start time, against pid reuse) is the terminal.
+ANCHOR_PROGRAMS = ('claude', 'codex')
+ANCHOR_MAX_DEPTH = 32
+_process_anchor_cache = {}
+
+
+def _process_table():
+    try:
+        return subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,lstart=,comm='], capture_output=True,
+                              text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _own_pid():
+    return os.getpid()
+
+
+def process_anchor():
+    """`proc-<program>-<pid>-<start digest>` of the nearest agent ancestor, else ''."""
+    if os.environ.get('HANDOFF_PROCESS_ANCHOR', '').strip() == '0':
+        return ''
+    pid = _own_pid()
+    if pid in _process_anchor_cache:
+        return _process_anchor_cache[pid]
+    rows = {}
+    for line in _process_table().splitlines():
+        parts = line.split(None, 7)  # pid ppid Dow Mon DD HH:MM:SS YYYY command
+        if len(parts) == 8 and parts[0].isdigit() and parts[1].isdigit():
+            rows[int(parts[0])] = (int(parts[1]), ' '.join(parts[2:7]), parts[7].strip())
+    anchor, current = '', pid
+    for _ in range(ANCHOR_MAX_DEPTH):
+        row = rows.get(current)
+        if not row or current <= 1:
+            break
+        ppid, start, command = row
+        program = os.path.basename(command).lstrip('-')  # comm has no arguments
+        if current != pid and program in ANCHOR_PROGRAMS:
+            anchor = 'proc-%s-%d-%s' % (program, current, _sha1(start, 8))
+            break
+        current = ppid
+    _process_anchor_cache[pid] = anchor
+    return anchor
 
 
 def herdr_pane():
@@ -403,6 +449,107 @@ def terminal_session(root, directory=None):
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return ''
+
+
+# G30: Claude Code starts the new transcript after /clear with a derived-from
+# record naming the cleared session; its transcript sits beside the new one.
+LINEAGE_MAX = 20
+LINEAGE_HEAD_LINES = 50
+_SESSION_ID_RE = __import__('re').compile(r'[A-Za-z0-9_-]{1,200}')
+
+
+def clear_predecessor(transcript):
+    """The session id `transcript` was /cleared from, or ''."""
+    try:
+        with open(transcript, encoding='utf-8', errors='replace') as stream:
+            for _, line in zip(range(LINEAGE_HEAD_LINES), stream):
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get('type') != 'derived-from':
+                    continue
+                for source in record.get('sessions') or []:
+                    sid = source.get('id') if isinstance(source, dict) else None
+                    if source.get('via') == 'clear' and isinstance(sid, str) and _SESSION_ID_RE.fullmatch(sid):
+                        return sid
+                return ''
+    except (OSError, TypeError, AttributeError):
+        pass
+    return ''
+
+
+def clear_lineage(transcript):
+    """Session ids this transcript descends from by /clear, nearest first."""
+    out, path = [], transcript
+    own = os.path.splitext(os.path.basename(transcript or ''))[0]
+    while path and len(out) < LINEAGE_MAX:
+        sid = clear_predecessor(path)
+        if not sid or sid in out or sid == own:
+            break
+        out.append(sid)
+        path = os.path.join(os.path.dirname(path), sid + '.jsonl')
+    return out
+
+
+# G31: Pullboard binds a checkout to one agent session in
+# <git-dir>/pullboard-checkout-session.json as {agent, digest}. Reading the file
+# (rather than running pullboard) tells which session holds the seat, and keeps
+# SessionStart free of subprocesses.
+PULLBOARD_BINDING = 'pullboard-checkout-session.json'
+_DIGEST_RE = __import__('re').compile(r'[0-9a-f]{64}')
+
+
+def session_digest(session):
+    """Pullboard's digest of a Claude Code session id."""
+    return hashlib.sha256(json.dumps(['CLAUDE_CODE_SESSION_ID', session], separators=(',', ':')).encode()).hexdigest()
+
+
+def _git_dir(root):
+    marker = os.path.join(root, '.git')
+    if os.path.isdir(marker):
+        return marker
+    try:
+        with open(marker, encoding='utf-8') as stream:
+            pointer = stream.read(8192).strip()
+    except (OSError, ValueError):
+        return ''
+    if pointer.startswith('gitdir: ') and pointer[8:].strip():
+        return os.path.realpath(os.path.join(root, pointer[8:].strip()))
+    return ''
+
+
+def pullboard_binding(root):
+    """{agent, digest} of the seat bound to this checkout, or None when absent or damaged."""
+    gitdir = _git_dir(root) if root else ''
+    if not gitdir:
+        return None
+    try:
+        with open(os.path.join(gitdir, PULLBOARD_BINDING), encoding='utf-8') as stream:
+            data = json.loads(stream.read(65536))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    agent, digest = data.get('agent'), data.get('digest')
+    if not (isinstance(agent, str) and 0 < len(agent) <= 200 and agent.isprintable()):
+        return None
+    if not (isinstance(digest, str) and _DIGEST_RE.fullmatch(digest)):
+        return None
+    return dict(agent=agent, digest=digest)
+
+
+def seat_holder(root, sessions):
+    """The bound seat's agent when one of `sessions` holds it, else ''."""
+    binding = pullboard_binding(root)
+    if not binding:
+        return ''
+    return binding['agent'] if any(s and session_digest(s) == binding['digest'] for s in sessions) else ''
+
+
+def takeover_step(root):
+    import shlex
+    return 'cd %s && pullboard takeover' % shlex.quote(root)
 
 
 def default_session(root, directory=None):

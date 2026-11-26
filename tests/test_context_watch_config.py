@@ -37,7 +37,7 @@ class Case(unittest.TestCase):
 
     def env(self, extra=None):
         env = {k: v for k, v in os.environ.items() if k not in CLEAN}
-        env.update(HOME=self.tmp, TMPDIR=self.tmp, CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0",
+        env.update(HOME=self.tmp, TMPDIR=self.tmp, HANDOFF_PROCESS_ANCHOR="0", CONTEXT_WATCH_LOG="0", CONTEXT_WATCH_JEV="0",
                    CONTEXT_WATCH_AGENT="claude", CONTEXT_WATCH_PENDING="0", TYPESAFE_API_KEY="")
         env.update(extra or {})
         return env

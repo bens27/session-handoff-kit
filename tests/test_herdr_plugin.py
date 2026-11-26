@@ -108,7 +108,7 @@ class ThresholdsPluginTests(unittest.TestCase):
         terminal = thresholds.target_identity('w1:p1')
         self.assertEqual(thresholds.resolve_settings(str(self.project), terminal),
                          {'auto': (True, 'all agents'), 'auto_max': (10, 'default'),
-                          'subagent_at': (100000, 'default')})
+                          'subagent_at': (None, 'default')})
         (self.project / '.context-watch.json').write_text('{"auto": false, "auto_max": 5, "subagent_at": 90000}')
         thresholds.save_pane(terminal, 'w1:p1', 80000, 90000, auto=True, auto_max=3)
         self.assertEqual(thresholds.resolve_settings(str(self.project), terminal),

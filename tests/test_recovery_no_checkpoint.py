@@ -48,7 +48,7 @@ class RecoveryFixture:
             ('HANDOFF_', 'CONTEXT_WATCH_', 'AGENTSROOM_', 'HERDR_', 'AUTORESUME', 'TYPESAFE_'))
             and k not in ('CODEX_THREAD_ID', 'TMUX_PANE')}
         self.env.update(HOME=str(self.home), USERPROFILE=str(self.home), TMPDIR=str(self.tmp),
-            HANDOFF_TERMINAL_ID='terminal-a', HANDOFF_AUTO='0', CONTEXT_WATCH_AGENT=adapter,
+            HANDOFF_TERMINAL_ID='terminal-a', HANDOFF_AUTO='0', HANDOFF_PROCESS_ANCHOR='0', CONTEXT_WATCH_AGENT=adapter,
             CODEX_HOME=str(self.home / 'codex'), CLAUDE_CONFIG_DIR=str(self.home / 'claude'),
             CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_RESUME_LOG='0', CONTEXT_WATCH_JEV='0',
             CONTEXT_WATCH_ORIGIN='test', PYTHONDONTWRITEBYTECODE='1',

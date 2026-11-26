@@ -24,7 +24,7 @@ class SaveCliTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / 'project'
         (self.root / '.handoffs').mkdir(parents=True)
         self.env = {k: v for k, v in os.environ.items() if k not in CLEARED}
-        self.env.update(HOME=self.tmp.name, TMPDIR=str(Path(self.tmp.name) / "tmp"), CONTEXT_WATCH_ORIGIN='test',
+        self.env.update(HOME=self.tmp.name, TMPDIR=str(Path(self.tmp.name) / "tmp"), HANDOFF_PROCESS_ANCHOR='0', CONTEXT_WATCH_ORIGIN='test',
                         CONTEXT_WATCH_LOG='0', CONTEXT_WATCH_JEV='0', TYPESAFE_API_KEY='')
 
     def run_cli(self, *args, input=None, cwd=None, **env):

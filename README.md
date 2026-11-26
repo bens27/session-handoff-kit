@@ -395,7 +395,8 @@ Below them sit the automatic-handoff controls, each shown with its resolved
 value and where it comes from (this pane, project, all agents or default):
 `a` toggles `auto` on or off, `m`/`M` move `auto_max` by 1, and `u`/`U` move
 `subagent_at` by 5k in the all-agents scope only (a subagent has no pane of
-its own). A pane override lives in `~/.context-watch/terminals/<digest>.json`
+its own). It shows `off` until set: `U` turns it on at the handoff point, `u`
+below 5k turns it off again, and saving off writes `null`. A pane override lives in `~/.context-watch/terminals/<digest>.json`
 and sits below `HANDOFF_AT`, `CONTEXT_WATCH_WARNING_WINDOW`, `HANDOFF_AUTO`
 and `HANDOFF_AUTO_MAX` but above the config files: saving `auto` on for a pane
 means the same as `HANDOFF_AUTO=1` for that terminal (a gated request, not
@@ -552,20 +553,24 @@ really saves or states plainly that nothing was saved and why. The agent's state
 again. A checkpoint saved since the notice silences all three. Codex gets the
 reminder only (it has no Stop hook).
 
-`"subagent_at"` (int, default `100000`) is the stop point for Agent-tool
-subagents. Their hook events carry `agent_id`, and the watcher measures each
-one from the subagent's own transcript
+`"subagent_at"` (int above 0, opt-in) is a progress point for Agent-tool
+subagents. Unset or `null` means off, which is the default: Claude Code compacts
+subagents itself (they have run to 393k), and a fixed kit limit once stopped
+fifteen subagents that then reported hitting their context limit. A project
+file's `null` turns off a value from the user file. When set, their hook events carry
+`agent_id`, and the watcher measures each one from the subagent's own transcript
 (`.../<session_id>/subagents/agent-<agent_id>.jsonl`), not from the parent's.
-At that occupancy the subagent gets one notice to stop taking new work, commit
-WIP and end its turn with a resumable report of about 15 lines (item id,
-worktree, lane and seat, claim state, branch and last commit, tree state, done
-and verified, remaining, last test command and result, background processes,
-awaited shout or decision, next command); the parent restarts a fresh agent
-from that report. One firmer repeat follows about 20k tokens later, then
-nothing. State is keyed by `agent_id` under `~/.context-watch/subagents/`. The
-subagent watch never types `/clear` and never saves or touches the parent's
-checkpoint or notice; parent events are unchanged. The project file overrides
-the user file; there is no environment override, because the Agent tool cannot
+At that occupancy the subagent gets one notice, and only one: write its findings
+so far and its work in progress to its own checkpoint at
+`~/.context-watch/subagents/<parent session id>/<agent_id>.md` (front matter
+`agent_id` and `parent_session_id`), plus a `git diff` patch beside it
+(`<agent_id>.patch`) when its brief forbids commits, then keep working (G33). It never tells the
+subagent to stop or end its turn. State is keyed by `agent_id` under
+`~/.context-watch/subagents/`. The subagent checkpoint sits outside every
+project's `.handoffs` ledger, so it is never claimed, superseded or edited as
+the parent's; the subagent watch never types `/clear`, and parent events are
+unchanged. The project file overrides the user file; there is no environment
+override, because the Agent tool cannot
 pass a subagent its own environment.
 
 `"resume_pointer_policy"` (`"ask"` default, `"latest-owned"` or `"manual"`) decides
@@ -834,15 +839,30 @@ from them, which costs a full extra read of every changed interface.
 A coordinator that is asked to save while workers are live saves immediately,
 then waits for them to report (or confirms their results are durable in commits
 or the AgentsRoom mailbox) before it follows the transition. An Agent-tool subagent's
-report reaches only the session that spawned it, so `/clear` or `agents_restart`
-would discard it. For long-running parallel lanes prefer AgentsRoom workers
+report reaches only the Claude Code process that spawned it. After `/clear` its
+completion notice still arrives in that process's new session; `agents_restart`
+or a different terminal would lose it. For long-running parallel lanes prefer AgentsRoom workers
 (`agents_spawn`, reported back through the mailbox): they outlive the
 coordinator. Workers report with `agents_send`, not `backlog_comment`, which
 only works on user-feedback backlog items; the coordinator records each report
 on the backlog item with a `descriptionAppend` update. The context watcher never gives a subagent the parent's
 handoff notice (it detects them by the `agent_id` field Claude Code adds to
-their hook events); past `subagent_at` it tells the subagent to stop, commit and
-report instead (see the thresholds keys above).
+their hook events); only past a configured `subagent_at` does it ask the subagent to
+save its progress to its own checkpoint and keep working (see the thresholds keys above).
+
+Resume reports each subagent the checkpoint recorded as a `subagent: <id>
+live|finished|stopped <description>` line in `workspace`, on every outcome: a
+resume that stops at prepare, verification or a replayed transfer's changed
+reference, or waits for the user to confirm an untrusted verify command, still
+lists them. At `/clear` Claude Code moves a
+running subagent's transcript into the new session's folder, so the folder the
+checkpoint recorded can go stale. Resume finds the transcript by `agent_id`
+across the project's session folders
+(`~/.claude/projects/<project>/*/subagents/`) and judges its status from the
+newest copy. Each live subagent also gets a `subagent_notice: <id>` line: its
+completion notice arrives in this session, and until then the successor reads
+the named transcript. Results never need the person to relay them, so a
+checkpoint body must not say they do.
 
 ### Deterministic restart preflight
 
@@ -1186,6 +1206,24 @@ that ask the caller to act (`needs-confirmation`, `needs-context`,
   also carries `target.terminal_latest`, the newest checkpoint this terminal
   wrote (any status), and in AgentsRoom a `recovery_hint` that points to the
   tab's open assignments. Both are evidence; neither is ever adopted.
+  A session started by `/clear` inherits its predecessor's handoff lineage
+  (G30): at SessionStart `clear` the hook reads Claude Code's `derived-from`
+  record (`via: clear`) at the top of the new transcript, walks the chain
+  through the sibling transcripts, and records it in the session note. Lookup
+  then counts checkpoints saved by any session in that chain as this session's
+  own, whatever terminal they carry. When the chain last resumed a checkpoint
+  and saved nothing after it, resume answers `none`/`lineage_unsaved` instead
+  of `foreign_only`: the session before `/clear` ran without a checkpoint since
+  the resume time, what it last resumed (in `target.lineage`), and that its
+  later work is only in git and the board.
+  A Pullboard seat follows the same chain (G31). Pullboard binds a checkout to
+  one session in `<git-dir>/pullboard-checkout-session.json`; the kit reads
+  that file and never runs pullboard. When a session before `/clear` holds the
+  seat and no open checkpoint from the chain carries it, SessionStart `clear`
+  names the seat, the checkout and `cd <checkout> && pullboard takeover`. A
+  checkpoint saved by the seat holder records `pullboard_seat`, and resume
+  adds a `pullboard_seat:` line with the same step while the saving session
+  still holds the seat. The kit never runs takeover itself.
   An explicitly selected checkpoint tagged with another terminal whose hook
   pointer was refreshed in the last 1800 s (`HANDOFF_OWNER_LIVE_SECONDS`) gives
   `ask`/`owner_live` for resume and autoresume, with `target.owner`
