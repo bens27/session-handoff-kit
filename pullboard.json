@@ -24,7 +24,9 @@
         "skills/session-handoff/hooks/",
         "herdr-plugin/",
         "tests/",
-        "README.md"
+        "README.md",
+        "skills/session-handoff/install.py",
+        "docs/local-rollout.md"
       ]
     },
     "pi": {
