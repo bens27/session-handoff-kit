@@ -529,11 +529,13 @@ printf '%%s %%s\\n' "$n" "$*" >> "%(calls)s"
 """ % {"polls": self.polls, "calls": self.calls, "answers": answers, "after": after})
         os.chmod(self.herdr, 0o755)
 
-    def run_typer(self, polls="20"):
-        script = _load_hook().typer_script("herdr")
-        env = dict(os.environ, P="w2:p3", H=self.herdr, S="", R="", D="", N="", K="", M="",
-                   T1="0", T2="0", T3="0", T4=polls)
-        subprocess.run(["sh", "-c", script], env=env, check=True, timeout=30)
+    def run_typer(self, polls="20", notice=""):
+        hook = _load_hook()
+        env = dict(os.environ, P="w2:p3", H=self.herdr, S="", R="", D="", N=notice, K="", M="",
+                   B=hook.BUSY_PANE_NOTICE % 0, T1="0", T2="0", T3="0", T4=polls)
+        subprocess.run(["sh", "-c", hook.typer_script("herdr")], env=env, check=True, timeout=30)
+        if not os.path.exists(self.calls):
+            return []
         with open(self.calls) as f:
             return [line.split(" ", 1) for line in f.read().splitlines()]
 
@@ -556,12 +558,25 @@ printf '%%s %%s\\n' "$n" "$*" >> "%(calls)s"
         sent = {text: int(n) for n, text in calls if " send-text " in " " + text}
         self.assertEqual(sent["pane send-text w2:p3 /clear"], 1, calls)
 
-    def test_a_pane_that_never_goes_idle_still_gets_the_keys_after_the_bound(self):
+    def test_a_pane_that_never_goes_idle_gets_no_keys_and_a_notice(self):
+        # G45: after the bounded wait the typer gives up and says so.
         self.fake([], after="working")
-        calls = self.run_typer(polls="3")
-        texts = [text for _, text in calls]
+        notice = os.path.join(self.tmp, "notice")
+        calls = self.run_typer(polls="3", notice=notice)
+        self.assertEqual([t for _, t in calls if "send-" in t], [], calls)
+        with open(notice) as f:
+            text = f.read()
+        self.assertIn("stayed busy", text)
+        self.assertIn("/clear", text.rsplit(":", 1)[-1])
+
+    def test_a_pane_busy_after_the_clear_gets_no_resume_and_a_notice(self):
+        self.fake(["idle"], after="working")
+        notice = os.path.join(self.tmp, "notice")
+        texts = [t for _, t in self.run_typer(polls="3", notice=notice)]
         self.assertIn("pane send-text w2:p3 /clear", texts)
-        self.assertIn("pane send-text w2:p3 resume", texts)
+        self.assertNotIn("pane send-text w2:p3 resume", texts)
+        with open(notice) as f:
+            self.assertIn("resume", f.read().rsplit(":", 1)[-1])
 
 
 if __name__ == "__main__":

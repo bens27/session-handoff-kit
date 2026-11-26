@@ -1502,7 +1502,7 @@ def handle_stop(evt):
     typer_env = dict(os.environ, P=pane, H=env("HERDR_BIN_PATH") or "herdr", S=pane_copy,
                      R=resume_log_path() or "", D=resume_project_id(cwd), N=resume_missed_path(cwd),
                      K=resume_terminal_match(),
-                     M=RESUME_MISSED_NOTICE % (polls * t_poll),
+                     M=RESUME_MISSED_NOTICE % (polls * t_poll), B=BUSY_PANE_NOTICE % (polls * t_poll),
                      T1=str(t_clear), T2=str(t_resume), T3=str(t_poll), T4=str(polls))
     subprocess.Popen(["sh", "-c", typer_script(multiplexer)], env=typer_env,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -1514,6 +1514,12 @@ RESUME_MISSED_NOTICE = ("[context-watch] Automatic restart typed /clear and resu
                         "resume event reached the context-watch ledger within about %g s, even after a second "
                         "Escape+resume: the keys may have gone to a focused subagent view. Press Escape, then "
                         "type resume to pick up the open handoff.")
+
+# G45: the typer appends the command it did not type after the final colon.
+BUSY_PANE_NOTICE = ("[context-watch] Automatic restart gave up: the Herdr pane stayed busy (agent_status "
+                    "working or blocked) for about %g s, so the kit typed nothing more into it. Once the "
+                    "agent is idle, type the rest yourself, starting with:")
+
 
 def resume_terminal_match():
     """The exact `"terminal_id": "<id>"` text handoff_protocol.telemetry writes for this
@@ -1543,19 +1549,23 @@ printf '%s\\n' "$M" > "$N"
 # pullboard #26: keys typed while Claude is still busy (Stop hooks running, a prompt
 # just started) land in the input and Enter does not submit, so /clear and resume
 # join as '/clearresume'. Herdr reports the pane's agent_status; wait out "working"
-# and "blocked" for at most $T4 polls of $T3 s, then send anyway. An empty or
-# unreadable status (older Herdr) cannot be waited on, so it does not hold the keys.
-_HERDR_WAIT_IDLE = """wait_idle() { w=0; while [ "$w" -lt "$T4" ]; do
+# and "blocked" for at most $T4 polls of $T3 s, then give up (G45): keys typed into a
+# busy prompt do more harm than none, so the typer stops and leaves notice $B for the
+# next prompt. An empty or unreadable status (older Herdr) cannot be waited on, so it
+# does not hold the keys.
+_HERDR_WAIT_IDLE = """wait_idle() { w=0; while :; do
 st=$("$H" pane get "$P" 2>/dev/null | sed -n 's/.*"agent_status"[[:space:]]*:[[:space:]]*"\\([a-z_]*\\)".*/\\1/p')
 case "$st" in working|blocked) ;; *) return 0;; esac
-sleep "$T3"; w=$((w+1)); done; return 0; }"""
+[ "$w" -ge "$T4" ] && return 1
+sleep "$T3"; w=$((w+1)); done; }
+busy() { [ -n "$N" ] && printf '%s %s\\n' "$B" "$1" > "$N"; exit 0; }"""
 
 
 def typer_script(multiplexer):
     """Shell for the detached Stop typer: Escape, /clear, Enter; Escape, resume, Enter;
     then wait for the resume event, retry Escape+resume once, else leave the notice."""
     if multiplexer == "herdr":
-        send = _HERDR_WAIT_IDLE + '\nsend() { wait_idle; "$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"; "$H" pane send-keys "$P" Enter; }'
+        send = _HERDR_WAIT_IDLE + '\nsend() { wait_idle || busy "$1"; "$H" pane send-keys "$P" Escape; "$H" pane send-text "$P" "$1"; "$H" pane send-keys "$P" Enter; }'
         show = _SHOW_SUMMARY_PANE
     else:
         send = 'send() { tmux send-keys -t "$P" Escape; tmux send-keys -t "$P" -l "$1"; tmux send-keys -t "$P" Enter; }'
