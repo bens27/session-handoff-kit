@@ -67,7 +67,8 @@ class SaveCliTests(unittest.TestCase):
         calls = []
         while time.time() < deadline and len(calls) < len(expected):
             time.sleep(0.5)
-            calls = record.read_text().splitlines() if record.exists() else []
+            # pane get is the typer's idle poll (#26); this test checks the keys sent.
+            calls = [c for c in record.read_text().splitlines() if not c.startswith('pane get ')] if record.exists() else []
         self.assertEqual(calls, expected)  # Escape first: a focused subagent view must not take the keys
 
     def test_user_parked_save_without_a_pane_does_not_arm(self):

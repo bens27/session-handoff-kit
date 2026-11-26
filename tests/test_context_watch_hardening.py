@@ -172,7 +172,8 @@ class StopTyperEscapesSubagentView(unittest.TestCase):
             env = dict(env, PATH=path_dir + os.pathsep + env.get("PATH", ""))
         subprocess.run(argv, env=env, timeout=30, check=True)
         with open(self.keys) as f:
-            return f.read().splitlines()
+            # pane get is the typer's idle poll (#26); these tests check the keys sent.
+            return [k for k in f.read().splitlines() if not k.startswith("pane get ")]
 
     def test_herdr_escape_before_each_command_and_no_retry_when_resume_recorded(self):
         herdr = self.fake("herdr", resume_succeeds=True)
