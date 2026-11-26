@@ -479,6 +479,16 @@ def clear_predecessor(transcript):
     return ''
 
 
+def subagent_checkpoint_path(agent_id, parent_session_id):
+    """The subagent's own progress checkpoint. It lives beside the subagent
+    latches, outside every project's .handoffs ledger, so no lookup, claim or
+    supersede of the parent's checkpoints can ever select it."""
+    def safe(v):
+        return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(v)) or "unknown"
+    return os.path.join(os.path.expanduser("~"), ".context-watch", "subagents",
+                        safe(parent_session_id), safe(agent_id) + ".md")
+
+
 def clear_lineage(transcript):
     """Session ids this transcript descends from by /clear, nearest first."""
     out, path = [], transcript

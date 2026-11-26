@@ -569,7 +569,10 @@ subagent to stop or end its turn. State is keyed by `agent_id` under
 `~/.context-watch/subagents/`. The subagent checkpoint sits outside every
 project's `.handoffs` ledger, so it is never claimed, superseded or edited as
 the parent's; the subagent watch never types `/clear`, and parent events are
-unchanged. The project file overrides the user file; there is no environment
+unchanged. To continue a subagent that died or stopped, the parent (or any
+session in its `/clear` lineage) runs `handoff_ledger.py subagent-resume
+<agent_id>`: it claims that checkpoint once for the session and returns its
+body and Next steps, which the parent can hand to a fresh subagent (G36). The project file overrides the user file; there is no environment
 override, because the Agent tool cannot
 pass a subagent its own environment.
 
